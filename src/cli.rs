@@ -38,6 +38,10 @@ pub enum Commands {
         /// Language code for transcription (e.g., en, es, fr)
         #[arg(long, value_name = "LANG")]
         language: Option<String>,
+
+        /// Prevent automatic model download if configured model is missing
+        #[arg(long)]
+        no_download: bool,
     },
 
     /// List available audio input devices
@@ -91,10 +95,12 @@ mod tests {
                 device,
                 model,
                 language,
+                no_download,
             } => {
                 assert!(device.is_none());
                 assert!(model.is_none());
                 assert!(language.is_none());
+                assert!(!no_download);
             }
             _ => panic!("Expected Record command"),
         }
@@ -121,10 +127,12 @@ mod tests {
                 device,
                 model,
                 language,
+                no_download,
             } => {
                 assert_eq!(device.as_deref(), Some("hw:0"));
                 assert_eq!(model.as_deref(), Some("base.en"));
                 assert_eq!(language.as_deref(), Some("en"));
+                assert!(!no_download);
             }
             _ => panic!("Expected Record command"),
         }
@@ -281,10 +289,32 @@ mod tests {
                 device,
                 model,
                 language,
+                no_download,
             } => {
                 assert!(device.is_none());
                 assert_eq!(model.as_deref(), Some("base"));
                 assert!(language.is_none());
+                assert!(!no_download);
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_record_with_no_download() {
+        let cli = Cli::try_parse_from(["voicsh", "record", "--no-download"]).unwrap();
+
+        match cli.command {
+            Commands::Record {
+                device,
+                model,
+                language,
+                no_download,
+            } => {
+                assert!(device.is_none());
+                assert!(model.is_none());
+                assert!(language.is_none());
+                assert!(no_download);
             }
             _ => panic!("Expected Record command"),
         }

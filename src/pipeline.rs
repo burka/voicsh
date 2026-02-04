@@ -9,7 +9,9 @@ use crate::config::{Config, InputMethod};
 use crate::error::{Result, VoicshError};
 use crate::input::injector::TextInjector;
 use crate::models::catalog::get_model;
-use crate::models::download::{is_model_installed, model_path};
+use crate::models::download::{
+    download_model, find_any_installed_model, is_model_installed, model_path,
+};
 use crate::recording::RecordingSession;
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
@@ -23,15 +25,17 @@ use std::path::PathBuf;
 /// * `model` - Optional model override from CLI
 /// * `language` - Optional language override from CLI
 /// * `quiet` - Suppress status messages
+/// * `no_download` - Prevent automatic model download
 ///
 /// # Returns
 /// Ok(()) on success, or an error if any step fails
-pub fn run_record_command(
+pub async fn run_record_command(
     mut config: Config,
     device: Option<String>,
     model: Option<String>,
     language: Option<String>,
     quiet: bool,
+    no_download: bool,
 ) -> Result<()> {
     // Apply CLI overrides
     if let Some(d) = device {
@@ -62,7 +66,7 @@ pub fn run_record_command(
         eprintln!("Processing...");
     }
 
-    let transcription = transcribe_audio(&config, &audio_samples)?;
+    let transcription = transcribe_audio(&config, &audio_samples, quiet, no_download).await?;
 
     if transcription.is_empty() {
         return Err(VoicshError::Transcription {
@@ -103,9 +107,68 @@ fn record_audio(config: &Config) -> Result<Vec<i16>> {
 }
 
 /// Transcribe audio samples to text using configured STT model.
-fn transcribe_audio(config: &Config, audio: &[i16]) -> Result<String> {
+///
+/// This function implements smart model selection:
+/// 1. Try to use the configured model
+/// 2. If not installed and auto-download is enabled, download it
+/// 3. If auto-download is disabled, fall back to any installed model
+/// 4. If no models are installed, return an error
+async fn transcribe_audio(
+    config: &Config,
+    audio: &[i16],
+    quiet: bool,
+    no_download: bool,
+) -> Result<String> {
+    let configured_model = &config.stt.model;
+
+    // Determine which model to use
+    let model_to_use = if is_model_installed(configured_model) {
+        // Configured model is available, use it
+        configured_model.to_string()
+    } else {
+        // Configured model not installed
+        if !quiet {
+            eprintln!("Configured model '{}' is not installed.", configured_model);
+        }
+
+        // Try to find any installed model as fallback
+        if let Some(fallback_model) = find_any_installed_model() {
+            if !quiet {
+                eprintln!("Using installed model '{}' instead.", fallback_model);
+            }
+            fallback_model
+        } else {
+            // No models installed at all
+            if no_download {
+                return Err(VoicshError::Transcription {
+                    message: format!(
+                        "Model '{}' is not installed and --no-download was specified. \
+                        Run 'voicsh models install {}' to download it.",
+                        configured_model, configured_model
+                    ),
+                });
+            }
+
+            // Auto-download the configured model
+            if !quiet {
+                eprintln!(
+                    "Downloading model '{}' (this may take a while)...",
+                    configured_model
+                );
+            }
+
+            download_model(configured_model, !quiet).await?;
+
+            if !quiet {
+                eprintln!("Model '{}' downloaded successfully.", configured_model);
+            }
+
+            configured_model.to_string()
+        }
+    };
+
     // Build model path
-    let model_path = build_model_path(&config.stt.model)?;
+    let model_path = build_model_path(&model_to_use)?;
 
     // Create transcriber
     let whisper_config = WhisperConfig {

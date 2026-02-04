@@ -16,12 +16,13 @@ async fn main() -> Result<()> {
             device,
             model,
             language,
+            no_download,
         } => {
             // Load configuration
             let config = load_config(cli.config.as_deref())?;
 
             // Run the record pipeline
-            run_record_command(config, device, model, language, cli.quiet)?;
+            run_record_command(config, device, model, language, cli.quiet, no_download).await?;
         }
         Commands::Devices => {
             list_audio_devices()?;

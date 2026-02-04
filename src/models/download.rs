@@ -183,6 +183,33 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
     Ok(output_path)
 }
 
+/// Find any installed model from the catalog.
+///
+/// Scans through all catalog models and returns the first one that is installed.
+/// Useful for fallback scenarios when the configured model is not available.
+///
+/// # Returns
+///
+/// Some(model_name) if any model is installed, None if no models are installed.
+pub fn find_any_installed_model() -> Option<String> {
+    crate::models::catalog::list_models()
+        .iter()
+        .find(|m| is_model_installed(m.name))
+        .map(|m| m.name.to_string())
+}
+
+/// Get the recommended default model name.
+///
+/// Returns "base.en" which provides a good balance between speed and accuracy
+/// for English-language transcription.
+///
+/// # Returns
+///
+/// The recommended model name as a static string.
+pub fn get_recommended_model() -> &'static str {
+    "base.en"
+}
+
 /// Format model information for display.
 ///
 /// # Arguments
@@ -287,6 +314,26 @@ mod tests {
                 path.is_some(),
                 "Model {} should have a valid path",
                 model.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_recommended_model_returns_base_en() {
+        assert_eq!(get_recommended_model(), "base.en");
+    }
+
+    #[test]
+    fn test_find_any_installed_model_returns_option() {
+        // This test just verifies the function runs without panic
+        // It may return Some or None depending on local installation
+        let result = find_any_installed_model();
+        // If Some, verify it's a valid model name from catalog
+        if let Some(name) = result {
+            assert!(
+                crate::models::catalog::get_model(&name).is_some(),
+                "Returned model {} should be in catalog",
+                name
             );
         }
     }
