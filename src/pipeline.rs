@@ -146,33 +146,37 @@ async fn create_transcriber(
 
     // Determine which model to use
     let model_to_use = if is_model_installed(configured_model) {
+        // Requested model is available
         configured_model.to_string()
-    } else {
-        if !quiet {
-            eprintln!("Model '{}' not installed.", configured_model);
-        }
-
-        // Try fallback to any installed model
+    } else if no_download {
+        // Can't download, try fallback
         if let Some(fallback) = find_any_installed_model() {
             if !quiet {
-                eprintln!("Using '{}' instead.", fallback);
+                eprintln!(
+                    "Model '{}' not installed (--no-download). Using '{}'.",
+                    configured_model, fallback
+                );
             }
             fallback
-        } else if no_download {
+        } else {
             return Err(VoicshError::Transcription {
                 message: format!(
-                    "No models installed. Run 'voicsh models install {}'",
-                    configured_model
+                    "Model '{}' not installed and --no-download specified.\n\
+                     Run: voicsh models install {}",
+                    configured_model, configured_model
                 ),
             });
-        } else {
-            // Download the model
-            if !quiet {
-                eprintln!("Downloading '{}'...", configured_model);
-            }
-            download_model(configured_model, !quiet).await?;
-            configured_model.to_string()
         }
+    } else {
+        // Auto-download the requested model
+        if !quiet {
+            eprintln!("Downloading model '{}'...", configured_model);
+        }
+        download_model(configured_model, !quiet).await?;
+        if !quiet {
+            eprintln!("Download complete.");
+        }
+        configured_model.to_string()
     };
 
     let model_path = build_model_path(&model_to_use)?;
