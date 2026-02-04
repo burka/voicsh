@@ -51,11 +51,21 @@ impl Default for WhisperConfig {
 ///
 /// This type is only available when the `whisper` feature is enabled.
 #[cfg(feature = "whisper")]
-#[derive(Debug)]
 pub struct WhisperTranscriber {
     context: Mutex<WhisperContext>,
     config: WhisperConfig,
     model_name: String,
+}
+
+#[cfg(feature = "whisper")]
+impl std::fmt::Debug for WhisperTranscriber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WhisperTranscriber")
+            .field("config", &self.config)
+            .field("model_name", &self.model_name)
+            .field("context", &"<WhisperContext>")
+            .finish()
+    }
 }
 
 /// Whisper-based transcriber placeholder (without whisper feature).
@@ -181,7 +191,7 @@ impl Transcriber for WhisperTranscriber {
         let audio_f32 = Self::convert_audio(audio);
 
         // Lock the context for thread-safe access
-        let mut context =
+        let context =
             self.context
                 .lock()
                 .map_err(|e| VoicshError::TranscriptionInferenceFailed {
@@ -256,7 +266,12 @@ impl Transcriber for WhisperTranscriber {
 impl Transcriber for WhisperTranscriber {
     fn transcribe(&self, _audio: &[i16]) -> Result<String> {
         Err(VoicshError::TranscriptionInferenceFailed {
-            message: "Whisper feature not enabled. Rebuild with --features whisper".to_string(),
+            message: concat!(
+                "Whisper feature not enabled. This binary was built without speech recognition.\n",
+                "To fix: cargo build --release (whisper is enabled by default)\n",
+                "If build fails with cmake errors, install: sudo apt install cmake"
+            )
+            .to_string(),
         })
     }
 
