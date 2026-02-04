@@ -136,15 +136,15 @@ Phased development plan from MVP to full-featured voice typing application.
 **Goal**: Low-latency continuous transcription with chunked processing
 
 ```
-┌─────────────┐    ┌──────────────┐    ┌───────────┐    ┌─────────┐
-│  Continuous │───▶│   Chunker    │───▶│Transcriber│───▶│ Stitcher│───▶ Inject
-│  Recording  │    │ (3s/pause)   │    │  (async)  │    │         │
-└─────────────┘    └──────────────┘    └───────────┘    └─────────┘
-       │                  │
-       ▼                  ▼
-   Ring Buffer      Silence detector
-                   (triggers immediate
-                    chunk on pause)
+┌─────────────┐    ┌─────────────┐    ┌──────────┐    ┌───────────┐    ┌─────────┐
+│  Continuous │───▶│  Silence    │───▶│ Chunker  │───▶│Transcriber│───▶│ Stitcher│───▶ Inject
+│  Recording  │    │  Detector   │    │          │    │  (async)  │    │         │
+└─────────────┘    └─────────────┘    └──────────┘    └───────────┘    └─────────┘
+       │                  │                 ▲
+       ▼                  │                 │
+   Ring Buffer            └── control ──────┘
+                             (flush chunk
+                              on silence)
 ```
 
 - [ ] **Ring buffer audio capture**
@@ -152,10 +152,19 @@ Phased development plan from MVP to full-featured voice typing application.
   - Never stops until user ends session
   - Decoupled from transcription timing
 
-- [ ] **Smart chunker with pause detection**
-  - Default chunk size: ~3 seconds
+- [ ] **Silence detector (separate station)**
+  - Monitors audio stream for pauses
+  - Sends control frames to chunker:
+    - `FlushChunk` - silence detected, process current buffer immediately
+    - `SpeechStart` - speech resumed after silence
+  - Configurable silence threshold and duration
+
+- [ ] **Chunker**
+  - Receives audio data + control frames
+  - Emits chunks on:
+    - Time threshold reached (~3s default)
+    - `FlushChunk` control frame received
   - `--chunk-size=N` / `-s N` CLI override
-  - Silence/pause detection triggers immediate chunk
   - Small overlap between chunks for word continuity (~200ms)
 
 - [ ] **Async transcription pipeline**
