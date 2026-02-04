@@ -3,6 +3,7 @@
 //! This module provides a Whisper implementation of the Transcriber trait.
 //! Currently, this is a placeholder implementation until the whisper-rs dependency is added.
 
+use crate::defaults;
 use crate::error::{Result, VoicshError};
 use crate::stt::transcriber::Transcriber;
 use std::path::PathBuf;
@@ -22,7 +23,7 @@ impl Default for WhisperConfig {
     fn default() -> Self {
         Self {
             model_path: PathBuf::from("models/ggml-base.bin"),
-            language: "en".to_string(),
+            language: defaults::DEFAULT_LANGUAGE.to_string(),
             threads: None,
         }
     }

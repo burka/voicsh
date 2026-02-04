@@ -1,3 +1,4 @@
+use crate::defaults;
 use crate::error::{Result, VoicshError};
 use std::path::PathBuf;
 
@@ -32,7 +33,7 @@ impl Default for TranscriberConfig {
     fn default() -> Self {
         Self {
             model_path: PathBuf::from(""),
-            language: "en".to_string(),
+            language: defaults::DEFAULT_LANGUAGE.to_string(),
         }
     }
 }

@@ -3,6 +3,7 @@
 //! Detects speech activity in audio streams using RMS-based thresholding
 //! and state machine logic to handle silence intervals.
 
+use crate::defaults;
 use std::time::Instant;
 
 /// Configuration for Voice Activity Detection.
@@ -19,8 +20,8 @@ pub struct VadConfig {
 impl Default for VadConfig {
     fn default() -> Self {
         Self {
-            speech_threshold: 0.02,
-            silence_duration_ms: 1500,
+            speech_threshold: defaults::VAD_THRESHOLD,
+            silence_duration_ms: defaults::SILENCE_DURATION_MS,
             min_speech_ms: 300,
         }
     }

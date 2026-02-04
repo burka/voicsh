@@ -1,3 +1,4 @@
+use crate::defaults;
 use crate::error::{Result, VoicshError};
 
 /// Trait for audio source devices.
@@ -31,7 +32,9 @@ pub struct AudioSourceConfig {
 
 impl Default for AudioSourceConfig {
     fn default() -> Self {
-        Self { sample_rate: 16000 }
+        Self {
+            sample_rate: defaults::SAMPLE_RATE,
+        }
     }
 }
 

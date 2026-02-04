@@ -1,3 +1,4 @@
+use crate::defaults;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -48,9 +49,9 @@ impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             device: None,
-            sample_rate: 16000,
-            vad_threshold: 0.02,
-            silence_duration_ms: 1500,
+            sample_rate: defaults::SAMPLE_RATE,
+            vad_threshold: defaults::VAD_THRESHOLD,
+            silence_duration_ms: defaults::SILENCE_DURATION_MS,
         }
     }
 }
@@ -58,8 +59,8 @@ impl Default for AudioConfig {
 impl Default for SttConfig {
     fn default() -> Self {
         Self {
-            model: "base.en".to_string(),
-            language: "en".to_string(),
+            model: defaults::DEFAULT_MODEL.to_string(),
+            language: defaults::DEFAULT_LANGUAGE.to_string(),
         }
     }
 }
@@ -78,8 +79,16 @@ impl Config {
     ///
     /// Returns an error if the file contains invalid TOML.
     /// Missing fields will use default values.
-    pub fn load(path: &Path) -> anyhow::Result<Self> {
-        let contents = fs::read_to_string(path)?;
+    pub fn load(path: &Path) -> crate::error::Result<Self> {
+        let contents = fs::read_to_string(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                crate::error::VoicshError::ConfigFileNotFound {
+                    path: path.display().to_string(),
+                }
+            } else {
+                crate::error::VoicshError::Io(e)
+            }
+        })?;
         let config: Config = toml::from_str(&contents)?;
         Ok(config)
     }
@@ -91,16 +100,10 @@ impl Config {
     pub fn load_or_default(path: &Path) -> Self {
         match Self::load(path) {
             Ok(config) => config,
+            Err(crate::error::VoicshError::ConfigFileNotFound { .. }) => Self::default(),
             Err(e) => {
-                if e.downcast_ref::<std::io::Error>()
-                    .map(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
-                    .unwrap_or(false)
-                {
-                    Self::default()
-                } else {
-                    // Re-panic on invalid TOML or other errors
-                    panic!("Failed to load config from {}: {}", path.display(), e);
-                }
+                // Re-panic on invalid TOML or other errors
+                panic!("Failed to load config from {}: {}", path.display(), e);
             }
         }
     }
