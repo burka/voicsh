@@ -6,13 +6,51 @@ use crate::error::{Result, VoicshError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 
-/// List all available audio input devices.
+/// Preferred device names for GNOME/PipeWire environments.
+const PREFERRED_DEVICES: &[&str] = &["pipewire", "pulse", "PulseAudio"];
+
+/// Device name patterns to filter out (not useful for voice input).
+const FILTERED_PATTERNS: &[&str] = &[
+    "surround",
+    "front:",
+    "rear:",
+    "center:",
+    "side:",
+    "Digital Output",
+    "HDMI",
+    "S/PDIF",
+];
+
+/// Check if a device name should be filtered out.
+fn should_filter_device(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    FILTERED_PATTERNS
+        .iter()
+        .any(|pattern| lower.contains(&pattern.to_lowercase()))
+}
+
+/// Check if a device is a preferred device.
+fn is_preferred_device(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    PREFERRED_DEVICES
+        .iter()
+        .any(|pref| lower.contains(&pref.to_lowercase()))
+}
+
+/// List all available audio input devices with filtering and recommendations.
 ///
 /// # Returns
-/// A vector of device names, or an error if enumeration fails.
+/// A vector of device names, with preferred devices marked with "[recommended]".
+/// Filters out obviously unusable devices (surround channels, HDMI, etc.).
 ///
 /// # Errors
 /// Returns `VoicshError::AudioCapture` if device enumeration fails.
+///
+/// # Note
+/// During enumeration, cpal may output ALSA/JACK warnings to stderr while
+/// probing backends. These warnings are harmless and can be safely ignored.
+/// They occur because cpal tries multiple audio backends (ALSA, JACK, Pulse)
+/// to find available devices.
 pub fn list_devices() -> Result<Vec<String>> {
     let host = cpal::default_host();
     let devices = host
@@ -24,11 +62,56 @@ pub fn list_devices() -> Result<Vec<String>> {
     let mut device_names = Vec::new();
     for device in devices {
         if let Ok(name) = device.name() {
-            device_names.push(name);
+            // Skip filtered devices
+            if should_filter_device(&name) {
+                continue;
+            }
+
+            // Mark recommended devices
+            if is_preferred_device(&name) {
+                device_names.push(format!("{} [recommended]", name));
+            } else {
+                device_names.push(name);
+            }
         }
     }
 
     Ok(device_names)
+}
+
+/// Get the best default input device, preferring PipeWire/PulseAudio.
+///
+/// Tries in order:
+/// 1. PipeWire
+/// 2. PulseAudio/Pulse
+/// 3. System default
+///
+/// This ensures we respect GNOME's audio device selection.
+///
+/// # Returns
+/// The best available input device.
+///
+/// # Errors
+/// Returns `VoicshError::AudioDeviceNotFound` if no input device is available.
+fn get_best_default_device() -> Result<cpal::Device> {
+    let host = cpal::default_host();
+
+    // Try to find a preferred device
+    if let Ok(devices) = host.input_devices() {
+        for device in devices {
+            if let Ok(name) = device.name()
+                && is_preferred_device(&name)
+            {
+                return Ok(device);
+            }
+        }
+    }
+
+    // Fall back to system default
+    host.default_input_device()
+        .ok_or_else(|| VoicshError::AudioDeviceNotFound {
+            device: "default".to_string(),
+        })
 }
 
 /// Wrapper for cpal::Stream to make it Send.
@@ -92,11 +175,8 @@ impl CpalAudioSource {
                 device: name.to_string(),
             })?
         } else {
-            // Use default input device
-            host.default_input_device()
-                .ok_or_else(|| VoicshError::AudioDeviceNotFound {
-                    device: "default".to_string(),
-                })?
+            // Use smart default (prefers PipeWire/PulseAudio)
+            get_best_default_device()?
         };
 
         Ok(Self {
@@ -213,6 +293,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_should_filter_device() {
+        assert!(should_filter_device("surround51"));
+        assert!(should_filter_device("front:CARD=PCH"));
+        assert!(should_filter_device("HDMI Output"));
+        assert!(should_filter_device("Digital Output S/PDIF"));
+        assert!(!should_filter_device("pipewire"));
+        assert!(!should_filter_device("PulseAudio"));
+        assert!(!should_filter_device("Built-in Audio"));
+    }
+
+    #[test]
+    fn test_is_preferred_device() {
+        assert!(is_preferred_device("pipewire"));
+        assert!(is_preferred_device("PipeWire"));
+        assert!(is_preferred_device("pulse"));
+        assert!(is_preferred_device("PulseAudio"));
+        assert!(!is_preferred_device("hw:0,0"));
+        assert!(!is_preferred_device("default"));
+    }
+
+    #[test]
     #[ignore] // Requires audio hardware
     fn test_list_devices_returns_at_least_one_device() {
         let devices = list_devices();
@@ -222,6 +323,55 @@ mod tests {
             !device_list.is_empty(),
             "Expected at least one audio device"
         );
+    }
+
+    #[test]
+    #[ignore] // Requires audio hardware
+    fn test_list_devices_filters_and_marks_recommended() {
+        let devices = list_devices().expect("Failed to list devices");
+
+        // Should not contain filtered patterns
+        for device in &devices {
+            assert!(
+                !device.to_lowercase().contains("surround"),
+                "Should filter surround devices: {}",
+                device
+            );
+            assert!(
+                !device.to_lowercase().contains("hdmi"),
+                "Should filter HDMI devices: {}",
+                device
+            );
+        }
+
+        // Check if recommended devices are marked
+        let has_recommended = devices.iter().any(|d| d.contains("[recommended]"));
+        if has_recommended {
+            println!("Found recommended devices:");
+            for device in &devices {
+                if device.contains("[recommended]") {
+                    println!("  - {}", device);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore] // Requires audio hardware
+    fn test_get_best_default_device() {
+        let device = get_best_default_device();
+        assert!(device.is_ok(), "Failed to get best default device");
+
+        if let Ok(dev) = device {
+            if let Ok(name) = dev.name() {
+                println!("Best default device: {}", name);
+                // If on a system with PipeWire/Pulse, verify preference
+                if name.to_lowercase().contains("pipewire") || name.to_lowercase().contains("pulse")
+                {
+                    println!("  -> Correctly selected preferred device");
+                }
+            }
+        }
     }
 
     #[test]
