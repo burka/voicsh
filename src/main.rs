@@ -1,11 +1,14 @@
 use anyhow::Result;
 use clap::Parser;
 use voicsh::audio::capture::list_devices;
-use voicsh::cli::{Cli, Commands};
+use voicsh::cli::{Cli, Commands, ModelsAction};
 use voicsh::config::Config;
+use voicsh::models::catalog::list_models;
+use voicsh::models::download::{download_model, format_model_info};
 use voicsh::pipeline::run_record_command;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -22,6 +25,9 @@ fn main() -> Result<()> {
         }
         Commands::Devices => {
             list_audio_devices()?;
+        }
+        Commands::Models { action } => {
+            handle_models_command(action).await?;
         }
         Commands::Start { foreground } => {
             if foreground {
@@ -82,5 +88,23 @@ fn list_audio_devices() -> Result<()> {
         println!("  [{}] {}", idx, device);
     }
 
+    Ok(())
+}
+
+/// Handle model management commands.
+async fn handle_models_command(action: ModelsAction) -> Result<()> {
+    match action {
+        ModelsAction::List => {
+            println!("Available models:");
+            for model in list_models() {
+                println!("  {}", format_model_info(model));
+            }
+        }
+        ModelsAction::Install { name } => {
+            let path = download_model(&name, true).await?;
+            println!("Model '{}' installed successfully", name);
+            println!("Location: {}", path.display());
+        }
+    }
     Ok(())
 }

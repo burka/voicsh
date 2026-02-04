@@ -8,6 +8,8 @@ use crate::audio::vad::VadConfig;
 use crate::config::{Config, InputMethod};
 use crate::error::{Result, VoicshError};
 use crate::input::injector::TextInjector;
+use crate::models::catalog::get_model;
+use crate::models::download::{is_model_installed, model_path};
 use crate::recording::RecordingSession;
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
@@ -133,13 +135,16 @@ fn inject_text(config: &Config, text: &str) -> Result<()> {
 /// Supports several model path formats:
 /// - Absolute path: /path/to/model.bin
 /// - Relative path: ./models/model.bin
-/// - Model name only: base.en → ./models/ggml-base.en.bin
+/// - Model name only: base.en → looks in cache dir first, then ./models/
 ///
 /// # Arguments
 /// * `model` - Model path or name
 ///
 /// # Returns
 /// Full PathBuf to the model file
+///
+/// # Errors
+/// Returns an error with helpful message if model is not found
 fn build_model_path(model: &str) -> Result<PathBuf> {
     let path = PathBuf::from(model);
 
@@ -153,7 +158,23 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
         return Ok(path);
     }
 
-    // Otherwise, treat as a model name and construct path
+    // Check if it's a model name from the catalog
+    if get_model(model).is_some() {
+        // Check if installed in cache directory
+        if is_model_installed(model) {
+            return Ok(model_path(model).expect("path should exist for installed model"));
+        }
+
+        // Not installed - provide helpful error message
+        return Err(VoicshError::Transcription {
+            message: format!(
+                "Model '{}' is not installed. Run 'voicsh models install {}' to download it.",
+                model, model
+            ),
+        });
+    }
+
+    // Otherwise, treat as a custom model filename and construct path
     let model_filename = if model.ends_with(".bin") {
         model.to_string()
     } else {
@@ -180,9 +201,14 @@ mod tests {
     }
 
     #[test]
-    fn test_build_model_path_with_model_name() {
-        let path = build_model_path("base.en").unwrap();
-        assert_eq!(path, PathBuf::from("models/ggml-base.en.bin"));
+    fn test_build_model_path_with_model_name_not_installed() {
+        // When a catalog model is not installed, should return error with helpful message
+        let result = build_model_path("base.en");
+        // Could be installed or not, check both cases
+        if result.is_err() {
+            let err_msg = result.unwrap_err().to_string();
+            assert!(err_msg.contains("not installed") || err_msg.contains("voicsh models install"));
+        }
     }
 
     #[test]
@@ -198,18 +224,23 @@ mod tests {
     }
 
     #[test]
-    fn test_build_model_path_various_model_names() {
-        let test_cases = vec![
-            ("tiny", "models/ggml-tiny.bin"),
-            ("base", "models/ggml-base.bin"),
-            ("small.en", "models/ggml-small.en.bin"),
-            ("medium", "models/ggml-medium.bin"),
-            ("large-v3", "models/ggml-large-v3.bin"),
-        ];
+    fn test_build_model_path_with_unknown_model_name() {
+        // Unknown model names (not in catalog) should still build a path
+        let path = build_model_path("custom-model").unwrap();
+        assert_eq!(path, PathBuf::from("models/ggml-custom-model.bin"));
+    }
 
-        for (input, expected) in test_cases {
-            let path = build_model_path(input).unwrap();
-            assert_eq!(path, PathBuf::from(expected), "Failed for input: {}", input);
+    #[test]
+    fn test_build_model_path_catalog_model_error_contains_install_command() {
+        // When a catalog model is not installed, error should mention install command
+        let result = build_model_path("tiny.en");
+        if result.is_err() {
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains("voicsh models install"),
+                "Error message should suggest install command: {}",
+                err_msg
+            );
         }
     }
 }

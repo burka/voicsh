@@ -43,6 +43,13 @@ pub enum Commands {
     /// List available audio input devices
     Devices,
 
+    /// Manage Whisper models
+    Models {
+        /// Action to perform
+        #[command(subcommand)]
+        action: ModelsAction,
+    },
+
     /// Start the voicsh daemon
     Start {
         /// Run in foreground instead of daemonizing
@@ -58,6 +65,18 @@ pub enum Commands {
 
     /// Show daemon status
     Status,
+}
+
+/// Model management actions
+#[derive(Subcommand, Debug)]
+pub enum ModelsAction {
+    /// List available models
+    List,
+    /// Download and install a model
+    Install {
+        /// Model name (e.g., base.en, small.en, tiny)
+        name: String,
+    },
 }
 
 #[cfg(test)]
@@ -269,5 +288,57 @@ mod tests {
             }
             _ => panic!("Expected Record command"),
         }
+    }
+
+    #[test]
+    fn test_parse_models_list() {
+        let cli = Cli::try_parse_from(["voicsh", "models", "list"]).unwrap();
+        match cli.command {
+            Commands::Models { action } => match action {
+                ModelsAction::List => {}
+                _ => panic!("Expected List action"),
+            },
+            _ => panic!("Expected Models command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_models_install() {
+        let cli = Cli::try_parse_from(["voicsh", "models", "install", "base.en"]).unwrap();
+        match cli.command {
+            Commands::Models { action } => match action {
+                ModelsAction::Install { name } => {
+                    assert_eq!(name, "base.en");
+                }
+                _ => panic!("Expected Install action"),
+            },
+            _ => panic!("Expected Models command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_models_install_different_model() {
+        let cli = Cli::try_parse_from(["voicsh", "models", "install", "tiny"]).unwrap();
+        match cli.command {
+            Commands::Models { action } => match action {
+                ModelsAction::Install { name } => {
+                    assert_eq!(name, "tiny");
+                }
+                _ => panic!("Expected Install action"),
+            },
+            _ => panic!("Expected Models command"),
+        }
+    }
+
+    #[test]
+    fn test_models_requires_subcommand() {
+        let result = Cli::try_parse_from(["voicsh", "models"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_models_install_requires_name() {
+        let result = Cli::try_parse_from(["voicsh", "models", "install"]);
+        assert!(result.is_err());
     }
 }
