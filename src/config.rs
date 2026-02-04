@@ -112,22 +112,22 @@ impl Config {
     /// - VOICSH_LANGUAGE → stt.language
     /// - VOICSH_AUDIO_DEVICE → audio.device
     pub fn with_env_overrides(mut self) -> Self {
-        if let Ok(model) = std::env::var("VOICSH_MODEL") {
-            if !model.is_empty() {
-                self.stt.model = model;
-            }
+        if let Ok(model) = std::env::var("VOICSH_MODEL")
+            && !model.is_empty()
+        {
+            self.stt.model = model;
         }
 
-        if let Ok(language) = std::env::var("VOICSH_LANGUAGE") {
-            if !language.is_empty() {
-                self.stt.language = language;
-            }
+        if let Ok(language) = std::env::var("VOICSH_LANGUAGE")
+            && !language.is_empty()
+        {
+            self.stt.language = language;
         }
 
-        if let Ok(device) = std::env::var("VOICSH_AUDIO_DEVICE") {
-            if !device.is_empty() {
-                self.audio.device = Some(device);
-            }
+        if let Ok(device) = std::env::var("VOICSH_AUDIO_DEVICE")
+            && !device.is_empty()
+        {
+            self.audio.device = Some(device);
         }
 
         self
@@ -153,6 +153,22 @@ mod tests {
 
     // Mutex to serialize tests that modify environment variables
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    // SAFETY: These helpers are only used in tests with ENV_LOCK held,
+    // ensuring no concurrent access to environment variables.
+    fn set_env(key: &str, value: &str) {
+        unsafe { std::env::set_var(key, value) }
+    }
+
+    fn remove_env(key: &str) {
+        unsafe { std::env::remove_var(key) }
+    }
+
+    fn clear_voicsh_env() {
+        remove_env("VOICSH_MODEL");
+        remove_env("VOICSH_LANGUAGE");
+        remove_env("VOICSH_AUDIO_DEVICE");
+    }
 
     #[test]
     fn test_default_config_has_correct_values() {
@@ -236,52 +252,38 @@ mod tests {
     #[test]
     fn test_env_override_model() {
         let _lock = ENV_LOCK.lock().unwrap();
+        clear_voicsh_env();
 
-        // Clean up any leftover env vars from other tests
-        std::env::remove_var("VOICSH_MODEL");
-        std::env::remove_var("VOICSH_LANGUAGE");
-        std::env::remove_var("VOICSH_AUDIO_DEVICE");
-
-        std::env::set_var("VOICSH_MODEL", "tiny.en");
-
+        set_env("VOICSH_MODEL", "tiny.en");
         let config = Config::default().with_env_overrides();
 
         assert_eq!(config.stt.model, "tiny.en");
         assert_eq!(config.stt.language, "en"); // Not overridden
 
-        std::env::remove_var("VOICSH_MODEL");
+        clear_voicsh_env();
     }
 
     #[test]
     fn test_env_override_device() {
         let _lock = ENV_LOCK.lock().unwrap();
+        clear_voicsh_env();
 
-        // Clean up any leftover env vars from other tests
-        std::env::remove_var("VOICSH_MODEL");
-        std::env::remove_var("VOICSH_LANGUAGE");
-        std::env::remove_var("VOICSH_AUDIO_DEVICE");
-
-        std::env::set_var("VOICSH_AUDIO_DEVICE", "hw:1,0");
-
+        set_env("VOICSH_AUDIO_DEVICE", "hw:1,0");
         let config = Config::default().with_env_overrides();
 
         assert_eq!(config.audio.device, Some("hw:1,0".to_string()));
 
-        std::env::remove_var("VOICSH_AUDIO_DEVICE");
+        clear_voicsh_env();
     }
 
     #[test]
     fn test_env_override_all() {
         let _lock = ENV_LOCK.lock().unwrap();
+        clear_voicsh_env();
 
-        // Clean up any leftover env vars from other tests
-        std::env::remove_var("VOICSH_MODEL");
-        std::env::remove_var("VOICSH_LANGUAGE");
-        std::env::remove_var("VOICSH_AUDIO_DEVICE");
-
-        std::env::set_var("VOICSH_MODEL", "medium.en");
-        std::env::set_var("VOICSH_LANGUAGE", "fr");
-        std::env::set_var("VOICSH_AUDIO_DEVICE", "pulse");
+        set_env("VOICSH_MODEL", "medium.en");
+        set_env("VOICSH_LANGUAGE", "fr");
+        set_env("VOICSH_AUDIO_DEVICE", "pulse");
 
         let config = Config::default().with_env_overrides();
 
@@ -289,28 +291,21 @@ mod tests {
         assert_eq!(config.stt.language, "fr");
         assert_eq!(config.audio.device, Some("pulse".to_string()));
 
-        std::env::remove_var("VOICSH_MODEL");
-        std::env::remove_var("VOICSH_LANGUAGE");
-        std::env::remove_var("VOICSH_AUDIO_DEVICE");
+        clear_voicsh_env();
     }
 
     #[test]
     fn test_env_override_empty_string_ignored() {
         let _lock = ENV_LOCK.lock().unwrap();
+        clear_voicsh_env();
 
-        // Clean up any leftover env vars from other tests
-        std::env::remove_var("VOICSH_MODEL");
-        std::env::remove_var("VOICSH_LANGUAGE");
-        std::env::remove_var("VOICSH_AUDIO_DEVICE");
-
-        std::env::set_var("VOICSH_MODEL", "");
-
+        set_env("VOICSH_MODEL", "");
         let config = Config::default().with_env_overrides();
 
         // Empty string should not override default
         assert_eq!(config.stt.model, "base.en");
 
-        std::env::remove_var("VOICSH_MODEL");
+        clear_voicsh_env();
     }
 
     #[test]
