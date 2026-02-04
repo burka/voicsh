@@ -16,6 +16,7 @@ use crate::recording::RecordingSession;
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Run the record command: capture audio → transcribe → inject text.
 ///
@@ -37,6 +38,9 @@ pub async fn run_record_command(
     quiet: bool,
     no_download: bool,
 ) -> Result<()> {
+    // Check prerequisites first (before any heavy work)
+    check_prerequisites()?;
+
     // Apply CLI overrides
     if let Some(d) = device {
         config.audio.device = Some(d);
@@ -50,7 +54,7 @@ pub async fn run_record_command(
 
     // Step 1: Record audio
     if !quiet {
-        eprintln!("Recording...");
+        eprintln!("Ready. Speak now... (silence ends recording)");
     }
 
     let audio_samples = record_audio(&config)?;
@@ -245,6 +249,28 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
     };
 
     Ok(PathBuf::from("models").join(model_filename))
+}
+
+/// Check that required system tools are available.
+///
+/// Returns an error early if critical dependencies are missing,
+/// so the user doesn't wait through recording/transcription only to fail at injection.
+fn check_prerequisites() -> Result<()> {
+    // Check for wl-copy (Wayland clipboard)
+    if Command::new("wl-copy").arg("--version").output().is_err() {
+        return Err(VoicshError::InjectionToolNotFound {
+            tool: "wl-copy".to_string(),
+        });
+    }
+
+    // Check for ydotool (Wayland input simulation)
+    if Command::new("ydotool").arg("--version").output().is_err() {
+        return Err(VoicshError::InjectionToolNotFound {
+            tool: "ydotool".to_string(),
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
