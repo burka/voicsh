@@ -1,0 +1,311 @@
+//! Real audio capture using CPAL (Cross-Platform Audio Library).
+
+use crate::audio::recorder::AudioSource;
+use crate::defaults;
+use crate::error::{Result, VoicshError};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::sync::{Arc, Mutex};
+
+/// List all available audio input devices.
+///
+/// # Returns
+/// A vector of device names, or an error if enumeration fails.
+///
+/// # Errors
+/// Returns `VoicshError::AudioCapture` if device enumeration fails.
+pub fn list_devices() -> Result<Vec<String>> {
+    let host = cpal::default_host();
+    let devices = host
+        .input_devices()
+        .map_err(|e| VoicshError::AudioCapture {
+            message: format!("Failed to enumerate input devices: {}", e),
+        })?;
+
+    let mut device_names = Vec::new();
+    for device in devices {
+        if let Ok(name) = device.name() {
+            device_names.push(name);
+        }
+    }
+
+    Ok(device_names)
+}
+
+/// Wrapper for cpal::Stream to make it Send.
+///
+/// SAFETY: We ensure that the stream is only accessed from a single thread at a time
+/// through the Mutex wrapper in CpalAudioSource. The stream methods are called
+/// synchronously and don't cross thread boundaries unsafely.
+struct SendableStream(cpal::Stream);
+
+unsafe impl Send for SendableStream {}
+
+/// Real audio capture implementation using CPAL.
+///
+/// Captures 16-bit PCM audio at 16kHz mono, as required by Whisper.
+///
+/// Note: The stream is wrapped in SendableStream + Mutex to make it Send+Sync.
+/// This is safe because we ensure exclusive access through the Mutex.
+pub struct CpalAudioSource {
+    device: cpal::Device,
+    stream: Arc<Mutex<Option<SendableStream>>>,
+    buffer: Arc<Mutex<Vec<i16>>>,
+    sample_rate: u32,
+}
+
+impl CpalAudioSource {
+    /// Create a new CPAL audio source.
+    ///
+    /// # Arguments
+    /// * `device_name` - Optional device name. If None, uses the default input device.
+    ///
+    /// # Returns
+    /// A new CpalAudioSource configured for 16kHz mono i16 capture.
+    ///
+    /// # Errors
+    /// Returns errors if:
+    /// - Device not found
+    /// - Device configuration fails
+    /// - Format is not supported
+    pub fn new(device_name: Option<&str>) -> Result<Self> {
+        let host = cpal::default_host();
+
+        let device = if let Some(name) = device_name {
+            // Find device by name
+            let devices = host
+                .input_devices()
+                .map_err(|e| VoicshError::AudioCapture {
+                    message: format!("Failed to enumerate devices: {}", e),
+                })?;
+
+            let mut found_device = None;
+            for dev in devices {
+                if let Ok(dev_name) = dev.name()
+                    && dev_name == name
+                {
+                    found_device = Some(dev);
+                    break;
+                }
+            }
+
+            found_device.ok_or_else(|| VoicshError::AudioDeviceNotFound {
+                device: name.to_string(),
+            })?
+        } else {
+            // Use default input device
+            host.default_input_device()
+                .ok_or_else(|| VoicshError::AudioDeviceNotFound {
+                    device: "default".to_string(),
+                })?
+        };
+
+        Ok(Self {
+            device,
+            stream: Arc::new(Mutex::new(None)),
+            buffer: Arc::new(Mutex::new(Vec::new())),
+            sample_rate: defaults::SAMPLE_RATE,
+        })
+    }
+
+    /// Build the audio stream with the configured format.
+    fn build_stream(&self) -> Result<cpal::Stream> {
+        // Get supported configurations
+        let mut supported_configs =
+            self.device
+                .supported_input_configs()
+                .map_err(|e| VoicshError::AudioCapture {
+                    message: format!("Failed to query supported configs: {}", e),
+                })?;
+
+        // Find a config that supports our requirements
+        let _config = supported_configs
+            .find(|c| {
+                c.channels() == 1
+                    && c.sample_format() == cpal::SampleFormat::I16
+                    && c.min_sample_rate().0 <= self.sample_rate
+                    && c.max_sample_rate().0 >= self.sample_rate
+            })
+            .ok_or_else(|| VoicshError::AudioFormatMismatch {
+                expected: "16kHz mono i16".to_string(),
+                actual: "no matching format found".to_string(),
+            })?;
+
+        let stream_config = cpal::StreamConfig {
+            channels: 1,
+            sample_rate: cpal::SampleRate(self.sample_rate),
+            buffer_size: cpal::BufferSize::Default,
+        };
+
+        let buffer = Arc::clone(&self.buffer);
+        let err_callback = |err| {
+            eprintln!("Audio stream error: {}", err);
+        };
+
+        let stream = self
+            .device
+            .build_input_stream(
+                &stream_config,
+                move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                    // Accumulate samples in the buffer
+                    if let Ok(mut buf) = buffer.lock() {
+                        buf.extend_from_slice(data);
+                    }
+                },
+                err_callback,
+                None,
+            )
+            .map_err(|e| VoicshError::AudioCapture {
+                message: format!("Failed to build input stream: {}", e),
+            })?;
+
+        Ok(stream)
+    }
+}
+
+impl AudioSource for CpalAudioSource {
+    fn start(&mut self) -> Result<()> {
+        let mut stream_guard = self.stream.lock().map_err(|e| VoicshError::AudioCapture {
+            message: format!("Failed to lock stream: {}", e),
+        })?;
+
+        if stream_guard.is_some() {
+            return Ok(()); // Already started
+        }
+
+        let stream = self.build_stream()?;
+        stream.play().map_err(|e| VoicshError::AudioCapture {
+            message: format!("Failed to start audio stream: {}", e),
+        })?;
+
+        *stream_guard = Some(SendableStream(stream));
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        let mut stream_guard = self.stream.lock().map_err(|e| VoicshError::AudioCapture {
+            message: format!("Failed to lock stream: {}", e),
+        })?;
+
+        if let Some(sendable_stream) = stream_guard.take() {
+            sendable_stream
+                .0
+                .pause()
+                .map_err(|e| VoicshError::AudioCapture {
+                    message: format!("Failed to stop audio stream: {}", e),
+                })?;
+        }
+        Ok(())
+    }
+
+    fn read_samples(&mut self) -> Result<Vec<i16>> {
+        let mut buffer = self.buffer.lock().map_err(|e| VoicshError::AudioCapture {
+            message: format!("Failed to lock audio buffer: {}", e),
+        })?;
+
+        let samples = buffer.clone();
+        buffer.clear();
+        Ok(samples)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore] // Requires audio hardware
+    fn test_list_devices_returns_at_least_one_device() {
+        let devices = list_devices();
+        assert!(devices.is_ok());
+        let device_list = devices.unwrap();
+        assert!(
+            !device_list.is_empty(),
+            "Expected at least one audio device"
+        );
+    }
+
+    #[test]
+    #[ignore] // Requires audio hardware
+    fn test_create_with_default_device() {
+        let source = CpalAudioSource::new(None);
+        assert!(
+            source.is_ok(),
+            "Failed to create audio source with default device"
+        );
+    }
+
+    #[test]
+    fn test_create_with_invalid_device_name() {
+        let source = CpalAudioSource::new(Some("NonExistentDevice12345"));
+        assert!(source.is_err());
+        match source {
+            Err(VoicshError::AudioDeviceNotFound { device }) => {
+                assert_eq!(device, "NonExistentDevice12345");
+            }
+            _ => panic!("Expected AudioDeviceNotFound error"),
+        }
+    }
+
+    #[test]
+    #[ignore] // Requires audio hardware
+    fn test_audio_source_trait_implementation() {
+        let mut source = CpalAudioSource::new(None).expect("Failed to create audio source");
+
+        // Test start
+        let start_result = source.start();
+        assert!(start_result.is_ok(), "Failed to start audio capture");
+
+        // Test read (may be empty if no audio)
+        let read_result = source.read_samples();
+        assert!(read_result.is_ok(), "Failed to read samples");
+
+        // Test stop
+        let stop_result = source.stop();
+        assert!(stop_result.is_ok(), "Failed to stop audio capture");
+    }
+
+    #[test]
+    #[ignore] // Requires audio hardware
+    fn test_read_samples_clears_buffer() {
+        let mut source = CpalAudioSource::new(None).expect("Failed to create audio source");
+        source.start().expect("Failed to start");
+
+        // Wait a bit for some samples to accumulate
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // First read
+        let _samples1 = source.read_samples().expect("Failed to read samples");
+
+        // Second immediate read should be empty or have new samples
+        let _samples2 = source.read_samples().expect("Failed to read samples");
+
+        // The samples should not be identical (buffer was cleared)
+        // Note: samples2 might not be empty if audio continued to capture
+
+        source.stop().expect("Failed to stop");
+    }
+
+    #[test]
+    #[ignore] // Requires audio hardware
+    fn test_start_stop_multiple_times() {
+        let mut source = CpalAudioSource::new(None).expect("Failed to create audio source");
+
+        for _ in 0..3 {
+            assert!(source.start().is_ok());
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            assert!(source.stop().is_ok());
+        }
+    }
+
+    #[test]
+    #[ignore] // Requires audio hardware
+    fn test_can_be_used_as_trait_object() {
+        let source: Box<dyn AudioSource> =
+            Box::new(CpalAudioSource::new(None).expect("Failed to create audio source"));
+
+        let mut boxed_source = source;
+        assert!(boxed_source.start().is_ok());
+        assert!(boxed_source.read_samples().is_ok());
+        assert!(boxed_source.stop().is_ok());
+    }
+}

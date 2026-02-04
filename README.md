@@ -132,13 +132,13 @@ VOICSH_AUDIO_DEVICE=alsa_input.usb voicsh start
 
 ```bash
 # Fedora/RHEL
-sudo dnf install clang llvm-devel alsa-lib-devel
+sudo dnf install clang llvm-devel alsa-lib-devel cmake
 
 # Ubuntu/Debian
-sudo apt install clang libclang-dev libasound2-dev
+sudo apt install clang libclang-dev libasound2-dev cmake
 
 # Arch
-sudo pacman -S clang alsa-lib
+sudo pacman -S clang alsa-lib cmake
 ```
 
 ## Models

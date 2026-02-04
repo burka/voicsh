@@ -30,6 +30,16 @@ dirs = "5"
 # System
 libc = "0.2"
 
+# Audio
+cpal = "0.15"
+
+# Speech-to-text (requires cmake to build)
+whisper-rs = { version = "0.12", optional = true }
+
+[features]
+default = []
+whisper = ["whisper-rs"]
+
 [dev-dependencies]
 tempfile = "3"
 
