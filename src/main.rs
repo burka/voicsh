@@ -3,6 +3,7 @@ use clap::Parser;
 use voicsh::audio::capture::list_devices;
 use voicsh::cli::{Cli, Commands, ModelsAction};
 use voicsh::config::Config;
+use voicsh::diagnostics::check_dependencies;
 use voicsh::models::catalog::list_models;
 use voicsh::models::download::{download_model, format_model_info};
 use voicsh::pipeline::run_record_command;
@@ -49,6 +50,9 @@ async fn main() -> Result<()> {
         Commands::Status => {
             eprintln!("Daemon status... (not implemented)");
             std::process::exit(1);
+        }
+        Commands::Check => {
+            check_dependencies();
         }
     }
 

@@ -40,7 +40,12 @@ impl CommandExecutor for SystemCommandExecutor {
                 }
             } else if e.kind() == std::io::ErrorKind::PermissionDenied {
                 VoicshError::InjectionPermissionDenied {
-                    message: format!("Permission denied executing {}: {}", command, e),
+                    message: format!(
+                        "Permission denied executing {}: {}.\n\
+                        Hint: If using ydotool, ensure the ydotoold daemon is running and you have permissions.\n\
+                        Try: sudo systemctl start ydotool",
+                        command, e
+                    ),
                 }
             } else {
                 VoicshError::InjectionFailed {
@@ -78,9 +83,33 @@ impl<E: CommandExecutor> TextInjector<E> {
     ///
     /// Uses wl-copy to set clipboard content, then ydotool to simulate Ctrl+V.
     /// This is more reliable for complex text with special characters.
+    ///
+    /// # Requirements
+    /// - wl-copy (from wl-clipboard package)
+    /// - ydotool (with ydotoold daemon running)
+    ///
+    /// # Installation
+    /// Ubuntu/Debian: `sudo apt install wl-clipboard ydotool`
+    /// Arch: `sudo pacman -S wl-clipboard ydotool`
+    ///
+    /// # Setup
+    /// Ensure ydotoold daemon is running:
+    /// `sudo systemctl enable --now ydotool`
     pub fn inject_via_clipboard(&self, text: &str) -> Result<()> {
         // Copy text to clipboard using wl-copy
-        self.executor.execute("wl-copy", &[text])?;
+        self.executor
+            .execute("wl-copy", &[text])
+            .map_err(|e| match &e {
+                VoicshError::InjectionToolNotFound { tool } if tool == "wl-copy" => {
+                    VoicshError::InjectionFailed {
+                        message: "wl-copy not found. Install wl-clipboard:\n\
+                            Ubuntu/Debian: sudo apt install wl-clipboard\n\
+                            Arch: sudo pacman -S wl-clipboard"
+                            .to_string(),
+                    }
+                }
+                _ => e,
+            })?;
 
         // Simulate Ctrl+V using ydotool
         // key 29:1 = left ctrl down
@@ -88,7 +117,19 @@ impl<E: CommandExecutor> TextInjector<E> {
         // key 47:0 = v up
         // key 29:0 = left ctrl up
         self.executor
-            .execute("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"])?;
+            .execute("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"])
+            .map_err(|e| match &e {
+                VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
+                    VoicshError::InjectionFailed {
+                        message: "ydotool not found. Install ydotool and start the daemon:\n\
+                            Ubuntu/Debian: sudo apt install ydotool\n\
+                            Arch: sudo pacman -S ydotool\n\
+                            Then start the daemon: sudo systemctl enable --now ydotool"
+                            .to_string(),
+                    }
+                }
+                _ => e,
+            })?;
 
         Ok(())
     }
@@ -97,8 +138,32 @@ impl<E: CommandExecutor> TextInjector<E> {
     ///
     /// Uses ydotool to type each character.
     /// May have issues with special characters or non-ASCII text.
+    ///
+    /// # Requirements
+    /// - ydotool (with ydotoold daemon running)
+    ///
+    /// # Installation
+    /// Ubuntu/Debian: `sudo apt install ydotool`
+    /// Arch: `sudo pacman -S ydotool`
+    ///
+    /// # Setup
+    /// Ensure ydotoold daemon is running:
+    /// `sudo systemctl enable --now ydotool`
     pub fn inject_direct(&self, text: &str) -> Result<()> {
-        self.executor.execute("ydotool", &["type", text])?;
+        self.executor
+            .execute("ydotool", &["type", text])
+            .map_err(|e| match &e {
+                VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
+                    VoicshError::InjectionFailed {
+                        message: "ydotool not found. Install ydotool and start the daemon:\n\
+                            Ubuntu/Debian: sudo apt install ydotool\n\
+                            Arch: sudo pacman -S ydotool\n\
+                            Then start the daemon: sudo systemctl enable --now ydotool"
+                            .to_string(),
+                    }
+                }
+                _ => e,
+            })?;
         Ok(())
     }
 }
@@ -330,10 +395,11 @@ mod tests {
         assert!(result.is_err());
 
         match result {
-            Err(VoicshError::InjectionToolNotFound { tool }) => {
-                assert_eq!(tool, "wl-copy");
+            Err(VoicshError::InjectionFailed { message }) => {
+                assert!(message.contains("wl-copy"));
+                assert!(message.contains("wl-clipboard"));
             }
-            _ => panic!("Expected InjectionToolNotFound error"),
+            _ => panic!("Expected InjectionFailed error with wl-copy installation instructions"),
         }
     }
 

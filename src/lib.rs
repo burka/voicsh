@@ -6,6 +6,7 @@ pub mod audio;
 pub mod cli;
 pub mod config;
 pub mod defaults;
+pub mod diagnostics;
 pub mod error;
 pub mod input;
 pub mod ipc;

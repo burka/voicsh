@@ -69,6 +69,9 @@ pub enum Commands {
 
     /// Show daemon status
     Status,
+
+    /// Check system dependencies
+    Check,
 }
 
 /// Model management actions
@@ -370,5 +373,14 @@ mod tests {
     fn test_models_install_requires_name() {
         let result = Cli::try_parse_from(["voicsh", "models", "install"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_check() {
+        let cli = Cli::try_parse_from(["voicsh", "check"]).unwrap();
+        match cli.command {
+            Commands::Check => {}
+            _ => panic!("Expected Check command"),
+        }
     }
 }

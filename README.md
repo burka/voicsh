@@ -46,14 +46,14 @@ voicsh start
 ### Commands
 
 ```bash
+voicsh check              # Check system dependencies
 voicsh start              # Start daemon (model loaded, ready for hotkey)
 voicsh stop               # Stop daemon
 voicsh toggle             # Toggle recording (send to running daemon)
 voicsh record             # One-shot: record → transcribe → type → exit
-voicsh transcribe file.wav  # Transcribe audio file
-voicsh config             # Open config file in $EDITOR
-voicsh models             # List available models
-voicsh models install small.en  # Download a model
+voicsh devices            # List available audio input devices
+voicsh models list        # List available models
+voicsh models install base.en  # Download a model
 voicsh status             # Show daemon status, model info
 ```
 
@@ -124,9 +124,23 @@ VOICSH_AUDIO_DEVICE=alsa_input.usb voicsh start
 
 ### Runtime Dependencies
 
-- **Wayland**: `ydotool` (for text injection) - auto-installed by setup
-- **X11**: `xdotool` and `xsel` (usually pre-installed)
+**Required for text injection:**
+- **Wayland**: `wl-clipboard` and `ydotool` with `ydotoold` daemon running
 - **Audio**: PipeWire or PulseAudio (standard on modern Linux)
+
+**Installation:**
+```bash
+# Check current system dependencies
+voicsh check
+
+# Ubuntu/Debian
+sudo apt install wl-clipboard ydotool
+sudo systemctl enable --now ydotool
+
+# Arch Linux
+sudo pacman -S wl-clipboard ydotool
+sudo systemctl enable --now ydotool
+```
 
 ### Build Dependencies
 
