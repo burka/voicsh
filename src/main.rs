@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
                 model,
                 language,
                 cli.quiet,
+                cli.verbose,
                 no_download,
                 once,
             )

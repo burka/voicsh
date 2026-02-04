@@ -26,6 +26,7 @@ use std::process::Command;
 /// * `model` - Optional model override from CLI
 /// * `language` - Optional language override from CLI
 /// * `quiet` - Suppress status messages
+/// * `verbose` - Show detailed output (audio levels, debug info)
 /// * `no_download` - Prevent automatic model download
 /// * `once` - Exit after first transcription (default: loop continuously)
 ///
@@ -37,6 +38,7 @@ pub async fn run_record_command(
     model: Option<String>,
     language: Option<String>,
     quiet: bool,
+    verbose: bool,
     no_download: bool,
     once: bool,
 ) -> Result<()> {
@@ -76,8 +78,8 @@ pub async fn run_record_command(
             eprintln!("\n--- Recording {} ---", iteration);
         }
 
-        // Step 1: Record audio (show level meter if not quiet)
-        let audio_samples = record_audio(&config, !quiet)?;
+        // Step 1: Record audio (show level meter only in verbose mode)
+        let audio_samples = record_audio(&config, verbose)?;
 
         if audio_samples.is_empty() {
             if !quiet {

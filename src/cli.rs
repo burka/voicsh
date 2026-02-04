@@ -20,6 +20,10 @@ pub struct Cli {
     /// Suppress output (quiet mode)
     #[arg(short, long, global = true)]
     pub quiet: bool,
+
+    /// Verbose output (show audio levels, debug info)
+    #[arg(short, long, global = true)]
+    pub verbose: bool,
 }
 
 /// Available commands
