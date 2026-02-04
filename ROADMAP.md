@@ -131,8 +131,13 @@ Phased development plan from MVP to full-featured voice typing application.
 - [ ] Primary selection support, preserve clipboard option
 - [ ] Multi-monitor overlay positioning
 
-### Streaming STT
+### Streaming STT & Chunked Recording
 
+- [ ] Chunked recording mode for live processing
+  - `--chunk-size=N` / `-s N` - process every N seconds of audio
+  - Continuous transcription without waiting for silence
+  - Overlap handling between chunks for word continuity
+  - Auto-leveling / automatic gain control (AGC)
 - [ ] Real-time word-by-word display
 - [ ] whisper.cpp server WebSocket integration
 - [ ] Live correction as you speak
