@@ -146,8 +146,27 @@ Phased development plan from MVP to full-featured voice typing application.
 ### Performance & Debugging
 
 - [ ] GPU acceleration (CUDA, Metal)
+  - Build whisper.cpp with CUDA support
+  - Auto-detect GPU availability
+  - Fallback to CPU when GPU unavailable
+  - Config option: `stt.use_gpu = auto|always|never`
 - [ ] Latency tracking and accuracy estimation
 - [ ] Debug mode: save audio, log transcriptions, profiling
+
+### Model Auto-Selection & Benchmarking
+
+- [ ] `voicsh benchmark` command
+  - Measure transcription speed for each installed model
+  - Report accuracy estimate (optional test audio)
+  - Recommend optimal model for current hardware
+- [ ] Auto-select model based on system resources
+  - Detect available RAM and CPU cores
+  - Heuristic: <4GB → tiny, 4-8GB → base, 8-16GB → small, >16GB → medium
+  - Config option: `stt.model = auto` to enable
+- [ ] Resource usage limits
+  - Config: `stt.max_memory_mb` - limit model memory
+  - Config: `stt.max_cpu_percent` - limit CPU usage during transcription
+  - Graceful degradation to smaller model if limits exceeded
 
 ### Success Criteria
 
@@ -155,6 +174,8 @@ Phased development plan from MVP to full-featured voice typing application.
 - [ ] Push-to-talk feels instant
 - [ ] Profiles switch seamlessly
 - [ ] GPU acceleration 2x faster than CPU
+- [ ] `voicsh benchmark` recommends appropriate model
+- [ ] Auto-selected model works well on low-end hardware (4GB RAM)
 
 ---
 
