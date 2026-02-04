@@ -1,0 +1,33 @@
+[package]
+name = "voicsh"
+version = "0.1.0"
+edition = "2021"
+description = "Voice typing for Wayland Linux"
+license = "MIT"
+repository = "https://github.com/burka/voicsh"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Paths
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = true
