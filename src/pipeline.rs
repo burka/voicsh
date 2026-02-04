@@ -54,6 +54,15 @@ pub async fn run_record_command(
         config.stt.language = l;
     }
 
+    // Load model ONCE before the loop (this is the slow part)
+    if !quiet {
+        eprintln!("Loading model '{}'...", config.stt.model);
+    }
+    let transcriber = create_transcriber(&config, quiet, no_download).await?;
+    if !quiet {
+        eprintln!("Model loaded. Ready!");
+    }
+
     // Loop until user interrupts (or once=true for single run)
     let mut iteration = 0;
     loop {
@@ -66,7 +75,7 @@ pub async fn run_record_command(
 
         // Step 1: Record audio
         if !quiet {
-            eprintln!("Ready. Speak now... (silence ends recording)");
+            eprintln!("Speak now... (silence ends recording)");
         }
 
         let audio_samples = record_audio(&config)?;
@@ -81,16 +90,16 @@ pub async fn run_record_command(
             continue;
         }
 
-        // Step 2: Transcribe audio
+        // Step 2: Transcribe audio (model already loaded - this is fast)
         if !quiet {
-            eprintln!("Processing...");
+            eprintln!("Transcribing...");
         }
 
-        let transcription = transcribe_audio(&config, &audio_samples, quiet, no_download).await?;
+        let transcription = transcriber.transcribe(&audio_samples)?;
 
         if transcription.is_empty() {
             if !quiet {
-                eprintln!("Transcription produced no text, skipping...");
+                eprintln!("No speech detected, skipping...");
             }
             if once {
                 break;
@@ -127,6 +136,55 @@ pub async fn run_record_command(
     Ok(())
 }
 
+/// Create the transcriber, handling model download if needed.
+async fn create_transcriber(
+    config: &Config,
+    quiet: bool,
+    no_download: bool,
+) -> Result<WhisperTranscriber> {
+    let configured_model = &config.stt.model;
+
+    // Determine which model to use
+    let model_to_use = if is_model_installed(configured_model) {
+        configured_model.to_string()
+    } else {
+        if !quiet {
+            eprintln!("Model '{}' not installed.", configured_model);
+        }
+
+        // Try fallback to any installed model
+        if let Some(fallback) = find_any_installed_model() {
+            if !quiet {
+                eprintln!("Using '{}' instead.", fallback);
+            }
+            fallback
+        } else if no_download {
+            return Err(VoicshError::Transcription {
+                message: format!(
+                    "No models installed. Run 'voicsh models install {}'",
+                    configured_model
+                ),
+            });
+        } else {
+            // Download the model
+            if !quiet {
+                eprintln!("Downloading '{}'...", configured_model);
+            }
+            download_model(configured_model, !quiet).await?;
+            configured_model.to_string()
+        }
+    };
+
+    let model_path = build_model_path(&model_to_use)?;
+    let whisper_config = WhisperConfig {
+        model_path,
+        language: config.stt.language.clone(),
+        threads: None,
+    };
+
+    WhisperTranscriber::new(whisper_config)
+}
+
 /// Record audio using configured audio source and VAD.
 fn record_audio(config: &Config) -> Result<Vec<i16>> {
     // Create audio source
@@ -143,83 +201,6 @@ fn record_audio(config: &Config) -> Result<Vec<i16>> {
     // Create recording session and record
     let mut session = RecordingSession::new(audio_source, vad_config);
     session.record_until_speech_ends()
-}
-
-/// Transcribe audio samples to text using configured STT model.
-///
-/// This function implements smart model selection:
-/// 1. Try to use the configured model
-/// 2. If not installed and auto-download is enabled, download it
-/// 3. If auto-download is disabled, fall back to any installed model
-/// 4. If no models are installed, return an error
-async fn transcribe_audio(
-    config: &Config,
-    audio: &[i16],
-    quiet: bool,
-    no_download: bool,
-) -> Result<String> {
-    let configured_model = &config.stt.model;
-
-    // Determine which model to use
-    let model_to_use = if is_model_installed(configured_model) {
-        // Configured model is available, use it
-        configured_model.to_string()
-    } else {
-        // Configured model not installed
-        if !quiet {
-            eprintln!("Configured model '{}' is not installed.", configured_model);
-        }
-
-        // Try to find any installed model as fallback
-        if let Some(fallback_model) = find_any_installed_model() {
-            if !quiet {
-                eprintln!("Using installed model '{}' instead.", fallback_model);
-            }
-            fallback_model
-        } else {
-            // No models installed at all
-            if no_download {
-                return Err(VoicshError::Transcription {
-                    message: format!(
-                        "Model '{}' is not installed and --no-download was specified. \
-                        Run 'voicsh models install {}' to download it.",
-                        configured_model, configured_model
-                    ),
-                });
-            }
-
-            // Auto-download the configured model
-            if !quiet {
-                eprintln!(
-                    "Downloading model '{}' (this may take a while)...",
-                    configured_model
-                );
-            }
-
-            download_model(configured_model, !quiet).await?;
-
-            if !quiet {
-                eprintln!("Model '{}' downloaded successfully.", configured_model);
-            }
-
-            configured_model.to_string()
-        }
-    };
-
-    // Build model path
-    let model_path = build_model_path(&model_to_use)?;
-
-    // Create transcriber
-    let whisper_config = WhisperConfig {
-        model_path,
-        language: config.stt.language.clone(),
-        threads: None, // Auto-detect
-    };
-
-    let transcriber = WhisperTranscriber::new(whisper_config)?;
-
-    // Transcribe
-    transcriber.transcribe(audio)
 }
 
 /// Inject transcribed text using configured input method.
