@@ -96,7 +96,16 @@ pub async fn run_record_command(
             eprintln!("Transcribing...");
         }
 
-        let transcription = transcriber.transcribe(&audio_samples)?;
+        let transcription = match transcriber.transcribe(&audio_samples) {
+            Ok(text) => text,
+            Err(e) => {
+                eprintln!("Transcription error: {}", e);
+                if once {
+                    return Err(e);
+                }
+                continue; // Try again in loop mode
+            }
+        };
 
         if transcription.is_empty() {
             if !quiet {
@@ -131,6 +140,11 @@ pub async fn run_record_command(
         // Exit after first iteration if once flag is set
         if once {
             break;
+        }
+
+        // Ready for next recording
+        if !quiet {
+            eprintln!("\nReady for next recording... (Ctrl+C to stop)");
         }
     }
 
