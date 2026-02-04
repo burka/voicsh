@@ -131,13 +131,50 @@ Phased development plan from MVP to full-featured voice typing application.
 - [ ] Primary selection support, preserve clipboard option
 - [ ] Multi-monitor overlay positioning
 
-### Streaming STT & Chunked Recording
+### Streaming Pipeline Architecture (Priority)
 
-- [ ] Chunked recording mode for live processing
-  - `--chunk-size=N` / `-s N` - process every N seconds of audio
-  - Continuous transcription without waiting for silence
-  - Overlap handling between chunks for word continuity
-  - Auto-leveling / automatic gain control (AGC)
+**Goal**: Low-latency continuous transcription with chunked processing
+
+```
+┌─────────────┐    ┌──────────────┐    ┌───────────┐    ┌─────────┐
+│  Continuous │───▶│   Chunker    │───▶│Transcriber│───▶│ Stitcher│───▶ Inject
+│  Recording  │    │ (3s/pause)   │    │  (async)  │    │         │
+└─────────────┘    └──────────────┘    └───────────┘    └─────────┘
+       │                  │
+       ▼                  ▼
+   Ring Buffer      Silence detector
+                   (triggers immediate
+                    chunk on pause)
+```
+
+- [ ] **Ring buffer audio capture**
+  - Continuous recording to circular buffer
+  - Never stops until user ends session
+  - Decoupled from transcription timing
+
+- [ ] **Smart chunker with pause detection**
+  - Default chunk size: ~3 seconds
+  - `--chunk-size=N` / `-s N` CLI override
+  - Silence/pause detection triggers immediate chunk
+  - Small overlap between chunks for word continuity (~200ms)
+
+- [ ] **Async transcription pipeline**
+  - Process chunks as they arrive
+  - Don't block recording while transcribing
+  - Queue management for slow transcription
+
+- [ ] **Result stitching**
+  - Combine chunk transcriptions seamlessly
+  - Handle word boundaries (avoid duplicates/cuts)
+  - Punctuation continuity
+
+- [ ] **Auto-leveling / AGC** (after chunking works)
+  - Automatic gain control for varying input volumes
+  - Normalize audio before transcription
+  - Adaptive threshold based on ambient noise
+
+### Streaming STT (Future)
+
 - [ ] Real-time word-by-word display
 - [ ] whisper.cpp server WebSocket integration
 - [ ] Live correction as you speak
