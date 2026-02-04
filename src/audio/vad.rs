@@ -69,6 +69,21 @@ pub enum VadEvent {
     SpeechEnd,
 }
 
+/// Detailed VAD processing result with level information.
+#[derive(Debug, Clone, Copy)]
+pub struct VadResult {
+    /// The VAD event
+    pub event: VadEvent,
+    /// Current RMS level (0.0 to 1.0)
+    pub level: f32,
+    /// Speech detection threshold
+    pub threshold: f32,
+    /// Milliseconds of silence (when in MaybeSilence state)
+    pub silence_ms: u32,
+    /// Silence duration needed to end speech
+    pub silence_duration_ms: u32,
+}
+
 /// Voice Activity Detector state machine.
 pub struct Vad<C: Clock = SystemClock> {
     config: VadConfig,
@@ -95,37 +110,46 @@ impl<C: Clock> Vad<C> {
     /// # Arguments
     /// * `samples` - Audio samples as 16-bit PCM
     /// * `sample_rate` - Sample rate in Hz (used for timing calculations)
-    pub fn process(&mut self, samples: &[i16], _sample_rate: u32) -> VadEvent {
+    pub fn process(&mut self, samples: &[i16], sample_rate: u32) -> VadEvent {
+        self.process_with_info(samples, sample_rate).event
+    }
+
+    /// Processes audio samples and returns detailed VAD result with level info.
+    ///
+    /// # Arguments
+    /// * `samples` - Audio samples as 16-bit PCM
+    /// * `sample_rate` - Sample rate in Hz (used for timing calculations)
+    pub fn process_with_info(&mut self, samples: &[i16], _sample_rate: u32) -> VadResult {
         let rms = calculate_rms(samples);
         let is_speech = rms > self.config.speech_threshold;
         let now = self.clock.now();
 
-        match self.state {
+        let (event, silence_ms) = match self.state {
             VadState::Idle => {
                 if is_speech {
                     self.state = VadState::Speaking;
                     self.speech_start = Some(now);
                     self.silence_start = None;
-                    VadEvent::SpeechStart
+                    (VadEvent::SpeechStart, 0)
                 } else {
-                    VadEvent::Silence
+                    (VadEvent::Silence, 0)
                 }
             }
             VadState::Speaking => {
                 if is_speech {
                     self.silence_start = None;
-                    VadEvent::Speech
+                    (VadEvent::Speech, 0)
                 } else {
                     self.state = VadState::MaybeSilence;
                     self.silence_start = Some(now);
-                    VadEvent::Silence
+                    (VadEvent::Silence, 0)
                 }
             }
             VadState::MaybeSilence => {
                 if is_speech {
                     self.state = VadState::Speaking;
                     self.silence_start = None;
-                    VadEvent::Speech
+                    (VadEvent::Speech, 0)
                 } else {
                     let silence_elapsed = self
                         .silence_start
@@ -136,13 +160,21 @@ impl<C: Clock> Vad<C> {
                         self.state = VadState::Stopped;
                         self.silence_start = None;
                         self.speech_start = None;
-                        VadEvent::SpeechEnd
+                        (VadEvent::SpeechEnd, silence_elapsed)
                     } else {
-                        VadEvent::Silence
+                        (VadEvent::Silence, silence_elapsed)
                     }
                 }
             }
-            VadState::Stopped => VadEvent::Silence,
+            VadState::Stopped => (VadEvent::Silence, 0),
+        };
+
+        VadResult {
+            event,
+            level: rms,
+            threshold: self.config.speech_threshold,
+            silence_ms,
+            silence_duration_ms: self.config.silence_duration_ms,
         }
     }
 

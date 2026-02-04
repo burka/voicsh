@@ -3,7 +3,7 @@
 //! Orchestrates the complete voice-to-text flow:
 //! record → transcribe → inject
 
-use crate::audio::capture::CpalAudioSource;
+use crate::audio::capture::{CpalAudioSource, suppress_audio_warnings};
 use crate::audio::vad::VadConfig;
 use crate::config::{Config, InputMethod};
 use crate::error::{Result, VoicshError};
@@ -40,6 +40,9 @@ pub async fn run_record_command(
     no_download: bool,
     once: bool,
 ) -> Result<()> {
+    // Suppress noisy JACK/ALSA warnings before audio init
+    suppress_audio_warnings();
+
     // Check prerequisites first (before any heavy work)
     check_prerequisites()?;
 
@@ -73,12 +76,8 @@ pub async fn run_record_command(
             eprintln!("\n--- Recording {} ---", iteration);
         }
 
-        // Step 1: Record audio
-        if !quiet {
-            eprintln!("Speak now... (silence ends recording)");
-        }
-
-        let audio_samples = record_audio(&config)?;
+        // Step 1: Record audio (show level meter if not quiet)
+        let audio_samples = record_audio(&config, !quiet)?;
 
         if audio_samples.is_empty() {
             if !quiet {
@@ -190,7 +189,7 @@ async fn create_transcriber(
 }
 
 /// Record audio using configured audio source and VAD.
-fn record_audio(config: &Config) -> Result<Vec<i16>> {
+fn record_audio(config: &Config, show_levels: bool) -> Result<Vec<i16>> {
     // Create audio source
     let device_name = config.audio.device.as_deref();
     let audio_source = CpalAudioSource::new(device_name)?;
@@ -203,7 +202,8 @@ fn record_audio(config: &Config) -> Result<Vec<i16>> {
     };
 
     // Create recording session and record
-    let mut session = RecordingSession::new(audio_source, vad_config);
+    let mut session =
+        RecordingSession::new(audio_source, vad_config).with_level_display(show_levels);
     session.record_until_speech_ends()
 }
 

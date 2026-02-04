@@ -6,6 +6,21 @@ use crate::error::{Result, VoicshError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 
+/// Suppress noisy JACK/ALSA error messages that occur during audio backend probing.
+/// These are harmless but confusing to users.
+///
+/// # Safety
+/// This modifies environment variables which is safe when called before spawning threads.
+pub fn suppress_audio_warnings() {
+    // SAFETY: Called at startup before any threads are spawned
+    unsafe {
+        // Suppress JACK "cannot connect" messages
+        std::env::set_var("JACK_NO_START_SERVER", "1");
+        // Some ALSA messages can be reduced
+        std::env::set_var("ALSA_CARD", "0");
+    }
+}
+
 /// Preferred device names for GNOME/PipeWire environments.
 const PREFERRED_DEVICES: &[&str] = &["pipewire", "pulse", "PulseAudio"];
 

@@ -7,6 +7,7 @@ use crate::audio::recorder::AudioSource;
 use crate::audio::vad::{Vad, VadConfig, VadEvent};
 use crate::defaults;
 use crate::error::Result;
+use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ pub struct RecordingSession<A: AudioSource> {
     audio_source: A,
     vad: Vad,
     sample_rate: u32,
+    show_levels: bool,
 }
 
 impl<A: AudioSource> RecordingSession<A> {
@@ -30,7 +32,14 @@ impl<A: AudioSource> RecordingSession<A> {
             audio_source,
             vad: Vad::new(vad_config),
             sample_rate: defaults::SAMPLE_RATE,
+            show_levels: false,
         }
+    }
+
+    /// Enable or disable level display during recording.
+    pub fn with_level_display(mut self, show: bool) -> Self {
+        self.show_levels = show;
+        self
     }
 
     /// Record audio until speech ends.
@@ -61,10 +70,15 @@ impl<A: AudioSource> RecordingSession<A> {
                 continue;
             }
 
-            // Process samples through VAD
-            let vad_event = self.vad.process(&samples, self.sample_rate);
+            // Process samples through VAD with level info
+            let result = self.vad.process_with_info(&samples, self.sample_rate);
 
-            match vad_event {
+            // Show level feedback if enabled
+            if self.show_levels {
+                self.display_level(&result, speech_started);
+            }
+
+            match result.event {
                 VadEvent::SpeechStart => {
                     speech_started = true;
                     accumulated_audio.extend_from_slice(&samples);
@@ -81,6 +95,11 @@ impl<A: AudioSource> RecordingSession<A> {
                     }
                 }
                 VadEvent::SpeechEnd => {
+                    if self.show_levels {
+                        // Clear the level line
+                        eprint!("\r{:60}\r", "");
+                        let _ = io::stderr().flush();
+                    }
                     // Speech has ended, stop recording
                     break;
                 }
@@ -94,6 +113,43 @@ impl<A: AudioSource> RecordingSession<A> {
         self.vad.reset();
 
         Ok(accumulated_audio)
+    }
+
+    /// Display audio level as a visual meter.
+    fn display_level(&self, result: &crate::audio::vad::VadResult, speech_started: bool) {
+        // Create a visual level bar (0-20 chars based on level)
+        let bar_width = 20;
+        let level_pct = (result.level / 0.1).min(1.0); // Scale: 0.1 RMS = full bar
+        let filled = (level_pct * bar_width as f32) as usize;
+        let threshold_pos = ((result.threshold / 0.1).min(1.0) * bar_width as f32) as usize;
+
+        let mut bar = String::with_capacity(bar_width);
+        for i in 0..bar_width {
+            if i < filled {
+                if i >= threshold_pos {
+                    bar.push('█'); // Above threshold
+                } else {
+                    bar.push('▒'); // Below threshold
+                }
+            } else if i == threshold_pos {
+                bar.push('│'); // Threshold marker
+            } else {
+                bar.push('░'); // Empty
+            }
+        }
+
+        let status = if speech_started {
+            if result.silence_ms > 0 {
+                format!("silence {:.1}s", result.silence_ms as f32 / 1000.0)
+            } else {
+                "recording".to_string()
+            }
+        } else {
+            "waiting".to_string()
+        };
+
+        eprint!("\r[{}] {:12} ", bar, status);
+        let _ = io::stderr().flush();
     }
 }
 
