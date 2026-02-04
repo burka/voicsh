@@ -4,7 +4,10 @@
 //! record → transcribe → inject
 
 use crate::audio::capture::{CpalAudioSource, suppress_audio_warnings};
+use crate::audio::vad::VadConfig;
 use crate::config::{Config, InputMethod};
+use crate::continuous::adaptive_chunker::AdaptiveChunkerConfig;
+use crate::continuous::pipeline::{ContinuousPipeline, ContinuousPipelineConfig};
 use crate::error::{Result, VoicshError};
 use crate::input::injector::TextInjector;
 use crate::models::catalog::get_model;
@@ -70,25 +73,58 @@ pub async fn run_record_command(
         eprintln!("Ready. Listening...");
     }
 
-    // Loop until user interrupts (or once=true for single run)
-    loop {
-        // Run one recording session
-        match run_single_session(&config, transcriber.clone(), quiet, verbose, chunk_size).await {
-            Ok(()) => {}
-            Err(e) => {
-                if !quiet {
-                    eprintln!("Error: {}", e);
-                }
-                if once {
-                    return Err(e);
-                }
-            }
-        }
-
-        if once {
-            break;
-        }
+    // Use continuous pipeline for default mode, streaming for --once
+    if once {
+        // Single recording session mode (legacy streaming pipeline)
+        run_single_session(&config, transcriber, quiet, verbose, chunk_size).await
+    } else {
+        // Continuous mode - new pipeline that runs forever
+        run_continuous(&config, transcriber, quiet, verbose).await
     }
+}
+
+/// Run the continuous pipeline until interrupted.
+async fn run_continuous(
+    config: &Config,
+    transcriber: Arc<WhisperTranscriber>,
+    quiet: bool,
+    verbose: bool,
+) -> Result<()> {
+    // Create audio source
+    let device_name = config.audio.device.as_deref();
+    let audio_source = CpalAudioSource::new(device_name)?;
+
+    // Create pipeline config
+    let pipeline_config = ContinuousPipelineConfig {
+        vad: VadConfig {
+            speech_threshold: config.audio.vad_threshold,
+            silence_duration_ms: config.audio.silence_duration_ms,
+            ..Default::default()
+        },
+        chunker: AdaptiveChunkerConfig::default(),
+        show_levels: verbose,
+        auto_level: true,
+        quiet,
+        input_method: config.input.method.clone(),
+        sample_rate: 16000,
+        ..Default::default()
+    };
+
+    // Start pipeline
+    let pipeline = ContinuousPipeline::new(pipeline_config);
+    let handle = pipeline.start(audio_source, transcriber)?;
+
+    // Wait for Ctrl+C
+    tokio::signal::ctrl_c()
+        .await
+        .map_err(|e| VoicshError::Other(format!("Failed to wait for Ctrl+C: {}", e)))?;
+
+    if !quiet {
+        eprintln!("\nShutting down...");
+    }
+
+    // Stop pipeline gracefully
+    handle.stop();
 
     Ok(())
 }
