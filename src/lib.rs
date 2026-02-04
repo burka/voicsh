@@ -3,6 +3,7 @@
 //! Offline-first voice-to-text with optional LLM refinement.
 
 pub mod audio;
+pub mod cli;
 pub mod config;
 pub mod error;
 pub mod input;
