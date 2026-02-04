@@ -472,10 +472,11 @@ mod tests {
     #[test]
     fn test_whisper_transcriber_implements_transcriber_trait() {
         // Test that we can use the trait object without a real model
-        // (we can't create an instance without a model, but we can verify the trait bounds)
-        fn accepts_transcriber(_t: &dyn Transcriber) {}
-
         // This test just verifies the trait is implemented correctly
         // Actual usage requires a real model file
+
+        // Verify trait bounds compile
+        fn _assert_transcriber_trait_bounds<T: Transcriber>() {}
+        _assert_transcriber_trait_bounds::<WhisperTranscriber>();
     }
 }

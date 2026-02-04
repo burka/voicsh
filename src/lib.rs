@@ -10,4 +10,6 @@ pub mod error;
 pub mod input;
 pub mod ipc;
 pub mod models;
+pub mod pipeline;
+pub mod recording;
 pub mod stt;
