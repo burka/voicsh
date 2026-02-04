@@ -81,20 +81,16 @@ impl<E: CommandExecutor> TextInjector<E> {
 
     /// Inject text via clipboard mechanism.
     ///
-    /// Uses wl-copy to set clipboard content, then ydotool to simulate Ctrl+V.
-    /// This is more reliable for complex text with special characters.
+    /// Uses wl-copy to set clipboard content, then simulates Ctrl+V.
+    /// Tries wtype first (no daemon needed), falls back to ydotool.
     ///
     /// # Requirements
     /// - wl-copy (from wl-clipboard package)
-    /// - ydotool (with ydotoold daemon running)
+    /// - wtype (preferred) or ydotool (with ydotoold daemon)
     ///
     /// # Installation
-    /// Ubuntu/Debian: `sudo apt install wl-clipboard ydotool`
-    /// Arch: `sudo pacman -S wl-clipboard ydotool`
-    ///
-    /// # Setup
-    /// Ensure ydotoold daemon is running:
-    /// `sudo systemctl enable --now ydotool`
+    /// Ubuntu/Debian: `sudo apt install wl-clipboard wtype`
+    /// Arch: `sudo pacman -S wl-clipboard wtype`
     pub fn inject_via_clipboard(&self, text: &str) -> Result<()> {
         // Copy text to clipboard using wl-copy
         self.executor
@@ -114,7 +110,17 @@ impl<E: CommandExecutor> TextInjector<E> {
         // Add small delay to ensure clipboard is updated before pasting
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        // Simulate Ctrl+V using ydotool
+        // Try wtype first (simpler, no daemon needed)
+        // wtype -M ctrl -k v simulates Ctrl+V
+        if self
+            .executor
+            .execute("wtype", &["-M", "ctrl", "-k", "v"])
+            .is_ok()
+        {
+            return Ok(());
+        }
+
+        // Fall back to ydotool
         // key 29:1 = left ctrl down
         // key 47:1 = v down
         // key 47:0 = v up
@@ -124,10 +130,10 @@ impl<E: CommandExecutor> TextInjector<E> {
             .map_err(|e| match &e {
                 VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
                     VoicshError::InjectionFailed {
-                        message: "ydotool not found. Install ydotool and start the daemon:\n\
-                            Ubuntu/Debian: sudo apt install ydotool\n\
-                            Arch: sudo pacman -S ydotool\n\
-                            Then start the daemon: sudo systemctl enable --now ydotool"
+                        message: "Neither wtype nor ydotool available for paste simulation.\n\
+                            Install wtype (recommended, no daemon needed):\n\
+                            Ubuntu/Debian: sudo apt install wtype\n\
+                            Arch: sudo pacman -S wtype"
                             .to_string(),
                     }
                 }
@@ -139,29 +145,30 @@ impl<E: CommandExecutor> TextInjector<E> {
 
     /// Inject text directly by simulating keyboard input.
     ///
-    /// Uses ydotool to type each character.
-    /// May have issues with special characters or non-ASCII text.
+    /// Tries wtype first (no daemon needed), falls back to ydotool.
     ///
     /// # Requirements
-    /// - ydotool (with ydotoold daemon running)
+    /// - wtype (preferred) or ydotool (with ydotoold daemon)
     ///
     /// # Installation
-    /// Ubuntu/Debian: `sudo apt install ydotool`
-    /// Arch: `sudo pacman -S ydotool`
-    ///
-    /// # Setup
-    /// Ensure ydotoold daemon is running:
-    /// `sudo systemctl enable --now ydotool`
+    /// Ubuntu/Debian: `sudo apt install wtype`
+    /// Arch: `sudo pacman -S wtype`
     pub fn inject_direct(&self, text: &str) -> Result<()> {
+        // Try wtype first (simpler, no daemon needed)
+        if self.executor.execute("wtype", &[text]).is_ok() {
+            return Ok(());
+        }
+
+        // Fall back to ydotool
         self.executor
             .execute("ydotool", &["type", text])
             .map_err(|e| match &e {
                 VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
                     VoicshError::InjectionFailed {
-                        message: "ydotool not found. Install ydotool and start the daemon:\n\
-                            Ubuntu/Debian: sudo apt install ydotool\n\
-                            Arch: sudo pacman -S ydotool\n\
-                            Then start the daemon: sudo systemctl enable --now ydotool"
+                        message: "Neither wtype nor ydotool available for text injection.\n\
+                            Install wtype (recommended, no daemon needed):\n\
+                            Ubuntu/Debian: sudo apt install wtype\n\
+                            Arch: sudo pacman -S wtype"
                             .to_string(),
                     }
                 }
@@ -382,9 +389,9 @@ mod tests {
         assert_eq!(calls[0].0, "wl-copy");
         assert_eq!(calls[0].1, vec!["Hello, World!"]);
 
-        // Second call: ydotool to simulate Ctrl+V
-        assert_eq!(calls[1].0, "ydotool");
-        assert_eq!(calls[1].1, vec!["key", "29:1", "47:1", "47:0", "29:0"]);
+        // Second call: wtype to simulate Ctrl+V (preferred over ydotool)
+        assert_eq!(calls[1].0, "wtype");
+        assert_eq!(calls[1].1, vec!["-M", "ctrl", "-k", "v"]);
     }
 
     #[test]
@@ -407,23 +414,25 @@ mod tests {
     }
 
     #[test]
-    fn test_inject_via_clipboard_handles_ydotool_error() {
+    fn test_inject_via_clipboard_falls_back_to_ydotool() {
+        // wtype fails, should fall back to ydotool
         let mock = MockCommandExecutor::new()
             .with_response("") // wl-copy succeeds
-            .with_error(VoicshError::InjectionPermissionDenied {
-                message: "ydotool requires permissions".to_string(),
-            });
+            .with_error(VoicshError::InjectionToolNotFound {
+                tool: "wtype".to_string(),
+            }) // wtype fails
+            .with_response(""); // ydotool succeeds
         let injector = TextInjector::new(mock);
 
         let result = injector.inject_via_clipboard("test");
-        assert!(result.is_err());
+        assert!(result.is_ok());
 
-        match result {
-            Err(VoicshError::InjectionPermissionDenied { message }) => {
-                assert!(message.contains("ydotool"));
-            }
-            _ => panic!("Expected InjectionPermissionDenied error"),
-        }
+        // Should have called wl-copy, then wtype (failed), then ydotool
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].0, "wl-copy");
+        assert_eq!(calls[1].0, "wtype");
+        assert_eq!(calls[2].0, "ydotool");
     }
 
     #[test]
@@ -436,15 +445,40 @@ mod tests {
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 1);
 
-        assert_eq!(calls[0].0, "ydotool");
-        assert_eq!(calls[0].1, vec!["type", "Hello"]);
+        // wtype is preferred over ydotool
+        assert_eq!(calls[0].0, "wtype");
+        assert_eq!(calls[0].1, vec!["Hello"]);
     }
 
     #[test]
-    fn test_inject_direct_handles_error() {
-        let mock = MockCommandExecutor::new().with_error(VoicshError::InjectionFailed {
-            message: "ydotool type failed".to_string(),
-        });
+    fn test_inject_direct_falls_back_to_ydotool() {
+        // wtype fails, falls back to ydotool
+        let mock = MockCommandExecutor::new()
+            .with_error(VoicshError::InjectionToolNotFound {
+                tool: "wtype".to_string(),
+            })
+            .with_response(""); // ydotool succeeds
+        let injector = TextInjector::new(mock);
+
+        let result = injector.inject_direct("test");
+        assert!(result.is_ok());
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "wtype");
+        assert_eq!(calls[1].0, "ydotool");
+    }
+
+    #[test]
+    fn test_inject_direct_fails_when_both_unavailable() {
+        // Both wtype and ydotool fail
+        let mock = MockCommandExecutor::new()
+            .with_error(VoicshError::InjectionToolNotFound {
+                tool: "wtype".to_string(),
+            })
+            .with_error(VoicshError::InjectionToolNotFound {
+                tool: "ydotool".to_string(),
+            });
         let injector = TextInjector::new(mock);
 
         let result = injector.inject_direct("test");
@@ -452,7 +486,7 @@ mod tests {
 
         match result {
             Err(VoicshError::InjectionFailed { message }) => {
-                assert!(message.contains("ydotool"));
+                assert!(message.contains("wtype"));
             }
             _ => panic!("Expected InjectionFailed error"),
         }
@@ -479,7 +513,9 @@ mod tests {
         injector.inject_direct(unicode_text).unwrap();
 
         let calls = injector.executor.calls();
-        assert_eq!(calls[0].1, vec!["type", unicode_text]);
+        // wtype is tried first
+        assert_eq!(calls[0].0, "wtype");
+        assert_eq!(calls[0].1, vec![unicode_text]);
     }
 
     #[test]
@@ -564,6 +600,8 @@ mod tests {
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, vec!["type", ""]);
+        // wtype is tried first
+        assert_eq!(calls[0].0, "wtype");
+        assert_eq!(calls[0].1, vec![""]);
     }
 }

@@ -25,24 +25,37 @@ fn check_command(command: &str) -> CheckResult {
     }
 }
 
-/// Check if ydotoold daemon is running.
-fn check_ydotool_daemon() -> CheckResult {
-    // Try to check if ydotoold is running by executing a harmless ydotool command
-    match Command::new("systemctl")
-        .args(["is-active", "ydotool"])
-        .output()
-    {
+/// Check if wtype is available (simpler Wayland typing tool).
+fn check_wtype() -> CheckResult {
+    match Command::new("wtype").arg("--help").output() {
         Ok(output) if output.status.success() => CheckResult::Ok,
-        Ok(_) => CheckResult::Warning(
-            "ydotoold daemon is not running. Start it with: sudo systemctl enable --now ydotool"
-                .to_string(),
-        ),
-        Err(_) => {
-            // systemctl not available, try alternative check
-            CheckResult::Warning(
-                "Cannot verify ydotoold status. Ensure the daemon is running.".to_string(),
-            )
+        Ok(_) => CheckResult::Ok, // --help might return non-zero but still work
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => CheckResult::NotFound,
+        Err(e) => CheckResult::Warning(format!("Error checking wtype: {}", e)),
+    }
+}
+
+/// Check ydotool backend availability by examining its output.
+fn check_ydotool_backend() -> CheckResult {
+    // Run ydotool with a simple command that triggers backend check
+    match Command::new("ydotool").args(["type", "--help"]).output() {
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("backend unavailable") {
+                CheckResult::Warning(
+                    "ydotool shows 'backend unavailable'. The ydotoold daemon is needed.\n\
+                     For ydotool 0.1.x: install ydotoold separately or upgrade to ydotool 1.0+\n\
+                     Alternative: install wtype (simpler, no daemon needed):\n\
+                       sudo apt install wtype  (Debian/Ubuntu)\n\
+                       sudo pacman -S wtype    (Arch)"
+                        .to_string(),
+                )
+            } else {
+                CheckResult::Ok
+            }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => CheckResult::NotFound,
+        Err(e) => CheckResult::Warning(format!("Error checking ydotool: {}", e)),
     }
 }
 
@@ -50,7 +63,7 @@ fn check_ydotool_daemon() -> CheckResult {
 pub fn check_dependencies() {
     println!("Checking system dependencies...\n");
 
-    // Check wl-copy
+    // Check wl-copy (clipboard)
     print!("wl-copy (clipboard): ");
     match check_command("wl-copy") {
         CheckResult::Ok => println!("✓ OK"),
@@ -62,32 +75,58 @@ pub fn check_dependencies() {
         CheckResult::Warning(msg) => println!("⚠ WARNING: {}", msg),
     }
 
-    // Check ydotool
+    // Check wtype (preferred input method - simpler, no daemon)
+    print!("wtype (input injection): ");
+    let wtype_available = match check_wtype() {
+        CheckResult::Ok => {
+            println!("✓ OK (preferred - no daemon needed)");
+            true
+        }
+        CheckResult::NotFound => {
+            println!("- not installed");
+            false
+        }
+        CheckResult::Warning(msg) => {
+            println!("⚠ WARNING: {}", msg);
+            false
+        }
+    };
+
+    // Check ydotool (fallback input method)
     print!("ydotool (input injection): ");
     match check_command("ydotool") {
-        CheckResult::Ok => {
-            println!("✓ OK");
-            // Check if daemon is running
-            print!("ydotoold (daemon): ");
-            match check_ydotool_daemon() {
-                CheckResult::Ok => println!("✓ RUNNING"),
-                CheckResult::Warning(msg) => println!("⚠ {}", msg),
-                CheckResult::NotFound => {
-                    println!("✗ NOT RUNNING");
-                    println!("  Start: sudo systemctl enable --now ydotool");
+        CheckResult::Ok | CheckResult::Warning(_) => {
+            // ydotool binary exists, check backend
+            match check_ydotool_backend() {
+                CheckResult::Ok => {
+                    println!("✓ OK");
                 }
+                CheckResult::Warning(msg) => {
+                    println!("⚠ WARNING");
+                    for line in msg.lines() {
+                        println!("  {}", line);
+                    }
+                }
+                CheckResult::NotFound => println!("✗ NOT FOUND"),
             }
         }
         CheckResult::NotFound => {
-            println!("✗ NOT FOUND");
-            println!("  Install: sudo apt install ydotool  (Debian/Ubuntu)");
-            println!("           sudo pacman -S ydotool    (Arch)");
-            println!("  After install, start daemon: sudo systemctl enable --now ydotool");
+            println!("- not installed");
+            if !wtype_available {
+                println!("  Install wtype (recommended): sudo apt install wtype");
+                println!("  Or ydotool: sudo apt install ydotool");
+            }
         }
-        CheckResult::Warning(msg) => println!("⚠ WARNING: {}", msg),
     }
 
-    println!("\nNote: Both wl-copy and ydotool are required for text injection to work.");
+    println!();
+    if wtype_available {
+        println!("✓ Ready to inject text using wtype + wl-copy.");
+    } else {
+        println!("⚠ Text injection may not work. Install wtype for best results:");
+        println!("  sudo apt install wtype    (Debian/Ubuntu)");
+        println!("  sudo pacman -S wtype      (Arch)");
+    }
 }
 
 #[cfg(test)]

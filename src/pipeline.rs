@@ -298,11 +298,58 @@ fn check_prerequisites() -> Result<()> {
         });
     }
 
-    // Check for ydotool (Wayland input simulation)
-    if Command::new("ydotool").arg("--version").output().is_err() {
-        return Err(VoicshError::InjectionToolNotFound {
-            tool: "ydotool".to_string(),
-        });
+    // Test wtype by sending an empty key sequence (tests compositor support)
+    // wtype fails with "Compositor does not support virtual keyboard" if unsupported
+    let wtype_works = match Command::new("wtype").arg("").output() {
+        Ok(output) => {
+            // wtype returns non-zero and prints error if compositor doesn't support it
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            !stderr.contains("does not support")
+        }
+        Err(_) => false,
+    };
+
+    // Test ydotool - check if backend is available by examining stderr
+    let ydotool_works = match Command::new("ydotool").args(["type", "--help"]).output() {
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // ydotool works if it doesn't report "backend unavailable"
+            !stderr.contains("backend unavailable")
+        }
+        Err(_) => false,
+    };
+
+    if !wtype_works && !ydotool_works {
+        // Neither tool works - provide detailed error
+        let ydotool_installed = Command::new("ydotool").arg("--version").output().is_ok()
+            || Command::new("ydotool")
+                .arg("type")
+                .arg("--help")
+                .output()
+                .is_ok();
+
+        let wtype_installed = Command::new("wtype").arg("--help").output().is_ok();
+
+        let mut msg = String::from("Text injection not available:\n");
+
+        if wtype_installed {
+            msg.push_str("  - wtype: installed but compositor doesn't support virtual keyboard\n");
+        } else {
+            msg.push_str("  - wtype: not installed\n");
+        }
+
+        if ydotool_installed {
+            msg.push_str("  - ydotool: installed but ydotoold daemon not running\n\n");
+            msg.push_str("Fix: Start ydotoold daemon: sudo ydotoold &\n");
+            msg.push_str("  Or: systemctl --user enable --now ydotool (if available)");
+        } else {
+            msg.push_str("  - ydotool: not installed\n\n");
+            msg.push_str("Install one of:\n");
+            msg.push_str("  sudo apt install wtype  (for Sway/wlroots compositors)\n");
+            msg.push_str("  sudo apt install ydotool  (then start ydotoold daemon)");
+        }
+
+        return Err(VoicshError::InjectionFailed { message: msg });
     }
 
     Ok(())
