@@ -119,9 +119,9 @@ impl<E: CommandExecutor> TextInjector<E> {
             return Ok(());
         }
 
-        // Fall back to ydotool
+        // Fall back to ydotool (use --delay 0 to send immediately)
         self.executor
-            .execute("ydotool", &["key", "ctrl+v"])
+            .execute("ydotool", &["key", "--delay", "0", "ctrl+v"])
             .map_err(|e| match &e {
                 VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
                     VoicshError::InjectionFailed {
@@ -154,9 +154,9 @@ impl<E: CommandExecutor> TextInjector<E> {
             return Ok(());
         }
 
-        // Fall back to ydotool
+        // Fall back to ydotool (use --delay 0 to send immediately)
         self.executor
-            .execute("ydotool", &["type", text])
+            .execute("ydotool", &["type", "--delay", "0", text])
             .map_err(|e| match &e {
                 VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
                     VoicshError::InjectionFailed {
@@ -419,6 +419,7 @@ mod tests {
         assert_eq!(calls[0].0, "wl-copy");
         assert_eq!(calls[1].0, "wtype");
         assert_eq!(calls[2].0, "ydotool");
+        assert_eq!(calls[2].1, vec!["key", "--delay", "0", "ctrl+v"]);
     }
 
     #[test]
@@ -453,6 +454,7 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].0, "wtype");
         assert_eq!(calls[1].0, "ydotool");
+        assert_eq!(calls[1].1, vec!["type", "--delay", "0", "test"]);
     }
 
     #[test]

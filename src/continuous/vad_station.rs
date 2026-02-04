@@ -67,16 +67,40 @@ impl VadStation {
 
     /// Displays a visual level meter to stderr.
     fn display_level(&self, level: f32, threshold: f32) {
-        const BAR_WIDTH: usize = 20;
-        let filled = ((level / 0.3) * BAR_WIDTH as f32) as usize;
-        let filled = filled.min(BAR_WIDTH);
+        const BAR_WIDTH: usize = 30;
 
+        // Use logarithmic scale for better visibility at low levels
+        // Map level 0.001-0.5 to 0-30 bars using log scale
+        let log_level = if level > 0.001 {
+            ((level.log10() + 3.0) / 2.7 * BAR_WIDTH as f32).clamp(0.0, BAR_WIDTH as f32)
+        } else {
+            0.0
+        };
+        let filled = log_level as usize;
+
+        // Calculate threshold position on same scale
+        let log_threshold = if threshold > 0.001 {
+            ((threshold.log10() + 3.0) / 2.7 * BAR_WIDTH as f32).clamp(0.0, BAR_WIDTH as f32)
+        } else {
+            0.0
+        };
+        let threshold_pos = log_threshold as usize;
+
+        // Build the bar with threshold marker
         let bar: String = (0..BAR_WIDTH)
-            .map(|i| if i < filled { '#' } else { '·' })
+            .map(|i| {
+                if i < filled {
+                    if level > threshold { '█' } else { '▓' }
+                } else if i == threshold_pos {
+                    '│'
+                } else {
+                    '░'
+                }
+            })
             .collect();
 
-        // Use \r to overwrite the line
-        eprint!("\r[{}] {:.2} (thr: {:.2})", bar, level, threshold);
+        // Use \r to overwrite the line, clear to end
+        eprint!("\r[{}] {:.3}  ", bar, level);
         io::stderr().flush().ok();
     }
 }

@@ -14,10 +14,16 @@ use std::sync::{Arc, Mutex};
 pub fn suppress_audio_warnings() {
     // SAFETY: Called at startup before any threads are spawned
     unsafe {
-        // Suppress JACK "cannot connect" messages
+        // Suppress JACK "cannot connect" messages - don't try to start JACK server
         std::env::set_var("JACK_NO_START_SERVER", "1");
-        // Some ALSA messages can be reduced
-        std::env::set_var("ALSA_CARD", "0");
+        // Disable JACK completely for CPAL probing
+        std::env::set_var("JACK_NO_AUDIO_RESERVATION", "1");
+        // Force PipeWire to not print debug messages
+        std::env::set_var("PIPEWIRE_DEBUG", "0");
+        // Suppress ALSA verbose messages
+        std::env::set_var("ALSA_DEBUG", "0");
+        // Tell PipeWire's JACK to be quiet
+        std::env::set_var("PW_LOG", "0");
     }
 }
 
