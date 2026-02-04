@@ -42,6 +42,10 @@ pub enum Commands {
         /// Prevent automatic model download if configured model is missing
         #[arg(long)]
         no_download: bool,
+
+        /// Exit after first transcription (default: keep recording)
+        #[arg(long)]
+        once: bool,
     },
 
     /// List available audio input devices
@@ -99,11 +103,13 @@ mod tests {
                 model,
                 language,
                 no_download,
+                once,
             } => {
                 assert!(device.is_none());
                 assert!(model.is_none());
                 assert!(language.is_none());
                 assert!(!no_download);
+                assert!(!once);
             }
             _ => panic!("Expected Record command"),
         }
@@ -131,11 +137,13 @@ mod tests {
                 model,
                 language,
                 no_download,
+                once,
             } => {
                 assert_eq!(device.as_deref(), Some("hw:0"));
                 assert_eq!(model.as_deref(), Some("base.en"));
                 assert_eq!(language.as_deref(), Some("en"));
                 assert!(!no_download);
+                assert!(!once);
             }
             _ => panic!("Expected Record command"),
         }
@@ -293,11 +301,13 @@ mod tests {
                 model,
                 language,
                 no_download,
+                once,
             } => {
                 assert!(device.is_none());
                 assert_eq!(model.as_deref(), Some("base"));
                 assert!(language.is_none());
                 assert!(!no_download);
+                assert!(!once);
             }
             _ => panic!("Expected Record command"),
         }
@@ -313,11 +323,13 @@ mod tests {
                 model,
                 language,
                 no_download,
+                once,
             } => {
                 assert!(device.is_none());
                 assert!(model.is_none());
                 assert!(language.is_none());
                 assert!(no_download);
+                assert!(!once);
             }
             _ => panic!("Expected Record command"),
         }
@@ -381,6 +393,28 @@ mod tests {
         match cli.command {
             Commands::Check => {}
             _ => panic!("Expected Check command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_record_with_once() {
+        let cli = Cli::try_parse_from(["voicsh", "record", "--once"]).unwrap();
+
+        match cli.command {
+            Commands::Record {
+                device,
+                model,
+                language,
+                no_download,
+                once,
+            } => {
+                assert!(device.is_none());
+                assert!(model.is_none());
+                assert!(language.is_none());
+                assert!(!no_download);
+                assert!(once);
+            }
+            _ => panic!("Expected Record command"),
         }
     }
 }

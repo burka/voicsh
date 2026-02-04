@@ -111,6 +111,9 @@ impl<E: CommandExecutor> TextInjector<E> {
                 _ => e,
             })?;
 
+        // Add small delay to ensure clipboard is updated before pasting
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
         // Simulate Ctrl+V using ydotool
         // key 29:1 = left ctrl down
         // key 47:1 = v down

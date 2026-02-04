@@ -27,6 +27,7 @@ use std::process::Command;
 /// * `language` - Optional language override from CLI
 /// * `quiet` - Suppress status messages
 /// * `no_download` - Prevent automatic model download
+/// * `once` - Exit after first transcription (default: loop continuously)
 ///
 /// # Returns
 /// Ok(()) on success, or an error if any step fails
@@ -37,6 +38,7 @@ pub async fn run_record_command(
     language: Option<String>,
     quiet: bool,
     no_download: bool,
+    once: bool,
 ) -> Result<()> {
     // Check prerequisites first (before any heavy work)
     check_prerequisites()?;
@@ -52,41 +54,74 @@ pub async fn run_record_command(
         config.stt.language = l;
     }
 
-    // Step 1: Record audio
-    if !quiet {
-        eprintln!("Ready. Speak now... (silence ends recording)");
-    }
+    // Loop until user interrupts (or once=true for single run)
+    let mut iteration = 0;
+    loop {
+        iteration += 1;
 
-    let audio_samples = record_audio(&config)?;
+        // Print separator after first iteration
+        if iteration > 1 && !quiet {
+            eprintln!("\n--- Recording {} ---", iteration);
+        }
 
-    if audio_samples.is_empty() {
-        return Err(VoicshError::AudioCapture {
-            message: "No audio recorded".to_string(),
-        });
-    }
+        // Step 1: Record audio
+        if !quiet {
+            eprintln!("Ready. Speak now... (silence ends recording)");
+        }
 
-    // Step 2: Transcribe audio
-    if !quiet {
-        eprintln!("Processing...");
-    }
+        let audio_samples = record_audio(&config)?;
 
-    let transcription = transcribe_audio(&config, &audio_samples, quiet, no_download).await?;
+        if audio_samples.is_empty() {
+            if !quiet {
+                eprintln!("No audio recorded, skipping...");
+            }
+            if once {
+                break;
+            }
+            continue;
+        }
 
-    if transcription.is_empty() {
-        return Err(VoicshError::Transcription {
-            message: "Transcription produced no text".to_string(),
-        });
-    }
+        // Step 2: Transcribe audio
+        if !quiet {
+            eprintln!("Processing...");
+        }
 
-    if !quiet {
-        eprintln!("Transcribed: {}", transcription);
-    }
+        let transcription = transcribe_audio(&config, &audio_samples, quiet, no_download).await?;
 
-    // Step 3: Inject text
-    inject_text(&config, &transcription)?;
+        if transcription.is_empty() {
+            if !quiet {
+                eprintln!("Transcription produced no text, skipping...");
+            }
+            if once {
+                break;
+            }
+            continue;
+        }
 
-    if !quiet {
-        eprintln!("Done.");
+        if !quiet {
+            eprintln!("Transcribed: {}", transcription);
+        }
+
+        // Step 3: Inject text
+        match inject_text(&config, &transcription) {
+            Ok(()) => {
+                if !quiet {
+                    eprintln!("Done.");
+                }
+            }
+            Err(e) => {
+                eprintln!("Error injecting text: {}", e);
+                if once {
+                    return Err(e);
+                }
+                // Continue to next iteration in loop mode
+            }
+        }
+
+        // Exit after first iteration if once flag is set
+        if once {
+            break;
+        }
     }
 
     Ok(())
