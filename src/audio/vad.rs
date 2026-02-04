@@ -6,6 +6,22 @@
 use crate::defaults;
 use std::time::Instant;
 
+/// Trait for time operations, allowing mock time in tests.
+pub trait Clock: Send + Sync {
+    /// Returns the current instant.
+    fn now(&self) -> Instant;
+}
+
+/// Real system clock using `std::time::Instant::now()`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
 /// Configuration for Voice Activity Detection.
 #[derive(Debug, Clone, Copy)]
 pub struct VadConfig {
@@ -54,21 +70,23 @@ pub enum VadEvent {
 }
 
 /// Voice Activity Detector state machine.
-pub struct Vad {
+pub struct Vad<C: Clock = SystemClock> {
     config: VadConfig,
     state: VadState,
     silence_start: Option<Instant>,
     speech_start: Option<Instant>,
+    clock: C,
 }
 
-impl Vad {
-    /// Creates a new VAD instance with the given configuration.
-    pub fn new(config: VadConfig) -> Self {
+impl<C: Clock> Vad<C> {
+    /// Creates a new VAD instance with the given configuration and clock.
+    pub fn with_clock(config: VadConfig, clock: C) -> Self {
         Self {
             config,
             state: VadState::Idle,
             silence_start: None,
             speech_start: None,
+            clock,
         }
     }
 
@@ -80,12 +98,13 @@ impl Vad {
     pub fn process(&mut self, samples: &[i16], _sample_rate: u32) -> VadEvent {
         let rms = calculate_rms(samples);
         let is_speech = rms > self.config.speech_threshold;
+        let now = self.clock.now();
 
         match self.state {
             VadState::Idle => {
                 if is_speech {
                     self.state = VadState::Speaking;
-                    self.speech_start = Some(Instant::now());
+                    self.speech_start = Some(now);
                     self.silence_start = None;
                     VadEvent::SpeechStart
                 } else {
@@ -98,7 +117,7 @@ impl Vad {
                     VadEvent::Speech
                 } else {
                     self.state = VadState::MaybeSilence;
-                    self.silence_start = Some(Instant::now());
+                    self.silence_start = Some(now);
                     VadEvent::Silence
                 }
             }
@@ -110,7 +129,7 @@ impl Vad {
                 } else {
                     let silence_elapsed = self
                         .silence_start
-                        .map(|start| start.elapsed().as_millis() as u32)
+                        .map(|start| now.duration_since(start).as_millis() as u32)
                         .unwrap_or(0);
 
                     if silence_elapsed >= self.config.silence_duration_ms {
@@ -137,6 +156,13 @@ impl Vad {
         self.state = VadState::Idle;
         self.silence_start = None;
         self.speech_start = None;
+    }
+}
+
+impl Vad<SystemClock> {
+    /// Creates a new VAD instance with the given configuration using the system clock.
+    pub fn new(config: VadConfig) -> Self {
+        Self::with_clock(config, SystemClock)
     }
 }
 
@@ -170,8 +196,35 @@ pub fn calculate_rms(samples: &[i16]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    /// Mock clock for testing that allows manual time advancement.
+    #[derive(Debug, Clone)]
+    pub struct MockClock {
+        current: Arc<Mutex<Instant>>,
+    }
+
+    impl MockClock {
+        /// Creates a new mock clock starting at the current instant.
+        pub fn new() -> Self {
+            Self {
+                current: Arc::new(Mutex::new(Instant::now())),
+            }
+        }
+
+        /// Advances the mock clock by the given duration.
+        pub fn advance(&self, duration: Duration) {
+            let mut current = self.current.lock().unwrap();
+            *current += duration;
+        }
+    }
+
+    impl Clock for MockClock {
+        fn now(&self) -> Instant {
+            *self.current.lock().unwrap()
+        }
+    }
 
     fn make_silence(count: usize) -> Vec<i16> {
         vec![0i16; count]
@@ -308,7 +361,8 @@ mod tests {
             silence_duration_ms: 100, // Short duration for testing
             min_speech_ms: 50,
         };
-        let mut vad = Vad::new(config);
+        let clock = MockClock::new();
+        let mut vad = Vad::with_clock(config, clock.clone());
 
         let speech = make_speech(1000, 3000);
         let silence = make_silence(1000);
@@ -321,8 +375,8 @@ mod tests {
         vad.process(&silence, 16000);
         assert_eq!(vad.state(), VadState::MaybeSilence);
 
-        // Wait for silence duration to exceed threshold
-        thread::sleep(Duration::from_millis(150));
+        // Advance time to exceed silence threshold
+        clock.advance(Duration::from_millis(150));
 
         // Process more silence - should trigger SpeechEnd
         let event = vad.process(&silence, 16000);
@@ -357,7 +411,8 @@ mod tests {
             silence_duration_ms: 100,
             min_speech_ms: 50,
         };
-        let mut vad = Vad::new(config);
+        let clock = MockClock::new();
+        let mut vad = Vad::with_clock(config, clock.clone());
 
         let speech = make_speech(1000, 3000);
         let silence = make_silence(1000);
@@ -365,7 +420,7 @@ mod tests {
         // Get to Stopped state
         vad.process(&speech, 16000);
         vad.process(&silence, 16000);
-        thread::sleep(Duration::from_millis(150));
+        clock.advance(Duration::from_millis(150));
         vad.process(&silence, 16000);
         assert_eq!(vad.state(), VadState::Stopped);
 
