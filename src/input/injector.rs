@@ -16,9 +16,9 @@ use std::process::Command;
 pub trait CommandExecutor: Send + Sync {
     /// Execute a command with arguments.
     ///
-    /// Returns the stdout of the command on success.
+    /// Returns Ok(()) on success.
     /// Returns an error if the command fails or is not found.
-    fn execute(&self, command: &str, args: &[&str]) -> Result<String>;
+    fn execute(&self, command: &str, args: &[&str]) -> Result<()>;
 }
 
 /// Production command executor using std::process::Command.
@@ -32,8 +32,12 @@ impl SystemCommandExecutor {
 }
 
 impl CommandExecutor for SystemCommandExecutor {
-    fn execute(&self, command: &str, args: &[&str]) -> Result<String> {
-        let output = Command::new(command).args(args).output().map_err(|e| {
+    fn execute(&self, command: &str, args: &[&str]) -> Result<()> {
+        // Use status() instead of output() to avoid pipe creation.
+        // Programs like wl-copy detect pipes and stay in foreground,
+        // causing wait() to block forever. status() inherits stdio,
+        // allowing them to fork to daemon immediately.
+        let status = Command::new(command).args(args).status().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 VoicshError::InjectionToolNotFound {
                     tool: command.to_string(),
@@ -54,17 +58,13 @@ impl CommandExecutor for SystemCommandExecutor {
             }
         })?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+        if !status.success() {
             return Err(VoicshError::InjectionFailed {
-                message: format!(
-                    "{} failed with status {:?}: {}",
-                    command, output.status, stderr
-                ),
+                message: format!("{} failed with status {:?}", command, status),
             });
         }
 
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        Ok(())
     }
 }
 
@@ -107,11 +107,10 @@ impl<E: CommandExecutor> TextInjector<E> {
                 _ => e,
             })?;
 
-        // Add small delay to ensure clipboard is updated before pasting
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Small delay to ensure clipboard is updated
+        std::thread::sleep(std::time::Duration::from_millis(50));
 
         // Try wtype first (simpler, no daemon needed)
-        // wtype -M ctrl -k v simulates Ctrl+V
         if self
             .executor
             .execute("wtype", &["-M", "ctrl", "-k", "v"])
@@ -121,12 +120,8 @@ impl<E: CommandExecutor> TextInjector<E> {
         }
 
         // Fall back to ydotool
-        // key 29:1 = left ctrl down
-        // key 47:1 = v down
-        // key 47:0 = v up
-        // key 29:0 = left ctrl up
         self.executor
-            .execute("ydotool", &["key", "29:1", "47:1", "47:0", "29:0"])
+            .execute("ydotool", &["key", "ctrl+v"])
             .map_err(|e| match &e {
                 VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
                     VoicshError::InjectionFailed {
@@ -197,7 +192,7 @@ mod tests {
     #[derive(Debug)]
     pub struct MockCommandExecutor {
         calls: Mutex<Vec<(String, Vec<String>)>>,
-        responses: Mutex<VecDeque<Result<String>>>,
+        responses: Mutex<VecDeque<Result<()>>>,
     }
 
     impl MockCommandExecutor {
@@ -209,11 +204,8 @@ mod tests {
         }
 
         /// Add a successful response to the queue.
-        pub fn with_response(self, response: &str) -> Self {
-            self.responses
-                .lock()
-                .unwrap()
-                .push_back(Ok(response.to_string()));
+        pub fn with_success(self) -> Self {
+            self.responses.lock().unwrap().push_back(Ok(()));
             self
         }
 
@@ -245,7 +237,7 @@ mod tests {
     }
 
     impl CommandExecutor for MockCommandExecutor {
-        fn execute(&self, command: &str, args: &[&str]) -> Result<String> {
+        fn execute(&self, command: &str, args: &[&str]) -> Result<()> {
             // Record the call
             self.calls.lock().unwrap().push((
                 command.to_string(),
@@ -253,11 +245,7 @@ mod tests {
             ));
 
             // Return the next configured response or a default success
-            self.responses
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or_else(|| Ok(String::new()))
+            self.responses.lock().unwrap().pop_front().unwrap_or(Ok(()))
         }
     }
 
@@ -280,12 +268,12 @@ mod tests {
     }
 
     impl CommandExecutor for RecordingExecutor {
-        fn execute(&self, command: &str, args: &[&str]) -> Result<String> {
+        fn execute(&self, command: &str, args: &[&str]) -> Result<()> {
             self.calls.lock().unwrap().push((
                 command.to_string(),
                 args.iter().map(|s| s.to_string()).collect(),
             ));
-            Ok(String::new())
+            Ok(())
         }
     }
 
@@ -302,7 +290,7 @@ mod tests {
         let mock = MockCommandExecutor::new();
 
         mock.execute("wl-copy", &["hello"]).unwrap();
-        mock.execute("ydotool", &["key", "29:1"]).unwrap();
+        mock.execute("ydotool", &["key", "ctrl+v"]).unwrap();
 
         assert_eq!(mock.call_count(), 2);
 
@@ -312,24 +300,22 @@ mod tests {
 
         let call2 = mock.call(1).unwrap();
         assert_eq!(call2.0, "ydotool");
-        assert_eq!(call2.1, vec!["key", "29:1"]);
+        assert_eq!(call2.1, vec!["key", "ctrl+v"]);
     }
 
     #[test]
     fn test_mock_executor_returns_configured_response() {
-        let mock = MockCommandExecutor::new()
-            .with_response("output1")
-            .with_response("output2");
+        let mock = MockCommandExecutor::new().with_success().with_success();
 
-        let result1 = mock.execute("cmd1", &[]).unwrap();
-        assert_eq!(result1, "output1");
+        let result1 = mock.execute("cmd1", &[]);
+        assert!(result1.is_ok());
 
-        let result2 = mock.execute("cmd2", &[]).unwrap();
-        assert_eq!(result2, "output2");
+        let result2 = mock.execute("cmd2", &[]);
+        assert!(result2.is_ok());
 
-        // After configured responses are exhausted, returns empty string
-        let result3 = mock.execute("cmd3", &[]).unwrap();
-        assert_eq!(result3, "");
+        // After configured responses are exhausted, returns success by default
+        let result3 = mock.execute("cmd3", &[]);
+        assert!(result3.is_ok());
     }
 
     #[test]
@@ -417,11 +403,11 @@ mod tests {
     fn test_inject_via_clipboard_falls_back_to_ydotool() {
         // wtype fails, should fall back to ydotool
         let mock = MockCommandExecutor::new()
-            .with_response("") // wl-copy succeeds
+            .with_success() // wl-copy succeeds
             .with_error(VoicshError::InjectionToolNotFound {
                 tool: "wtype".to_string(),
             }) // wtype fails
-            .with_response(""); // ydotool succeeds
+            .with_success(); // ydotool succeeds
         let injector = TextInjector::new(mock);
 
         let result = injector.inject_via_clipboard("test");
@@ -457,7 +443,7 @@ mod tests {
             .with_error(VoicshError::InjectionToolNotFound {
                 tool: "wtype".to_string(),
             })
-            .with_response(""); // ydotool succeeds
+            .with_success(); // ydotool succeeds
         let injector = TextInjector::new(mock);
 
         let result = injector.inject_direct("test");
@@ -568,15 +554,15 @@ mod tests {
     #[test]
     fn test_mock_executor_builder_pattern() {
         let mock = MockCommandExecutor::new()
-            .with_response("first")
+            .with_success()
             .with_error(VoicshError::InjectionFailed {
                 message: "error".to_string(),
             })
-            .with_response("second");
+            .with_success();
 
-        assert_eq!(mock.execute("cmd1", &[]).unwrap(), "first");
+        assert!(mock.execute("cmd1", &[]).is_ok());
         assert!(mock.execute("cmd2", &[]).is_err());
-        assert_eq!(mock.execute("cmd3", &[]).unwrap(), "second");
+        assert!(mock.execute("cmd3", &[]).is_ok());
     }
 
     #[test]

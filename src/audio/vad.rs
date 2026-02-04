@@ -189,6 +189,11 @@ impl<C: Clock> Vad<C> {
         self.silence_start = None;
         self.speech_start = None;
     }
+
+    /// Updates the speech threshold without resetting state.
+    pub fn set_threshold(&mut self, threshold: f32) {
+        self.config.speech_threshold = threshold;
+    }
 }
 
 impl Vad<SystemClock> {

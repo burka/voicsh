@@ -1,6 +1,7 @@
 use crate::defaults;
 use crate::error::{Result, VoicshError};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Trait for speech-to-text transcription.
 ///
@@ -20,6 +21,21 @@ pub trait Transcriber: Send + Sync {
 
     /// Check if the transcriber is ready
     fn is_ready(&self) -> bool;
+}
+
+/// Implement Transcriber for Arc<T> to allow sharing across sessions.
+impl<T: Transcriber> Transcriber for Arc<T> {
+    fn transcribe(&self, audio: &[i16]) -> Result<String> {
+        (**self).transcribe(audio)
+    }
+
+    fn model_name(&self) -> &str {
+        (**self).model_name()
+    }
+
+    fn is_ready(&self) -> bool {
+        (**self).is_ready()
+    }
 }
 
 /// Configuration for transcriber initialization

@@ -4,7 +4,6 @@
 //! record → transcribe → inject
 
 use crate::audio::capture::{CpalAudioSource, suppress_audio_warnings};
-use crate::audio::vad::VadConfig;
 use crate::config::{Config, InputMethod};
 use crate::error::{Result, VoicshError};
 use crate::input::injector::TextInjector;
@@ -12,11 +11,11 @@ use crate::models::catalog::get_model;
 use crate::models::download::{
     download_model, find_any_installed_model, is_model_installed, model_path,
 };
-use crate::recording::RecordingSession;
-use crate::stt::transcriber::Transcriber;
+use crate::streaming::{StreamingPipeline, StreamingPipelineConfig};
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
 /// Run the record command: capture audio → transcribe → inject text.
 ///
@@ -26,12 +25,14 @@ use std::process::Command;
 /// * `model` - Optional model override from CLI
 /// * `language` - Optional language override from CLI
 /// * `quiet` - Suppress status messages
-/// * `verbose` - Show detailed output (audio levels, debug info)
+/// * `verbose` - Show detailed output (chunk progress)
 /// * `no_download` - Prevent automatic model download
 /// * `once` - Exit after first transcription (default: loop continuously)
+/// * `chunk_size` - Chunk duration in seconds (0 = no chunking, transcribe all at once)
 ///
 /// # Returns
 /// Ok(()) on success, or an error if any step fails
+#[allow(clippy::too_many_arguments)]
 pub async fn run_record_command(
     mut config: Config,
     device: Option<String>,
@@ -41,6 +42,7 @@ pub async fn run_record_command(
     verbose: bool,
     no_download: bool,
     once: bool,
+    chunk_size: u32,
 ) -> Result<()> {
     // Suppress noisy JACK/ALSA warnings before audio init
     suppress_audio_warnings();
@@ -63,89 +65,84 @@ pub async fn run_record_command(
     if !quiet {
         eprintln!("Loading model '{}'...", config.stt.model);
     }
-    let transcriber = create_transcriber(&config, quiet, no_download).await?;
+    let transcriber = Arc::new(create_transcriber(&config, quiet, no_download).await?);
     if !quiet {
-        eprintln!("Model loaded. Ready!");
+        eprintln!("Ready. Listening...");
     }
 
     // Loop until user interrupts (or once=true for single run)
-    let mut iteration = 0;
     loop {
-        iteration += 1;
-
-        // Print separator after first iteration
-        if iteration > 1 && !quiet {
-            eprintln!("\n--- Recording {} ---", iteration);
-        }
-
-        // Step 1: Record audio (show level meter only in verbose mode)
-        let audio_samples = record_audio(&config, verbose)?;
-
-        if audio_samples.is_empty() {
-            if !quiet {
-                eprintln!("No audio recorded, skipping...");
-            }
-            if once {
-                break;
-            }
-            continue;
-        }
-
-        // Step 2: Transcribe audio (model already loaded - this is fast)
-        if !quiet {
-            eprintln!("Transcribing...");
-        }
-
-        let transcription = match transcriber.transcribe(&audio_samples) {
-            Ok(text) => text,
+        // Run one recording session
+        match run_single_session(&config, transcriber.clone(), quiet, verbose, chunk_size).await {
+            Ok(()) => {}
             Err(e) => {
-                eprintln!("Transcription error: {}", e);
-                if once {
-                    return Err(e);
-                }
-                continue; // Try again in loop mode
-            }
-        };
-
-        if transcription.is_empty() {
-            if !quiet {
-                eprintln!("No speech detected, skipping...");
-            }
-            if once {
-                break;
-            }
-            continue;
-        }
-
-        if !quiet {
-            eprintln!("Transcribed: {}", transcription);
-        }
-
-        // Step 3: Inject text
-        match inject_text(&config, &transcription) {
-            Ok(()) => {
                 if !quiet {
-                    eprintln!("Done.");
+                    eprintln!("Error: {}", e);
                 }
-            }
-            Err(e) => {
-                eprintln!("Error injecting text: {}", e);
                 if once {
                     return Err(e);
                 }
-                // Continue to next iteration in loop mode
             }
         }
 
-        // Exit after first iteration if once flag is set
         if once {
             break;
         }
+    }
 
-        // Ready for next recording
-        if !quiet {
-            eprintln!("\nReady for next recording... (Ctrl+C to stop)");
-        }
+    Ok(())
+}
+
+/// Run a single recording session: record → transcribe → inject.
+async fn run_single_session(
+    config: &Config,
+    transcriber: Arc<WhisperTranscriber>,
+    quiet: bool,
+    verbose: bool,
+    chunk_size: u32,
+) -> Result<()> {
+    // Create audio source
+    let device_name = config.audio.device.as_deref();
+    let audio_source = CpalAudioSource::new(device_name)?;
+
+    // Configure pipeline
+    let chunk_duration_ms = chunk_size * 1000;
+
+    let pipeline_config = StreamingPipelineConfig::from_config(config)
+        .with_chunk_duration_ms(chunk_duration_ms)
+        .with_show_levels(verbose)
+        .with_auto_level(true);
+
+    let pipeline = StreamingPipeline::with_config(pipeline_config);
+
+    // Run pipeline - in verbose mode show chunks as they come in
+    let transcription = if verbose {
+        pipeline
+            .run_with_callback(audio_source, transcriber, |result| {
+                // Clear level meter line before printing chunk
+                eprint!("\r{:60}\r", "");
+                if !result.text.is_empty() {
+                    eprintln!("  > {}", result.text);
+                }
+            })
+            .await?
+    } else {
+        pipeline.run(audio_source, transcriber).await?
+    };
+
+    if transcription.is_empty() {
+        return Ok(());
+    }
+
+    // Show final transcription and inject
+    if !quiet {
+        eprintln!("\"{}\"", transcription);
+    }
+
+    inject_text(config, &transcription, false)?;
+
+    if !quiet && verbose {
+        eprintln!("  [injected]");
     }
 
     Ok(())
@@ -161,7 +158,6 @@ async fn create_transcriber(
 
     // Determine which model to use
     let model_to_use = if is_model_installed(configured_model) {
-        // Requested model is available
         configured_model.to_string()
     } else if no_download {
         // Can't download, try fallback
@@ -204,27 +200,8 @@ async fn create_transcriber(
     WhisperTranscriber::new(whisper_config)
 }
 
-/// Record audio using configured audio source and VAD.
-fn record_audio(config: &Config, show_levels: bool) -> Result<Vec<i16>> {
-    // Create audio source
-    let device_name = config.audio.device.as_deref();
-    let audio_source = CpalAudioSource::new(device_name)?;
-
-    // Configure VAD
-    let vad_config = VadConfig {
-        speech_threshold: config.audio.vad_threshold,
-        silence_duration_ms: config.audio.silence_duration_ms,
-        min_speech_ms: 300,
-    };
-
-    // Create recording session and record
-    let mut session =
-        RecordingSession::new(audio_source, vad_config).with_level_display(show_levels);
-    session.record_until_speech_ends()
-}
-
 /// Inject transcribed text using configured input method.
-fn inject_text(config: &Config, text: &str) -> Result<()> {
+fn inject_text(config: &Config, text: &str, _verbose: bool) -> Result<()> {
     let injector = TextInjector::system();
 
     match config.input.method {
@@ -234,20 +211,6 @@ fn inject_text(config: &Config, text: &str) -> Result<()> {
 }
 
 /// Build the full path to a Whisper model file.
-///
-/// Supports several model path formats:
-/// - Absolute path: /path/to/model.bin
-/// - Relative path: ./models/model.bin
-/// - Model name only: base.en → looks in cache dir first, then ./models/
-///
-/// # Arguments
-/// * `model` - Model path or name
-///
-/// # Returns
-/// Full PathBuf to the model file
-///
-/// # Errors
-/// Returns an error with helpful message if model is not found
 fn build_model_path(model: &str) -> Result<PathBuf> {
     let path = PathBuf::from(model);
 
@@ -263,12 +226,10 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
 
     // Check if it's a model name from the catalog
     if get_model(model).is_some() {
-        // Check if installed in cache directory
         if is_model_installed(model) {
             return Ok(model_path(model).expect("path should exist for installed model"));
         }
 
-        // Not installed - provide helpful error message
         return Err(VoicshError::Transcription {
             message: format!(
                 "Model '{}' is not installed. Run 'voicsh models install {}' to download it.",
@@ -277,7 +238,7 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
         });
     }
 
-    // Otherwise, treat as a custom model filename and construct path
+    // Otherwise, treat as a custom model filename
     let model_filename = if model.ends_with(".bin") {
         model.to_string()
     } else {
@@ -288,9 +249,6 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
 }
 
 /// Check that required system tools are available.
-///
-/// Returns an error early if critical dependencies are missing,
-/// so the user doesn't wait through recording/transcription only to fail at injection.
 fn check_prerequisites() -> Result<()> {
     // Check for wl-copy (Wayland clipboard)
     if Command::new("wl-copy").arg("--version").output().is_err() {
@@ -299,29 +257,25 @@ fn check_prerequisites() -> Result<()> {
         });
     }
 
-    // Test wtype by sending an empty key sequence (tests compositor support)
-    // wtype fails with "Compositor does not support virtual keyboard" if unsupported
+    // Test wtype
     let wtype_works = match Command::new("wtype").arg("").output() {
         Ok(output) => {
-            // wtype returns non-zero and prints error if compositor doesn't support it
             let stderr = String::from_utf8_lossy(&output.stderr);
             !stderr.contains("does not support")
         }
         Err(_) => false,
     };
 
-    // Test ydotool - check if backend is available by examining stderr
+    // Test ydotool
     let ydotool_works = match Command::new("ydotool").args(["type", "--help"]).output() {
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // ydotool works if it doesn't report "backend unavailable"
             !stderr.contains("backend unavailable")
         }
         Err(_) => false,
     };
 
     if !wtype_works && !ydotool_works {
-        // Neither tool works - provide detailed error
         let ydotool_installed = Command::new("ydotool").arg("--version").output().is_ok()
             || Command::new("ydotool")
                 .arg("type")
@@ -374,9 +328,7 @@ mod tests {
 
     #[test]
     fn test_build_model_path_with_model_name_not_installed() {
-        // When a catalog model is not installed, should return error with helpful message
         let result = build_model_path("base.en");
-        // Could be installed or not, check both cases
         if result.is_err() {
             let err_msg = result.unwrap_err().to_string();
             assert!(err_msg.contains("not installed") || err_msg.contains("voicsh models install"));
@@ -397,14 +349,12 @@ mod tests {
 
     #[test]
     fn test_build_model_path_with_unknown_model_name() {
-        // Unknown model names (not in catalog) should still build a path
         let path = build_model_path("custom-model").unwrap();
         assert_eq!(path, PathBuf::from("models/ggml-custom-model.bin"));
     }
 
     #[test]
     fn test_build_model_path_catalog_model_error_contains_install_command() {
-        // When a catalog model is not installed, error should mention install command
         let result = build_model_path("tiny.en");
         if result.is_err() {
             let err_msg = result.unwrap_err().to_string();

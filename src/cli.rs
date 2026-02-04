@@ -50,6 +50,10 @@ pub enum Commands {
         /// Exit after first transcription (default: keep recording)
         #[arg(long)]
         once: bool,
+
+        /// Chunk duration in seconds for progressive transcription
+        #[arg(long, short = 'c', value_name = "SECONDS", default_value = "3")]
+        chunk_size: u32,
     },
 
     /// List available audio input devices
@@ -108,12 +112,14 @@ mod tests {
                 language,
                 no_download,
                 once,
+                chunk_size,
             } => {
                 assert!(device.is_none());
                 assert!(model.is_none());
                 assert!(language.is_none());
                 assert!(!no_download);
                 assert!(!once);
+                assert_eq!(chunk_size, 3); // default: 3 seconds
             }
             _ => panic!("Expected Record command"),
         }
@@ -142,6 +148,7 @@ mod tests {
                 language,
                 no_download,
                 once,
+                ..
             } => {
                 assert_eq!(device.as_deref(), Some("hw:0"));
                 assert_eq!(model.as_deref(), Some("base.en"));
@@ -306,6 +313,7 @@ mod tests {
                 language,
                 no_download,
                 once,
+                ..
             } => {
                 assert!(device.is_none());
                 assert_eq!(model.as_deref(), Some("base"));
@@ -328,6 +336,7 @@ mod tests {
                 language,
                 no_download,
                 once,
+                ..
             } => {
                 assert!(device.is_none());
                 assert!(model.is_none());
@@ -411,12 +420,37 @@ mod tests {
                 language,
                 no_download,
                 once,
+                ..
             } => {
                 assert!(device.is_none());
                 assert!(model.is_none());
                 assert!(language.is_none());
                 assert!(!no_download);
                 assert!(once);
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_record_with_chunk_size() {
+        let cli = Cli::try_parse_from(["voicsh", "record", "--chunk-size", "5"]).unwrap();
+
+        match cli.command {
+            Commands::Record { chunk_size, .. } => {
+                assert_eq!(chunk_size, 5);
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_record_chunk_size_short_flag() {
+        let cli = Cli::try_parse_from(["voicsh", "record", "-c", "2"]).unwrap();
+
+        match cli.command {
+            Commands::Record { chunk_size, .. } => {
+                assert_eq!(chunk_size, 2);
             }
             _ => panic!("Expected Record command"),
         }

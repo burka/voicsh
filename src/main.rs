@@ -19,6 +19,7 @@ async fn main() -> Result<()> {
             language,
             no_download,
             once,
+            chunk_size,
         } => {
             // Load configuration
             let config = load_config(cli.config.as_deref())?;
@@ -33,6 +34,7 @@ async fn main() -> Result<()> {
                 cli.verbose,
                 no_download,
                 once,
+                chunk_size,
             )
             .await?;
         }

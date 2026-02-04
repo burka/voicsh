@@ -21,6 +21,9 @@ toml = "0.8"
 thiserror = "1"
 anyhow = "1"
 
+# Concurrency
+crossbeam-channel = "0.5"
+
 # CLI
 clap = { version = "4", features = ["derive"] }
 
