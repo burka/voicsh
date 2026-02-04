@@ -17,9 +17,14 @@ use crate::stt::transcriber::Transcriber;
 use std::path::PathBuf;
 
 #[cfg(feature = "whisper")]
-use std::sync::Mutex;
+use std::sync::{Mutex, Once};
 #[cfg(feature = "whisper")]
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, install_logging_hooks,
+};
+
+#[cfg(feature = "whisper")]
+static LOGGING_HOOKS_INSTALLED: Once = Once::new();
 
 /// Configuration for Whisper transcriber.
 #[derive(Debug, Clone)]
@@ -93,6 +98,11 @@ impl WhisperTranscriber {
     /// Returns `VoicshError::TranscriptionModelNotFound` if the model file doesn't exist
     /// Returns `VoicshError::TranscriptionInferenceFailed` if model loading fails
     pub fn new(config: WhisperConfig) -> Result<Self> {
+        // Install logging hooks to suppress whisper.cpp output (only once)
+        LOGGING_HOOKS_INSTALLED.call_once(|| {
+            install_logging_hooks();
+        });
+
         // Validate that the model file exists
         if !config.model_path.exists() {
             return Err(VoicshError::TranscriptionModelNotFound {
@@ -230,22 +240,10 @@ impl Transcriber for WhisperTranscriber {
                 message: format!("Whisper inference failed: {}", e),
             })?;
 
-        // Extract transcribed text from all segments
-        let num_segments =
-            state
-                .full_n_segments()
-                .map_err(|e| VoicshError::TranscriptionInferenceFailed {
-                    message: format!("Failed to get segment count: {}", e),
-                })?;
-
+        // Extract transcribed text from all segments using iterator API
         let mut transcription = String::new();
-        for i in 0..num_segments {
-            let segment_text = state.full_get_segment_text(i).map_err(|e| {
-                VoicshError::TranscriptionInferenceFailed {
-                    message: format!("Failed to get segment text: {}", e),
-                }
-            })?;
-            transcription.push_str(&segment_text);
+        for segment in state.as_iter() {
+            transcription.push_str(&segment.to_string());
         }
 
         // Trim whitespace from the result

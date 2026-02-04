@@ -40,7 +40,7 @@ indicatif = "0.17"
 futures-util = "0.3"
 
 # Speech-to-text (requires cmake to build)
-whisper-rs = { version = "0.12", optional = true }
+whisper-rs = { version = "0.15", optional = true }
 
 [features]
 # Whisper enabled by default - disable with --no-default-features for lib/testing
