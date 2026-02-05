@@ -222,10 +222,9 @@ impl Pipeline {
                     }
                 };
 
-                // Skip empty reads
+                // Source exhausted — exit polling loop.
                 if samples.is_empty() {
-                    thread::sleep(poll_interval);
-                    continue;
+                    break;
                 }
 
                 // Create audio frame
@@ -505,10 +504,7 @@ mod tests {
         }
     }
 
-    // Integration test - verifies pipeline can start and stop
-    // Note: This spawns real threads and channels, so it's more of an integration test
     #[test]
-    #[ignore] // Ignore by default - run with --ignored to test full integration
     fn test_pipeline_start_and_stop_integration() {
         let config = PipelineConfig {
             quiet: true,
@@ -557,9 +553,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Integration test with timing dependencies - can be flaky
     fn test_pipeline_full_cycle() {
-        // Full integration test with mock clock and frame sequence
+        // Full integration test with mock clock and frame sequence.
+        // Audio thread sleeps 16ms per frame, so we keep counts low for speed.
         let mock_clock = Arc::new(MockClock::new());
 
         let config = PipelineConfig {
@@ -576,16 +572,15 @@ mod tests {
 
         let pipeline = Pipeline::new(config).with_clock(mock_clock.clone());
 
-        // Create frame sequence: loud frames followed by quiet frames
-        // Each frame is 160 samples at 16kHz = 10ms of audio
-        // Amplitude 10000/32767 ≈ 0.305 >> 0.02 threshold
+        // Each frame = 160 samples at 16kHz = 10ms audio.
+        // Audio thread sleeps 16ms/frame, so 15 frames ≈ 240ms wall time.
         let loud_phase = FramePhase {
             samples: vec![10000i16; 160],
-            count: 40, // 400ms of loud audio (>> min_speech_ms: 50ms)
+            count: 15,
         };
         let quiet_phase = FramePhase {
             samples: vec![0i16; 160],
-            count: 60, // 600ms of quiet audio (>> silence_duration_ms: 200ms)
+            count: 15,
         };
 
         let audio_source =
@@ -597,30 +592,19 @@ mod tests {
         let handle = pipeline.start(audio_source, transcriber, sink).unwrap();
         assert!(handle.is_running());
 
-        // Let audio polling thread start and push initial frames
-        thread::sleep(Duration::from_millis(100));
+        // Let all 30 frames push (30 * 16ms ≈ 480ms), advance clock in steps
+        for _ in 0..4 {
+            thread::sleep(Duration::from_millis(200));
+            mock_clock.advance(Duration::from_millis(400));
+        }
 
-        // Advance clock to cover speech detection period
-        // Need enough time for min_speech_ms (50ms) to pass
-        mock_clock.advance(Duration::from_millis(400));
-        thread::sleep(Duration::from_millis(150));
-
-        // Advance clock to cover silence period
-        // Need enough time for silence_duration_ms (200ms) to pass
-        mock_clock.advance(Duration::from_millis(600));
-        thread::sleep(Duration::from_millis(200));
-
-        // Additional wait for transcription to complete and propagate through sink
-        thread::sleep(Duration::from_millis(200));
-
-        // Stop pipeline and verify result
         let result = handle.stop();
         assert_eq!(result, Some("hello".to_string()));
     }
 
     #[test]
     fn test_pipeline_with_mock_audio_source() {
-        // Integration test: verifies pipeline can start with MockAudioSource and process frames
+        // Integration test: verifies pipeline processes frames and returns transcription.
         let mock_clock = Arc::new(MockClock::new());
 
         let config = PipelineConfig {
@@ -637,14 +621,14 @@ mod tests {
 
         let pipeline = Pipeline::new(config).with_clock(mock_clock.clone());
 
-        // Create frame sequence with generous timing
+        // Keep frame counts low: audio thread sleeps 16ms/frame
         let loud_phase = FramePhase {
             samples: vec![10000i16; 160],
-            count: 100,
+            count: 15,
         };
         let quiet_phase = FramePhase {
             samples: vec![0i16; 160],
-            count: 100,
+            count: 15,
         };
 
         let audio_source =
@@ -656,16 +640,14 @@ mod tests {
         let handle = pipeline.start(audio_source, transcriber, sink).unwrap();
         assert!(handle.is_running());
 
-        // Run pipeline for a period
-        for _ in 0..5 {
+        // Let all 30 frames push (30 * 16ms ≈ 480ms), advance clock in steps
+        for _ in 0..4 {
             thread::sleep(Duration::from_millis(200));
-            mock_clock.advance(Duration::from_millis(500));
+            mock_clock.advance(Duration::from_millis(400));
         }
 
-        // Stop pipeline - result may or may not be present depending on timing
-        let _result = handle.stop();
-        // Note: Not asserting on result due to timing sensitivity
-        // The key coverage is that Pipeline::start() executes successfully
+        let result = handle.stop();
+        assert_eq!(result, Some("hello".to_string()));
     }
 
     #[test]
@@ -730,5 +712,99 @@ mod tests {
         // Stop immediately
         let result = handle.stop();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pipeline_quiet_only_no_transcription() {
+        // Only quiet frames → VAD never detects speech → no chunks → no transcription
+        let mock_clock = Arc::new(MockClock::new());
+
+        let config = PipelineConfig {
+            vad: VadConfig {
+                speech_threshold: 0.02,
+                silence_duration_ms: 200,
+                min_speech_ms: 50,
+                ..Default::default()
+            },
+            quiet: true,
+            verbosity: 0,
+            ..Default::default()
+        };
+
+        let pipeline = Pipeline::new(config).with_clock(mock_clock.clone());
+
+        let quiet_phase = FramePhase {
+            samples: vec![0i16; 160],
+            count: 15,
+        };
+
+        let audio_source = Box::new(MockAudioSource::new().with_frame_sequence(vec![quiet_phase]));
+        let transcriber =
+            Arc::new(MockTranscriber::new("test-model").with_response("should not appear"));
+        let sink = Box::new(CollectorSink::new());
+
+        let handle = pipeline.start(audio_source, transcriber, sink).unwrap();
+
+        // Let frames flow and source exhaust
+        thread::sleep(Duration::from_millis(100));
+        mock_clock.advance(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(100));
+
+        let result = handle.stop();
+        assert_eq!(
+            result, None,
+            "Quiet-only audio should produce no transcription"
+        );
+    }
+
+    #[test]
+    fn test_pipeline_verbose_modes() {
+        // Verify pipeline starts and stops cleanly with verbosity 1 and 2
+        for verbosity in [1u8, 2] {
+            let mock_clock = Arc::new(MockClock::new());
+
+            let config = PipelineConfig {
+                vad: VadConfig {
+                    speech_threshold: 0.02,
+                    silence_duration_ms: 200,
+                    min_speech_ms: 50,
+                    ..Default::default()
+                },
+                quiet: false,
+                verbosity,
+                ..Default::default()
+            };
+
+            let pipeline = Pipeline::new(config).with_clock(mock_clock.clone());
+
+            let loud_phase = FramePhase {
+                samples: vec![10000i16; 160],
+                count: 15,
+            };
+            let quiet_phase = FramePhase {
+                samples: vec![0i16; 160],
+                count: 15,
+            };
+
+            let audio_source =
+                Box::new(MockAudioSource::new().with_frame_sequence(vec![loud_phase, quiet_phase]));
+            let transcriber = Arc::new(MockTranscriber::new("test-model").with_response("verbose"));
+            let sink = Box::new(CollectorSink::new());
+
+            let handle = pipeline.start(audio_source, transcriber, sink).unwrap();
+            assert!(handle.is_running());
+
+            for _ in 0..4 {
+                thread::sleep(Duration::from_millis(200));
+                mock_clock.advance(Duration::from_millis(400));
+            }
+
+            let result = handle.stop();
+            assert_eq!(
+                result,
+                Some("verbose".to_string()),
+                "Verbosity {verbosity} should produce transcription"
+            );
+        }
     }
 }
