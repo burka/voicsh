@@ -25,6 +25,7 @@ All external dependencies are behind traits with test doubles:
 | `Transcriber` | `WhisperTranscriber` | `MockTranscriber` |
 | `CommandExecutor` | `SystemCommandExecutor` | `MockCommandExecutor` / `RecordingExecutor` |
 | `TextSink` | `InjectorSink`, `StdoutSink` | `CollectorSink` |
+| `PortalConnector` | `AshpdConnector` | inline test connector |
 
 ### Conventions
 

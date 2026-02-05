@@ -11,6 +11,13 @@ cargo test --lib --no-default-features --features portal
 cargo test --lib --no-default-features
 ```
 
+## Test Rules
+- Every test MUST assert expected values, not just `is_ok()` / `is_some()`
+- After unwrapping, assert the concrete value (`assert_eq!`, not just `assert!`)
+- `is_err()` checks must also verify the error variant or message
+- "Doesn't panic" tests must document why in a comment
+- A test without outcome validation does not count toward coverage goals
+
 ## Documentation Rules
 - Each .md file has **one purpose** — don't duplicate content, reference other files
 - Document **current state** or **desired state** — no history, changelogs, or progress reports
