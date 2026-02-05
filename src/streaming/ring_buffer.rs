@@ -11,7 +11,6 @@ use crate::streaming::frame::AudioFrame;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
-use std::time::Duration;
 use tokio::sync::mpsc;
 
 /// Configuration for the ring buffer.
@@ -68,8 +67,6 @@ impl<A: AudioSource + 'static> RingBuffer<A> {
         self.audio_source.start()?;
         running.store(true, Ordering::SeqCst);
 
-        let poll_interval = Duration::from_millis(self.config.poll_interval_ms);
-
         // Spawn capture thread
         thread::spawn(move || {
             while running.load(Ordering::SeqCst) {
@@ -84,11 +81,13 @@ impl<A: AudioSource + 'static> RingBuffer<A> {
                         }
                     }
                     Ok(_) => {
-                        // No samples yet, wait briefly
-                        thread::sleep(poll_interval);
+                        // Empty = source exhausted. Real sources block until data ready.
+                        running.store(false, Ordering::SeqCst);
+                        break;
                     }
                     Err(e) => {
                         eprintln!("Audio capture error: {}", e);
+                        running.store(false, Ordering::SeqCst);
                         break;
                     }
                 }
@@ -128,6 +127,7 @@ impl RingBufferHandle {
 mod tests {
     use super::*;
     use crate::audio::recorder::MockAudioSource;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn test_ring_buffer_config_default() {
@@ -199,5 +199,88 @@ mod tests {
 
         let result = buffer.start();
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ring_buffer_terminates_on_exhausted_source() {
+        use crate::audio::recorder::FramePhase;
+
+        let source = MockAudioSource::new().with_frame_sequence(vec![FramePhase {
+            samples: vec![100i16; 160],
+            count: 3,
+        }]);
+        let buffer = RingBuffer::new(source);
+
+        let (mut rx, handle) = buffer.start().unwrap();
+
+        // Collect all frames
+        let mut frames = Vec::new();
+        while let Some(frame) = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .ok()
+            .flatten()
+        {
+            frames.push(frame);
+        }
+
+        assert_eq!(frames.len(), 3, "Expected exactly 3 frames");
+        assert_eq!(frames[0].sequence, 0);
+        assert_eq!(frames[1].sequence, 1);
+        assert_eq!(frames[2].sequence, 2);
+        assert!(
+            !handle.is_running(),
+            "Handle should stop after source exhaustion"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ring_buffer_error_terminates_capture() {
+        let source = MockAudioSource::new().with_read_failure();
+        let buffer = RingBuffer::new(source);
+
+        let (mut rx, handle) = buffer.start().unwrap();
+
+        // Should receive no frames (error on first read)
+        let frame = tokio::time::timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .ok()
+            .flatten();
+        assert!(frame.is_none(), "No frames expected on read failure");
+
+        // Wait briefly for the capture thread to exit
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!handle.is_running(), "Handle should stop after read error");
+    }
+
+    #[tokio::test]
+    async fn test_ring_buffer_custom_config() {
+        use crate::audio::recorder::FramePhase;
+
+        let config = RingBufferConfig {
+            channel_buffer_size: 10,
+            poll_interval_ms: 1,
+        };
+        let source = MockAudioSource::new().with_frame_sequence(vec![FramePhase {
+            samples: vec![200i16; 80],
+            count: 3,
+        }]);
+        let buffer = RingBuffer::with_config(source, config);
+
+        let (mut rx, handle) = buffer.start().unwrap();
+
+        let mut frames = Vec::new();
+        while let Some(frame) = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+            .await
+            .ok()
+            .flatten()
+        {
+            frames.push(frame);
+        }
+
+        assert_eq!(frames.len(), 3, "Expected 3 frames with custom config");
+        // Verify sample content
+        assert_eq!(frames[0].samples.len(), 80);
+        assert_eq!(frames[0].samples[0], 200i16);
+        assert!(!handle.is_running());
     }
 }
