@@ -22,6 +22,8 @@ pub struct ChunkerStation {
     silence_start: Option<Instant>,
     verbose: bool,
     clock: Arc<dyn Clock>,
+    /// Output channel for flushing remaining audio on shutdown.
+    flush_tx: Option<crossbeam_channel::Sender<AudioChunk>>,
 }
 
 impl ChunkerStation {
@@ -40,7 +42,14 @@ impl ChunkerStation {
             silence_start: None,
             verbose: false,
             clock,
+            flush_tx: None,
         }
+    }
+
+    /// Set the output channel used to flush remaining audio on shutdown.
+    pub fn with_flush_tx(mut self, tx: crossbeam_channel::Sender<AudioChunk>) -> Self {
+        self.flush_tx = Some(tx);
+        self
     }
 
     /// Sets a custom sample rate (overrides config value).
@@ -132,8 +141,11 @@ impl Station for ChunkerStation {
     }
 
     fn shutdown(&mut self) {
-        // Flush is handled by the pipeline orchestrator through explicit flush() call
-        // Note: Any remaining buffered audio can be retrieved via flush()
+        if let Some(chunk) = self.flush()
+            && let Some(tx) = self.flush_tx.take()
+        {
+            let _ = tx.send(chunk);
+        }
     }
 }
 

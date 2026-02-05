@@ -64,6 +64,11 @@ impl WavAudioSource {
         })
     }
 
+    /// Consume the source and return all samples as a single buffer.
+    pub fn into_samples(self) -> Vec<i16> {
+        self.samples
+    }
+
     /// Create from stdin.
     pub fn from_stdin() -> Result<Self> {
         use std::io::Cursor;

@@ -77,7 +77,7 @@ src/
 │   └── fan_out.rs          # Parallel model comparison (--fan-out)
 ├── models/
 │   ├── catalog.rs          # Model metadata, English/multilingual variants
-│   └── download.rs         # HuggingFace download with SHA-256 (feature: model-download)
+│   └── download.rs         # HuggingFace download with SHA-1 verification (feature: model-download)
 └── ipc/
     ├── protocol.rs         # JSON command/response types
     └── server.rs           # Unix socket IPC server

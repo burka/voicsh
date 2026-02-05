@@ -147,7 +147,8 @@ impl Pipeline {
 
         let chunker_station = ChunkerStation::with_clock(self.config.chunker, self.clock.clone())
             .with_sample_rate(self.config.sample_rate)
-            .with_verbose(self.config.verbosity >= 2);
+            .with_verbose(self.config.verbosity >= 2)
+            .with_flush_tx(chunk_tx.clone());
 
         let transcriber_station =
             TranscriberStation::new(transcriber).with_verbose(self.config.verbosity >= 2);
@@ -806,5 +807,167 @@ mod tests {
                 "Verbosity {verbosity} should produce transcription"
             );
         }
+    }
+
+    // ── End-to-end pipeline tests with WAV fixture ───────────────────────
+
+    fn pipe_config() -> PipelineConfig {
+        PipelineConfig {
+            vad: VadConfig {
+                speech_threshold: 0.02,
+                silence_duration_ms: 300,
+                min_speech_ms: 50,
+                ..Default::default()
+            },
+            chunker: AdaptiveChunkerConfig::default(),
+            quiet: true,
+            verbosity: 0,
+            auto_level: false,
+            sample_rate: 16000,
+            ..Default::default()
+        }
+    }
+
+    fn wav_audio_source() -> Box<dyn AudioSource> {
+        use std::io::Cursor;
+        let wav_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/quick_brown_fox.wav");
+        let wav_data = std::fs::read(&wav_path)
+            .unwrap_or_else(|e| panic!("WAV fixture not found at {}: {}", wav_path.display(), e));
+        Box::new(
+            crate::audio::wav::WavAudioSource::from_reader(Box::new(Cursor::new(wav_data)))
+                .expect("Failed to parse WAV fixture"),
+        )
+    }
+
+    /// Run a WAV fixture through the full pipeline and return the collected text.
+    fn run_pipeline_with_wav(transcriber: Arc<dyn Transcriber>) -> Option<String> {
+        let pipeline = Pipeline::new(pipe_config());
+        let handle = pipeline
+            .start(
+                wav_audio_source(),
+                transcriber,
+                Box::new(CollectorSink::new()),
+            )
+            .expect("Pipeline start failed");
+
+        // The WAV is ~3.5s. Pipeline polls at ~60Hz, so audio drains in < 1s.
+        // Give extra time for VAD silence detection + transcription.
+        thread::sleep(Duration::from_secs(3));
+
+        handle.stop()
+    }
+
+    /// Pipeline end-to-end with mock transcriber.
+    /// Verifies the full wiring: WAV → VAD → chunker → transcriber → collector.
+    /// Always runs (no model needed). Use this pattern for refinement tests.
+    #[test]
+    fn test_pipeline_wav_mock_transcriber() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("mock transcription output")
+                .with_confidence(0.95)
+                .with_language("en"),
+        );
+
+        let result = run_pipeline_with_wav(transcriber);
+
+        assert!(
+            result.is_some(),
+            "Pipeline produced no output — VAD/chunker may not have triggered"
+        );
+        let text = result.unwrap();
+        assert!(
+            text.contains("mock transcription output"),
+            "Expected mock response in pipeline output, got: '{}'",
+            text
+        );
+    }
+
+    /// Pipeline end-to-end with real Whisper model.
+    /// Validates actual transcription works — catches CUDA/GPU runtime failures.
+    /// Skips with a warning when no model is installed.
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn test_pipeline_wav_real_transcriber() {
+        use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
+
+        let Some(model_path) = find_any_model() else {
+            return;
+        };
+        let language = if model_path.to_string_lossy().contains(".en") {
+            "en"
+        } else {
+            crate::defaults::AUTO_LANGUAGE
+        };
+
+        let config = WhisperConfig {
+            model_path,
+            language: language.to_string(),
+            threads: Some(4),
+        };
+
+        let transcriber: Arc<dyn Transcriber> =
+            Arc::new(WhisperTranscriber::new(config).expect("Failed to load Whisper model"));
+
+        let result = run_pipeline_with_wav(transcriber);
+
+        assert!(
+            result.is_some(),
+            "Pipeline produced no output — transcription may have failed"
+        );
+        let text = result.unwrap().to_lowercase();
+        println!("Pipeline transcription: '{}'", text);
+
+        for word in &["quick", "brown", "fox", "lazy", "dog"] {
+            assert!(
+                text.contains(word),
+                "Expected '{}' in transcription: '{}'",
+                word,
+                text
+            );
+        }
+    }
+
+    /// Model candidates ordered by preference for English tests.
+    const MODEL_CANDIDATES: &[&str] = &[
+        "base.en",
+        "small.en",
+        "tiny.en",
+        "medium.en",
+        "base",
+        "small",
+        "tiny",
+        "medium",
+        "large",
+    ];
+
+    fn find_any_model() -> Option<std::path::PathBuf> {
+        for name in MODEL_CANDIDATES {
+            let filename = format!("ggml-{}.bin", name);
+            if let Ok(home) = std::env::var("HOME") {
+                let path = std::path::PathBuf::from(home)
+                    .join(".cache/voicsh/models")
+                    .join(&filename);
+                if path.exists() {
+                    return Some(path);
+                }
+            }
+            let local = std::path::PathBuf::from("models").join(&filename);
+            if local.exists() {
+                return Some(local);
+            }
+        }
+        eprintln!();
+        eprintln!("  ╔══════════════════════════════════════════════════════════════╗");
+        eprintln!("  ║  WARNING: NO WHISPER MODEL FOUND — SKIPPING TEST            ║");
+        eprintln!("  ║                                                              ║");
+        eprintln!("  ║  Install any model to enable whisper tests:                  ║");
+        eprintln!("  ║                                                              ║");
+        eprintln!("  ║    cargo run -- models install base.en                       ║");
+        eprintln!("  ║                                                              ║");
+        eprintln!("  ╚══════════════════════════════════════════════════════════════╝");
+        eprintln!();
+        None
     }
 }

@@ -307,6 +307,7 @@ impl Transcriber for WhisperTranscriber {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -430,70 +431,165 @@ mod tests {
         assert!(converted.iter().all(|&x| x == 0.0));
     }
 
-    // Integration tests that require an actual model file
-    // These are marked as #[ignore] and must be run manually with a real model
+    // Integration tests — run automatically when any model is installed,
+    // print a visible warning and skip when not.
 
-    #[test]
-    #[ignore]
-    fn test_whisper_transcriber_with_real_model() {
-        // To run this test:
-        // 1. Download a Whisper model (e.g., ggml-base.en.bin)
-        // 2. Place it in the models/ directory
-        // 3. Run: cargo test test_whisper_transcriber_with_real_model -- --ignored
+    /// Models to try, best-to-worst for English transcription tests.
+    const MODEL_CANDIDATES: &[&str] = &[
+        "base.en",
+        "small.en",
+        "tiny.en",
+        "medium.en",
+        "base",
+        "small",
+        "tiny",
+        "medium",
+        "large",
+    ];
 
-        let model_path = PathBuf::from("models/ggml-base.en.bin");
-        if !model_path.exists() {
-            panic!(
-                "Model not found at {:?}. Download it before running this test.",
-                model_path
-            );
+    /// Look for a model file in the cache dir and local `models/` dir.
+    fn try_find_model(name: &str) -> Option<PathBuf> {
+        let filename = format!("ggml-{}.bin", name);
+
+        if let Ok(home) = std::env::var("HOME") {
+            let path = PathBuf::from(home)
+                .join(".cache/voicsh/models")
+                .join(&filename);
+            if path.exists() {
+                return Some(path);
+            }
         }
 
+        let local = PathBuf::from("models").join(&filename);
+        if local.exists() {
+            return Some(local);
+        }
+
+        None
+    }
+
+    /// Find any installed model from `MODEL_CANDIDATES`.
+    /// Prints a big warning and returns `None` if nothing is installed.
+    fn require_any_model() -> Option<PathBuf> {
+        for name in MODEL_CANDIDATES {
+            if let Some(path) = try_find_model(name) {
+                return Some(path);
+            }
+        }
+        eprintln!();
+        eprintln!("  ╔══════════════════════════════════════════════════════════════╗");
+        eprintln!("  ║  WARNING: NO WHISPER MODEL FOUND — SKIPPING TEST            ║");
+        eprintln!("  ║                                                              ║");
+        eprintln!("  ║  Install any model to enable whisper tests:                  ║");
+        eprintln!("  ║                                                              ║");
+        eprintln!("  ║    cargo run -- models install base.en                       ║");
+        eprintln!("  ║                                                              ║");
+        eprintln!("  ╚══════════════════════════════════════════════════════════════╝");
+        eprintln!();
+        None
+    }
+
+    /// Detect language setting for a model path (English-only → "en", multilingual → "auto").
+    fn language_for_model(path: &Path) -> &'static str {
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if stem.ends_with(".en") {
+            "en"
+        } else {
+            defaults::AUTO_LANGUAGE
+        }
+    }
+
+    #[test]
+    fn test_whisper_transcriber_with_real_model() {
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
+
+        let language = language_for_model(&model_path).to_string();
         let config = WhisperConfig {
             model_path,
-            language: "en".to_string(),
+            language,
             threads: Some(4),
         };
 
         let transcriber = WhisperTranscriber::new(config).unwrap();
         assert!(transcriber.is_ready());
-        assert_eq!(transcriber.model_name(), "ggml-base.en");
+        assert!(!transcriber.model_name().is_empty());
     }
 
     #[test]
-    #[ignore]
-    fn test_whisper_transcribe_with_real_audio() {
-        // To run this test, you need:
-        // 1. A real Whisper model in models/ggml-base.en.bin
-        // 2. Real audio data (this test uses silent audio as placeholder)
-        // Run: cargo test test_whisper_transcribe_with_real_audio -- --ignored
+    fn test_whisper_transcribe_silence() {
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
 
-        let model_path = PathBuf::from("models/ggml-base.en.bin");
-        if !model_path.exists() {
-            panic!(
-                "Model not found at {:?}. Download it before running this test.",
-                model_path
-            );
-        }
-
+        let language = language_for_model(&model_path).to_string();
         let config = WhisperConfig {
             model_path,
-            language: "en".to_string(),
+            language,
             threads: Some(4),
         };
 
         let transcriber = WhisperTranscriber::new(config).unwrap();
 
-        // Create 1 second of silence (16kHz mono)
         let audio = vec![0i16; 16000];
         let result = transcriber.transcribe(&audio);
 
         assert!(result.is_ok());
         let output = result.unwrap();
-        // Silent audio should produce empty or minimal transcription
         println!(
             "Transcription result: '{}' (lang={}, conf={})",
             output.text, output.language, output.confidence
+        );
+    }
+
+    #[test]
+    fn test_transcribe_known_speech() {
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
+        let wav_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/quick_brown_fox.wav");
+
+        assert!(wav_path.exists(), "WAV fixture not found at {:?}", wav_path);
+
+        let language = language_for_model(&model_path).to_string();
+        let config = WhisperConfig {
+            model_path,
+            language,
+            threads: Some(4),
+        };
+
+        let transcriber = WhisperTranscriber::new(config).unwrap();
+
+        let wav_data = std::fs::read(&wav_path).unwrap();
+        let source = crate::audio::wav::WavAudioSource::from_reader(Box::new(
+            std::io::Cursor::new(wav_data),
+        ))
+        .unwrap();
+        let samples = source.into_samples();
+
+        let result = transcriber.transcribe(&samples).unwrap();
+        let text = result.text.to_lowercase();
+
+        println!(
+            "Transcription: '{}' (lang={}, conf={:.2})",
+            result.text, result.language, result.confidence
+        );
+
+        // The fixture says "The quick brown fox jumps over the lazy dog."
+        for word in &["quick", "brown", "fox", "lazy", "dog"] {
+            assert!(
+                text.contains(word),
+                "Expected '{}' in transcription: '{}'",
+                word,
+                text
+            );
+        }
+        assert!(
+            result.confidence > 0.5,
+            "Confidence too low: {}",
+            result.confidence
         );
     }
 
