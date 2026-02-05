@@ -21,9 +21,9 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
-    /// Verbose output (show audio levels, debug info)
-    #[arg(short, long, global = true)]
-    pub verbose: bool,
+    /// Verbose output (-v: meter + results, -vv: full diagnostics)
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    pub verbose: u8,
 }
 
 /// Available commands
@@ -130,7 +130,26 @@ mod tests {
             _ => panic!("Expected Record command"),
         }
         assert!(!cli.quiet);
+        assert_eq!(cli.verbose, 0);
         assert!(cli.config.is_none());
+    }
+
+    #[test]
+    fn test_parse_verbose_single() {
+        let cli = Cli::try_parse_from(["voicsh", "-v", "record"]).unwrap();
+        assert_eq!(cli.verbose, 1);
+    }
+
+    #[test]
+    fn test_parse_verbose_double() {
+        let cli = Cli::try_parse_from(["voicsh", "-vv", "record"]).unwrap();
+        assert_eq!(cli.verbose, 2);
+    }
+
+    #[test]
+    fn test_parse_verbose_repeated_flags() {
+        let cli = Cli::try_parse_from(["voicsh", "-v", "-v", "record"]).unwrap();
+        assert_eq!(cli.verbose, 2);
     }
 
     #[test]

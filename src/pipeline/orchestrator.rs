@@ -23,8 +23,8 @@ pub struct PipelineConfig {
     pub vad: VadConfig,
     /// Chunker configuration
     pub chunker: AdaptiveChunkerConfig,
-    /// Show audio level meter
-    pub show_levels: bool,
+    /// Verbosity level (0=quiet results, 1=meter+results, 2=full diagnostics)
+    pub verbosity: u8,
     /// Enable auto-leveling for VAD
     pub auto_level: bool,
     /// Suppress output messages
@@ -43,7 +43,7 @@ impl Default for PipelineConfig {
         Self {
             vad: VadConfig::default(),
             chunker: AdaptiveChunkerConfig::default(),
-            show_levels: false,
+            verbosity: 0,
             auto_level: true,
             quiet: false,
             sample_rate: 16000,
@@ -133,21 +133,21 @@ impl Pipeline {
 
         // Create stations
         let vad_station = VadStation::new(self.config.vad)
-            .with_show_levels(self.config.show_levels)
+            .with_show_levels(self.config.verbosity >= 1)
             .with_auto_level(self.config.auto_level)
             .with_sample_rate(self.config.sample_rate);
 
         let chunker_station = ChunkerStation::new(self.config.chunker)
             .with_sample_rate(self.config.sample_rate)
-            .with_verbose(self.config.show_levels);
+            .with_verbose(self.config.verbosity >= 2);
 
         let transcriber_station =
-            TranscriberStation::new(transcriber).with_verbose(self.config.show_levels);
+            TranscriberStation::new(transcriber).with_verbose(self.config.verbosity >= 2);
 
         // Create sink station with result channel
         let (result_tx, result_rx) = bounded(1);
         let sink_station =
-            SinkStation::new(sink, self.config.quiet, self.config.show_levels, result_tx);
+            SinkStation::new(sink, self.config.quiet, self.config.verbosity, result_tx);
 
         // Spawn station runners
         let vad_runner =
@@ -279,7 +279,7 @@ mod tests {
         assert_eq!(config.vad_buffer, 16);
         assert_eq!(config.chunk_buffer, 4);
         assert_eq!(config.transcribe_buffer, 4);
-        assert!(!config.show_levels);
+        assert_eq!(config.verbosity, 0);
         assert!(config.auto_level);
         assert!(!config.quiet);
     }
@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn test_config_builder_pattern() {
         let config = PipelineConfig {
-            show_levels: true,
+            verbosity: 2,
             auto_level: false,
             quiet: true,
             sample_rate: 48000,
@@ -311,7 +311,7 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(config.show_levels);
+        assert_eq!(config.verbosity, 2);
         assert!(!config.auto_level);
         assert!(config.quiet);
         assert_eq!(config.sample_rate, 48000);

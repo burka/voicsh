@@ -60,22 +60,24 @@ const KNOWN_TERMINALS: &[&str] = &[
 /// - `"auto"` → detects the focused window and returns the right key
 /// - Any other value → returned as-is (user override)
 ///
-/// When `verbose` is true, logs the detection steps to stderr.
-pub fn resolve_paste_key(configured: &str, verbose: bool) -> &str {
+/// Verbosity levels:
+/// - `>= 1`: logs the final detection result (one-liner)
+/// - `>= 2`: logs each detection step (subprocess attempts)
+pub fn resolve_paste_key(configured: &str, verbosity: u8) -> &str {
     if configured != "auto" {
-        if verbose {
+        if verbosity >= 2 {
             eprintln!("  [paste] explicit: {}", configured);
         }
         return configured;
     }
 
-    let (kind, app_id, method) = detect_window_kind_verbose(verbose);
+    let (kind, app_id, method) = detect_window_kind_verbose(verbosity >= 2);
     let key = match kind {
         WindowKind::Terminal => "ctrl+shift+v",
         WindowKind::GraphicalApp => "ctrl+v",
     };
 
-    if verbose {
+    if verbosity >= 2 {
         match &app_id {
             Some(id) => eprintln!(
                 "  [paste] {} app_id=\"{}\" → {:?} → {}",
@@ -86,6 +88,11 @@ pub fn resolve_paste_key(configured: &str, verbose: bool) -> &str {
                  Hint: Set paste_key in config if wrong: paste_key = \"ctrl+shift+v\"",
                 method, kind, key
             ),
+        }
+    } else if verbosity >= 1 {
+        match &app_id {
+            Some(id) => eprintln!("  [paste] {} → {}", id, key),
+            None => eprintln!("  [paste] {} → {}", method, key),
         }
     }
 
@@ -103,39 +110,36 @@ pub fn detect_window_kind() -> WindowKind {
 /// Returns (WindowKind, Option<app_id>, detection_method_name).
 fn detect_window_kind_verbose(verbose: bool) -> (WindowKind, Option<String>, &'static str) {
     // Try swaymsg (Sway / i3-compatible)
-    if let Some(app_id) = detect_via_swaymsg() {
+    if let Some(app_id) = detect_via_swaymsg(verbose) {
         return (classify_app_id(&app_id), Some(app_id), "swaymsg");
-    }
-    if verbose {
-        eprintln!("  [paste] swaymsg: not available");
     }
 
     // Try hyprctl (Hyprland)
-    if let Some(app_id) = detect_via_hyprctl() {
+    if let Some(app_id) = detect_via_hyprctl(verbose) {
         return (classify_app_id(&app_id), Some(app_id), "hyprctl");
-    }
-    if verbose {
-        eprintln!("  [paste] hyprctl: not available");
     }
 
     // Try GNOME Shell D-Bus (Shell.Eval — disabled on GNOME 45+)
-    if let Some(app_id) = detect_via_gnome_dbus() {
+    if let Some(app_id) = detect_via_gnome_dbus(verbose) {
         return (classify_app_id(&app_id), Some(app_id), "gnome-dbus");
-    }
-    if verbose {
-        eprintln!("  [paste] gnome-dbus: not available (GNOME may have disabled Shell.Eval)");
     }
 
     // Try GNOME Shell Introspect (works on GNOME 41+, unlike Shell.Eval)
-    if let Some(app_id) = detect_via_gnome_introspect() {
+    if let Some(app_id) = detect_via_gnome_introspect(verbose) {
         return (classify_app_id(&app_id), Some(app_id), "gnome-introspect");
     }
-    if verbose {
-        eprintln!("  [paste] gnome-introspect: not available");
-    }
 
-    // All detection failed
-    (WindowKind::GraphicalApp, None, "fallback(no-compositor)")
+    // All detection failed — use GNOME-aware fallback
+    if is_gnome_desktop() {
+        // On GNOME, Ctrl+Shift+V is the safer default:
+        // works in terminals AND as "paste unformatted" in most GUI apps.
+        if verbose {
+            eprintln!("  [paste] GNOME detected, defaulting to ctrl+shift+v");
+        }
+        (WindowKind::Terminal, None, "gnome-fallback")
+    } else {
+        (WindowKind::GraphicalApp, None, "fallback(no-compositor)")
+    }
 }
 
 /// Classify an app_id as Terminal or GraphicalApp.
@@ -157,13 +161,29 @@ fn classify_app_id(app_id: &str) -> WindowKind {
 }
 
 /// Query swaymsg for the focused window's app_id.
-fn detect_via_swaymsg() -> Option<String> {
-    let output = Command::new("swaymsg")
+fn detect_via_swaymsg(verbose: bool) -> Option<String> {
+    let output = match Command::new("swaymsg")
         .args(["-t", "get_tree", "-r"])
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(e) => {
+            if verbose {
+                eprintln!("  [paste] swaymsg: failed to execute: {}", e);
+            }
+            return None;
+        }
+    };
 
     if !output.status.success() {
+        if verbose {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!(
+                "  [paste] swaymsg: failed (exit {}): {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            );
+        }
         return None;
     }
 
@@ -172,13 +192,29 @@ fn detect_via_swaymsg() -> Option<String> {
 }
 
 /// Query hyprctl for the focused window's class.
-fn detect_via_hyprctl() -> Option<String> {
-    let output = Command::new("hyprctl")
+fn detect_via_hyprctl(verbose: bool) -> Option<String> {
+    let output = match Command::new("hyprctl")
         .args(["activewindow", "-j"])
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(e) => {
+            if verbose {
+                eprintln!("  [paste] hyprctl: failed to execute: {}", e);
+            }
+            return None;
+        }
+    };
 
     if !output.status.success() {
+        if verbose {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!(
+                "  [paste] hyprctl: failed (exit {}): {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            );
+        }
         return None;
     }
 
@@ -193,7 +229,7 @@ fn detect_via_hyprctl() -> Option<String> {
 ///
 /// Handles stale D-Bus sessions (e.g. long-lived tmux/byobu/screen) by
 /// reading the current GNOME Shell's D-Bus address from `/proc`.
-fn detect_via_gnome_dbus() -> Option<String> {
+fn detect_via_gnome_dbus(verbose: bool) -> Option<String> {
     let mut cmd = Command::new("gdbus");
     cmd.args([
         "call",
@@ -213,15 +249,50 @@ fn detect_via_gnome_dbus() -> Option<String> {
         cmd.env("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
     }
 
-    let output = cmd.output().ok()?;
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(e) => {
+            if verbose {
+                eprintln!("  [paste] gnome-dbus: failed to execute: {}", e);
+            }
+            return None;
+        }
+    };
 
     if !output.status.success() {
+        if verbose {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!(
+                "  [paste] gnome-dbus: failed (exit {}): {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            );
+        }
         return None;
     }
 
     // Output format: (true, '"ClassName"') on success, (false, '') when disabled
     let result = String::from_utf8_lossy(&output.stdout);
-    extract_gnome_eval_result(&result)
+    let parsed = extract_gnome_eval_result(&result);
+
+    if parsed.is_none() && verbose {
+        eprintln!("  [paste] gnome-dbus: Shell.Eval disabled or returned empty result");
+    }
+
+    parsed
+}
+
+/// Check if we're running on a GNOME desktop.
+///
+/// Uses `XDG_CURRENT_DESKTOP` (fast, no subprocess) with a fallback to
+/// checking if `gnome-shell` is running (via `fresh_gnome_dbus_address`).
+fn is_gnome_desktop() -> bool {
+    if let Ok(desktop) = std::env::var("XDG_CURRENT_DESKTOP")
+        && desktop.to_uppercase().contains("GNOME")
+    {
+        return true;
+    }
+    fresh_gnome_dbus_address().is_some()
 }
 
 /// Read the current DBUS_SESSION_BUS_ADDRESS from the running gnome-shell process.
@@ -295,7 +366,7 @@ fn extract_gnome_eval_result(response: &str) -> Option<String> {
 ///
 /// The output is GVariant text format. We parse it by finding the window entry
 /// that contains `'has-focus': <true>` and extracting its `'app-id'`.
-fn detect_via_gnome_introspect() -> Option<String> {
+fn detect_via_gnome_introspect(verbose: bool) -> Option<String> {
     let mut cmd = Command::new("gdbus");
     cmd.args([
         "call",
@@ -312,14 +383,36 @@ fn detect_via_gnome_introspect() -> Option<String> {
         cmd.env("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
     }
 
-    let output = cmd.output().ok()?;
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(e) => {
+            if verbose {
+                eprintln!("  [paste] gnome-introspect: failed to execute: {}", e);
+            }
+            return None;
+        }
+    };
 
     if !output.status.success() {
+        if verbose {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!(
+                "  [paste] gnome-introspect: failed (exit {}): {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            );
+        }
         return None;
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    extract_focused_app_from_introspect(&stdout)
+    let parsed = extract_focused_app_from_introspect(&stdout);
+
+    if parsed.is_none() && verbose {
+        eprintln!("  [paste] gnome-introspect: no focused window found in output");
+    }
+
+    parsed
 }
 
 /// Extract the focused window's app-id from GVariant text output.
@@ -519,9 +612,9 @@ mod tests {
 
     #[test]
     fn test_resolve_explicit_key() {
-        assert_eq!(resolve_paste_key("ctrl+v", false), "ctrl+v");
-        assert_eq!(resolve_paste_key("ctrl+shift+v", false), "ctrl+shift+v");
-        assert_eq!(resolve_paste_key("super+v", false), "super+v");
+        assert_eq!(resolve_paste_key("ctrl+v", 0), "ctrl+v");
+        assert_eq!(resolve_paste_key("ctrl+shift+v", 0), "ctrl+shift+v");
+        assert_eq!(resolve_paste_key("super+v", 0), "super+v");
     }
 
     // Note: resolve_paste_key("auto") depends on the compositor, so we
@@ -756,7 +849,8 @@ mod tests {
 
     #[test]
     fn test_introspect_empty_app_id_falls_back_to_wm_class() {
-        let output = r#"({uint64 1: {'app-id': <''>, 'wm-class': <'XTerm'>, 'has-focus': <true>}},)"#;
+        let output =
+            r#"({uint64 1: {'app-id': <''>, 'wm-class': <'XTerm'>, 'has-focus': <true>}},)"#;
         assert_eq!(
             extract_focused_app_from_introspect(output),
             Some("XTerm".to_string())
@@ -787,5 +881,11 @@ mod tests {
     fn test_extract_gvariant_string_no_match() {
         let text = "{'wm-class': <'ptyxis'>}";
         assert_eq!(extract_gvariant_string(text, "'app-id': <'"), None);
+    }
+
+    #[test]
+    fn test_is_gnome_desktop_does_not_panic() {
+        // Just verify it returns a bool without panicking.
+        let _ = is_gnome_desktop();
     }
 }

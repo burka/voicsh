@@ -34,7 +34,7 @@ use crate::input::portal::PortalSession;
 /// * `model` - Optional model override from CLI
 /// * `language` - Optional language override from CLI
 /// * `quiet` - Suppress status messages
-/// * `verbose` - Show detailed output (chunk progress)
+/// * `verbosity` - Verbosity level (0=default, 1=meter+results, 2=full diagnostics)
 /// * `no_download` - Prevent automatic model download
 /// * `once` - Exit after first transcription (default: loop continuously)
 /// * `fan_out` - Run English + multilingual models in parallel
@@ -49,7 +49,7 @@ pub async fn run_record_command(
     model: Option<String>,
     language: Option<String>,
     quiet: bool,
-    verbose: bool,
+    verbosity: u8,
     no_download: bool,
     once: bool,
     fan_out: bool,
@@ -85,7 +85,7 @@ pub async fn run_record_command(
             Some(Arc::new(session))
         }
         Err(e) => {
-            if verbose {
+            if verbosity >= 2 {
                 eprintln!("Portal unavailable ({}), using wtype/ydotool fallback.", e);
             }
             None
@@ -106,18 +106,23 @@ pub async fn run_record_command(
         InjectorSink::with_portal(
             config.input.method.clone(),
             config.input.paste_key.clone(),
+            verbosity,
             portal.clone(),
         )
     };
     #[cfg(not(feature = "portal"))]
     let make_sink = |config: &Config| {
-        InjectorSink::system(config.input.method.clone(), config.input.paste_key.clone())
+        InjectorSink::system(
+            config.input.method.clone(),
+            config.input.paste_key.clone(),
+            verbosity,
+        )
     };
 
     if once {
-        run_single_session(&config, transcriber, quiet, verbose, make_sink).await
+        run_single_session(&config, transcriber, quiet, verbosity, make_sink).await
     } else {
-        run_continuous(&config, transcriber, quiet, verbose, make_sink).await
+        run_continuous(&config, transcriber, quiet, verbosity, make_sink).await
     }
 }
 
@@ -126,7 +131,7 @@ async fn run_continuous(
     config: &Config,
     transcriber: Arc<dyn Transcriber>,
     quiet: bool,
-    verbose: bool,
+    verbosity: u8,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let device_name = config.audio.device.as_deref();
@@ -139,7 +144,7 @@ async fn run_continuous(
             ..Default::default()
         },
         chunker: AdaptiveChunkerConfig::default(),
-        show_levels: verbose,
+        verbosity,
         auto_level: true,
         quiet,
         sample_rate: 16000,
@@ -171,7 +176,7 @@ async fn run_single_session(
     config: &Config,
     transcriber: Arc<dyn Transcriber>,
     quiet: bool,
-    verbose: bool,
+    verbosity: u8,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let device_name = config.audio.device.as_deref();
@@ -184,7 +189,7 @@ async fn run_single_session(
             ..Default::default()
         },
         chunker: AdaptiveChunkerConfig::default(),
-        show_levels: verbose,
+        verbosity,
         auto_level: true,
         quiet,
         sample_rate: 16000,
@@ -217,7 +222,7 @@ async fn run_single_session(
         let mut injector_sink = make_sink(config);
         use crate::pipeline::sink::TextSink;
         injector_sink.handle(&text)?;
-        if !quiet && verbose {
+        if !quiet && verbosity >= 2 {
             eprintln!("  [injected]");
         }
     }

@@ -80,11 +80,6 @@ impl Station for TranscriberStation {
             return Ok(None);
         }
 
-        // Log transcription completion if verbose
-        if self.verbose {
-            eprintln_clear(&format!("  [transcribed: {} chars]", cleaned_text.len()));
-        }
-
         // Return transcribed text with current timestamp
         Ok(Some(TranscribedText::new(cleaned_text, Instant::now())))
     }

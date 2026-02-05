@@ -29,7 +29,7 @@ pub trait TextSink: Send + 'static {
 pub(crate) struct SinkStation {
     sink: Box<dyn TextSink>,
     quiet: bool,
-    verbose: bool,
+    verbosity: u8,
     result_tx: Option<crossbeam_channel::Sender<Option<String>>>,
 }
 
@@ -38,13 +38,13 @@ impl SinkStation {
     pub(crate) fn new(
         sink: Box<dyn TextSink>,
         quiet: bool,
-        verbose: bool,
+        verbosity: u8,
         result_tx: crossbeam_channel::Sender<Option<String>>,
     ) -> Self {
         Self {
             sink,
             quiet,
-            verbose,
+            verbosity,
             result_tx: Some(result_tx),
         }
     }
@@ -63,20 +63,25 @@ impl Station for SinkStation {
             return Ok(None);
         }
 
-        if !self.quiet {
-            eprintln_clear(&format!("\"{}\"", text.text));
-        }
-
         match self.sink.handle(&text.text) {
             Ok(()) => {
-                if self.verbose && !self.quiet {
-                    eprintln_clear("  [injected]");
+                if !self.quiet {
+                    if self.verbosity >= 1 {
+                        let chars = text.text.len();
+                        eprintln_clear(&format!("[ok {}ch] \"{}\"", chars, text.text));
+                    } else {
+                        eprintln_clear(&format!("\"{}\"", text.text));
+                    }
                 }
                 Ok(Some(()))
             }
             Err(e) => {
-                if self.verbose && !self.quiet {
-                    eprintln_clear(&format!("  [sink failed: {}]", e));
+                if !self.quiet {
+                    if self.verbosity >= 1 {
+                        eprintln_clear(&format!("[FAIL {}] \"{}\"", e, text.text));
+                    } else {
+                        eprintln_clear(&format!("\"{}\"", text.text));
+                    }
                 }
                 Ok(None)
             }
@@ -97,15 +102,17 @@ pub struct InjectorSink<E: CommandExecutor> {
     injector: TextInjector<E>,
     method: InputMethod,
     paste_key: String,
+    verbosity: u8,
 }
 
 impl InjectorSink<SystemCommandExecutor> {
     /// Create InjectorSink with system command executor (production use).
-    pub fn system(method: InputMethod, paste_key: String) -> Self {
+    pub fn system(method: InputMethod, paste_key: String, verbosity: u8) -> Self {
         Self {
             injector: TextInjector::system(),
             method,
             paste_key,
+            verbosity,
         }
     }
 
@@ -114,12 +121,14 @@ impl InjectorSink<SystemCommandExecutor> {
     pub fn with_portal(
         method: InputMethod,
         paste_key: String,
+        verbosity: u8,
         portal: Option<Arc<crate::input::portal::PortalSession>>,
     ) -> Self {
         Self {
             injector: TextInjector::system().with_portal(portal),
             method,
             paste_key,
+            verbosity,
         }
     }
 }
@@ -131,13 +140,15 @@ impl<E: CommandExecutor> InjectorSink<E> {
             injector,
             method,
             paste_key,
+            verbosity: 0,
         }
     }
 }
 
 impl<E: CommandExecutor + 'static> TextSink for InjectorSink<E> {
     fn handle(&mut self, text: &str) -> crate::error::Result<()> {
-        let paste_key = crate::input::focused_window::resolve_paste_key(&self.paste_key, false);
+        let paste_key =
+            crate::input::focused_window::resolve_paste_key(&self.paste_key, self.verbosity);
 
         match self.method {
             InputMethod::Clipboard => {
@@ -235,7 +246,7 @@ mod tests {
 
     #[test]
     fn injector_sink_system_constructor() {
-        let sink = InjectorSink::system(InputMethod::Clipboard, "ctrl+v".to_string());
+        let sink = InjectorSink::system(InputMethod::Clipboard, "ctrl+v".to_string(), 0);
         assert_eq!(sink.name(), "injector");
     }
 
@@ -327,7 +338,7 @@ mod tests {
     fn sink_station_delegates_to_sink() {
         let collector = CollectorSink::new();
         let (result_tx, result_rx) = crossbeam_channel::bounded(1);
-        let mut station = SinkStation::new(Box::new(collector), true, false, result_tx);
+        let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
 
         let text1 = TranscribedText {
             text: "First".to_string(),
@@ -350,7 +361,7 @@ mod tests {
     fn sink_station_skips_empty_text() {
         let collector = CollectorSink::new();
         let (result_tx, result_rx) = crossbeam_channel::bounded(1);
-        let mut station = SinkStation::new(Box::new(collector), true, false, result_tx);
+        let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
 
         let empty_text = TranscribedText {
             text: "   ".to_string(),
@@ -373,7 +384,7 @@ mod tests {
         let sink = InjectorSink::new(injector, InputMethod::Clipboard, "ctrl+v".to_string());
 
         let (result_tx, _result_rx) = crossbeam_channel::bounded(1);
-        let mut station = SinkStation::new(Box::new(sink), true, false, result_tx);
+        let mut station = SinkStation::new(Box::new(sink), true, 0, result_tx);
 
         let text = TranscribedText {
             text: "Test".to_string(),
@@ -389,7 +400,7 @@ mod tests {
     fn sink_station_name_delegates_to_sink() {
         let collector = CollectorSink::new();
         let (result_tx, _result_rx) = crossbeam_channel::bounded(1);
-        let station = SinkStation::new(Box::new(collector), true, false, result_tx);
+        let station = SinkStation::new(Box::new(collector), true, 0, result_tx);
 
         assert_eq!(station.name(), "collector");
     }
@@ -402,7 +413,7 @@ mod tests {
 
     #[test]
     fn injector_sink_name() {
-        let sink = InjectorSink::system(InputMethod::Clipboard, "ctrl+v".to_string());
+        let sink = InjectorSink::system(InputMethod::Clipboard, "ctrl+v".to_string(), 0);
         assert_eq!(sink.name(), "injector");
     }
 }
