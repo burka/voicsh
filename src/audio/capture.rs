@@ -92,7 +92,7 @@ fn is_preferred_device(name: &str) -> bool {
 /// List all available audio input devices with filtering and recommendations.
 ///
 /// # Returns
-/// A vector of device names, with preferred devices marked with "[recommended]".
+/// A vector of device names, with preferred devices marked with "\[recommended\]".
 /// Filters out obviously unusable devices (surround channels, HDMI, etc.).
 ///
 /// # Errors

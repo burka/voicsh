@@ -24,7 +24,8 @@ pub trait AudioSource: Send + Sync {
     fn read_samples(&mut self) -> Result<Vec<i16>>;
 }
 
-/// Blanket implementation for Box<dyn AudioSource> to enable trait object usage
+/// Blanket implementation for `Box<dyn AudioSource>` to enable trait object usage
+/// in generic contexts like `RingBuffer<A: AudioSource>`.
 impl AudioSource for Box<dyn AudioSource> {
     fn start(&mut self) -> Result<()> {
         (**self).start()
