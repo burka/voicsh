@@ -41,7 +41,7 @@ cpal = { version = "0.15", optional = true }
 
 # HTTP client for model downloads
 reqwest = { version = "0.12", features = ["stream"], optional = true }
-sha2 = { version = "0.10", optional = true }
+sha1 = { version = "0.10", optional = true }
 indicatif = { version = "0.17", optional = true }
 futures-util = { version = "0.3", optional = true }
 
@@ -53,7 +53,7 @@ default = ["full"]
 full = ["whisper", "cpal-audio", "model-download", "cli", "portal"]
 whisper = ["whisper-rs"]
 cpal-audio = ["dep:cpal"]
-model-download = ["dep:reqwest", "dep:sha2", "dep:indicatif", "dep:futures-util"]
+model-download = ["dep:reqwest", "dep:sha1", "dep:indicatif", "dep:futures-util"]
 cli = ["dep:clap", "dep:dirs"]
 portal = ["dep:ashpd"]
 

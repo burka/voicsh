@@ -7,7 +7,7 @@ use crate::error::{Result, VoicshError};
 use crate::models::catalog::{ModelInfo, get_model};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
-use sha2::{Digest, Sha256};
+use sha1::{Digest, Sha1};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -70,7 +70,7 @@ pub fn is_model_installed(name: &str) -> bool {
 /// Returns an error if:
 /// - The model name is not in the catalog
 /// - The download fails
-/// - The SHA-256 checksum doesn't match (if provided in catalog)
+/// - The SHA-1 checksum doesn't match (if provided in catalog)
 /// - The file cannot be written
 pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
     // Get model info from catalog
@@ -137,7 +137,7 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
     };
 
     // Download with streaming and hash calculation
-    let mut hasher = Sha256::new();
+    let mut hasher = Sha1::new();
     let mut stream = response.bytes_stream();
     let mut file = fs::File::create(&output_path)
         .map_err(|e| VoicshError::Other(format!("Failed to create output file: {}", e)))?;
@@ -160,15 +160,15 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
         pb.finish_with_message("Downloaded");
     }
 
-    // Verify SHA-256 if provided (skip placeholder checksums)
-    if !model_info.sha256.starts_with("sha256_") && !model_info.sha256.is_empty() {
+    // Verify SHA-1 checksum
+    if !model_info.sha1.is_empty() {
         let calculated_hash = format!("{:x}", hasher.finalize());
-        if calculated_hash != model_info.sha256 {
+        if calculated_hash != model_info.sha1 {
             // Remove corrupted file
             let _ = fs::remove_file(&output_path);
             return Err(VoicshError::Other(format!(
-                "SHA-256 checksum mismatch. Expected: {}, got: {}",
-                model_info.sha256, calculated_hash
+                "SHA-1 checksum mismatch. Expected: {}, got: {}",
+                model_info.sha1, calculated_hash
             )));
         }
         if progress {

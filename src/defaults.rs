@@ -39,3 +39,6 @@ pub const AUTO_LANGUAGE: &str = "auto";
 
 /// Suffix for English-only model variants.
 pub const ENGLISH_ONLY_SUFFIX: &str = ".en";
+
+/// English language code.
+pub const ENGLISH_LANGUAGE: &str = "en";

@@ -247,7 +247,7 @@ async fn create_transcriber(
     {
         let ml =
             load_single_model(&resolved_model, &config.stt.language, quiet, no_download).await?;
-        let en = load_single_model(en, "en", quiet, no_download).await?;
+        let en = load_single_model(en, defaults::ENGLISH_LANGUAGE, quiet, no_download).await?;
         if !quiet {
             eprintln!("Fan-out: {} + {}", ml.model_name(), en.model_name());
         }

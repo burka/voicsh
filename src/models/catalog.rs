@@ -10,8 +10,8 @@ pub struct ModelInfo {
     pub name: &'static str,
     /// Model size in megabytes
     pub size_mb: u32,
-    /// SHA-256 checksum for integrity verification
-    pub sha256: &'static str,
+    /// SHA-1 checksum for integrity verification
+    pub sha1: &'static str,
     /// Download URL from HuggingFace
     pub url: &'static str,
     /// Whether this model supports English only
@@ -26,63 +26,63 @@ pub const MODELS: &[ModelInfo] = &[
     ModelInfo {
         name: "tiny.en",
         size_mb: 75,
-        sha256: "sha256_tiny_en_placeholder",
+        sha1: "c78c86eb1a8faa21b369bcd33207cc90d64ae9df",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
         english_only: true,
     },
     ModelInfo {
         name: "tiny",
         size_mb: 75,
-        sha256: "sha256_tiny_placeholder",
+        sha1: "bd577a113a864445d4c299885e0cb97d4ba92b5f",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
         english_only: false,
     },
     ModelInfo {
         name: "base.en",
         size_mb: 142,
-        sha256: "sha256_base_en_placeholder",
+        sha1: "137c40403d78fd54d454da0f9bd998f78703390c",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
         english_only: true,
     },
     ModelInfo {
         name: "base",
         size_mb: 142,
-        sha256: "sha256_base_placeholder",
+        sha1: "465707469ff3a37a2b9b8d8f89f2f99de7299dac",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
         english_only: false,
     },
     ModelInfo {
         name: "small.en",
         size_mb: 466,
-        sha256: "sha256_small_en_placeholder",
+        sha1: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
         english_only: true,
     },
     ModelInfo {
         name: "small",
         size_mb: 466,
-        sha256: "sha256_small_placeholder",
+        sha1: "55356645c2b361a969dfd0ef2c5a50d530afd8d5",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
         english_only: false,
     },
     ModelInfo {
         name: "medium.en",
         size_mb: 1533,
-        sha256: "sha256_medium_en_placeholder",
+        sha1: "8c30f0e44ce9560643ebd10bbe50cd20eafd3723",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
         english_only: true,
     },
     ModelInfo {
         name: "medium",
         size_mb: 1533,
-        sha256: "sha256_medium_placeholder",
+        sha1: "fd9727b6e1217c2f614f9b698455c4ffd82463b4",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
         english_only: false,
     },
     ModelInfo {
         name: "large",
         size_mb: 3094,
-        sha256: "sha256_large_placeholder",
+        sha1: "b1caaf735c4cc1429223d5a74f0f4d0b9b59a299",
         url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large.bin",
         english_only: false,
     },
@@ -152,8 +152,8 @@ pub fn english_variant(name: &str) -> Option<&'static str> {
 ///
 /// Ensures a multilingual model is used when language is not English.
 pub fn resolve_model_for_language(model: &str, language: &str, quiet: bool) -> String {
-    let needs_multilingual =
-        language == crate::defaults::AUTO_LANGUAGE || (language != "en" && !language.is_empty());
+    let needs_multilingual = language == crate::defaults::AUTO_LANGUAGE
+        || (language != crate::defaults::ENGLISH_LANGUAGE && !language.is_empty());
     let is_english_only = model.ends_with(crate::defaults::ENGLISH_ONLY_SUFFIX);
 
     if needs_multilingual
