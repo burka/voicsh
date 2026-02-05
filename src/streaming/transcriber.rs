@@ -29,11 +29,11 @@ impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
 
     /// Transcribes a single chunk.
     pub fn transcribe(&self, chunk: &ChunkData) -> Result<TranscriptionResult> {
-        let text = self.transcriber.transcribe(&chunk.samples)?;
+        let output = self.transcriber.transcribe(&chunk.samples)?;
 
         Ok(TranscriptionResult {
             chunk_id: chunk.chunk_id,
-            text,
+            text: output.text,
             is_final: chunk.is_final,
         })
     }
@@ -45,7 +45,7 @@ impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
         let is_final = chunk.is_final;
 
         // Run blocking transcription on tokio's blocking thread pool
-        let result = tokio::task::spawn_blocking(move || transcriber.transcribe(&chunk.samples))
+        let output = tokio::task::spawn_blocking(move || transcriber.transcribe(&chunk.samples))
             .await
             .map_err(|e| VoicshError::Transcription {
                 message: format!("Transcription task panicked: {}", e),
@@ -53,7 +53,7 @@ impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
 
         Ok(TranscriptionResult {
             chunk_id,
-            text: result,
+            text: output.text,
             is_final,
         })
     }
@@ -94,13 +94,13 @@ impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
                         .await;
 
                 match result {
-                    Ok(Ok(text)) => {
-                        let result = TranscriptionResult {
+                    Ok(Ok(transcription)) => {
+                        let frame = TranscriptionResult {
                             chunk_id,
-                            text,
+                            text: transcription.text,
                             is_final,
                         };
-                        let _ = output.send(result).await;
+                        let _ = output.send(frame).await;
                     }
                     Ok(Err(e)) => {
                         eprintln!("Transcription error for chunk {}: {}", chunk_id, e);
@@ -126,7 +126,7 @@ impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stt::transcriber::Transcriber;
+    use crate::stt::transcriber::{Transcriber, TranscriptionResult as SttResult};
 
     /// Mock transcriber for testing.
     struct MockTranscriber {
@@ -142,8 +142,8 @@ mod tests {
     }
 
     impl Transcriber for MockTranscriber {
-        fn transcribe(&self, _samples: &[i16]) -> Result<String> {
-            Ok(self.response.clone())
+        fn transcribe(&self, _samples: &[i16]) -> Result<SttResult> {
+            Ok(SttResult::from_text(self.response.clone()))
         }
 
         fn model_name(&self) -> &str {
@@ -243,7 +243,7 @@ mod tests {
         }
 
         impl Transcriber for SlowTranscriber {
-            fn transcribe(&self, _samples: &[i16]) -> Result<String> {
+            fn transcribe(&self, _samples: &[i16]) -> Result<SttResult> {
                 let current = self.concurrent.fetch_add(1, Ordering::SeqCst) + 1;
                 self.max_concurrent.fetch_max(current, Ordering::SeqCst);
 
@@ -251,7 +251,7 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(50));
 
                 self.concurrent.fetch_sub(1, Ordering::SeqCst);
-                Ok("result".to_string())
+                Ok(SttResult::from_text("result".to_string()))
             }
 
             fn model_name(&self) -> &str {

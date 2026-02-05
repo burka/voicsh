@@ -67,13 +67,13 @@ impl Station for TranscriberStation {
         }
 
         // Attempt transcription
-        let raw_text = self
+        let result = self
             .transcriber
             .transcribe(&chunk.samples)
             .map_err(|e| StationError::Recoverable(format!("Transcription failed: {}", e)))?;
 
         // Clean Whisper markers
-        let cleaned_text = clean_transcription(&raw_text);
+        let cleaned_text = clean_transcription(&result.text);
 
         // Skip empty results
         if cleaned_text.is_empty() {
@@ -94,6 +94,7 @@ impl Station for TranscriberStation {
 mod tests {
     use super::*;
     use crate::error::{Result, VoicshError};
+    use crate::stt::transcriber::TranscriptionResult;
 
     struct MockTranscriber {
         response: String,
@@ -101,13 +102,13 @@ mod tests {
     }
 
     impl Transcriber for MockTranscriber {
-        fn transcribe(&self, _samples: &[i16]) -> Result<String> {
+        fn transcribe(&self, _samples: &[i16]) -> Result<TranscriptionResult> {
             if self.should_fail {
                 Err(VoicshError::Transcription {
                     message: "Mock error".to_string(),
                 })
             } else {
-                Ok(self.response.clone())
+                Ok(TranscriptionResult::from_text(self.response.clone()))
             }
         }
 

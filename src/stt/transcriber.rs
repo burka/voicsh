@@ -3,6 +3,28 @@ use crate::error::{Result, VoicshError};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Result of a transcription, including detected language and confidence.
+#[derive(Debug, Clone)]
+pub struct TranscriptionResult {
+    /// The transcribed text.
+    pub text: String,
+    /// Detected or configured language code (e.g., "en", "de"). Empty if unknown.
+    pub language: String,
+    /// Confidence score in 0.0..1.0, derived from segment probabilities.
+    pub confidence: f32,
+}
+
+impl TranscriptionResult {
+    /// Create a result with just text (unknown language, full confidence).
+    pub fn from_text(text: String) -> Self {
+        Self {
+            text,
+            language: String::new(),
+            confidence: 1.0,
+        }
+    }
+}
+
 /// Trait for speech-to-text transcription.
 ///
 /// This trait allows swapping implementations (real Whisper vs mock).
@@ -13,8 +35,8 @@ pub trait Transcriber: Send + Sync {
     /// * `audio` - Audio samples as 16-bit PCM at 16kHz mono
     ///
     /// # Returns
-    /// Transcribed text or error
-    fn transcribe(&self, audio: &[i16]) -> Result<String>;
+    /// Transcription result with text, language, and confidence — or error
+    fn transcribe(&self, audio: &[i16]) -> Result<TranscriptionResult>;
 
     /// Get the name of the loaded model
     fn model_name(&self) -> &str;
@@ -25,7 +47,7 @@ pub trait Transcriber: Send + Sync {
 
 /// Implement `Transcriber` for `Arc<T>` to allow sharing across sessions.
 impl<T: Transcriber + ?Sized> Transcriber for Arc<T> {
-    fn transcribe(&self, audio: &[i16]) -> Result<String> {
+    fn transcribe(&self, audio: &[i16]) -> Result<TranscriptionResult> {
         (**self).transcribe(audio)
     }
 
@@ -86,13 +108,13 @@ impl MockTranscriber {
 }
 
 impl Transcriber for MockTranscriber {
-    fn transcribe(&self, _audio: &[i16]) -> Result<String> {
+    fn transcribe(&self, _audio: &[i16]) -> Result<TranscriptionResult> {
         if self.should_fail {
             Err(VoicshError::Transcription {
                 message: "mock transcription failure".to_string(),
             })
         } else {
-            Ok(self.response.clone())
+            Ok(TranscriptionResult::from_text(self.response.clone()))
         }
     }
 
@@ -117,7 +139,10 @@ mod tests {
         let result = transcriber.transcribe(&audio);
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "Hello, this is a test");
+        let output = result.unwrap();
+        assert_eq!(output.text, "Hello, this is a test");
+        assert_eq!(output.confidence, 1.0);
+        assert!(output.language.is_empty());
     }
 
     #[test]
@@ -163,7 +188,7 @@ mod tests {
         let audio = vec![0i16; 100];
         let result = transcriber.transcribe(&audio);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "boxed test");
+        assert_eq!(result.unwrap().text, "boxed test");
     }
 
     #[test]
@@ -192,7 +217,7 @@ mod tests {
 
         let audio = vec![0i16; 10];
         let result = transcriber.transcribe(&audio).unwrap();
-        assert_eq!(result, "second response");
+        assert_eq!(result.text, "second response");
     }
 
     #[test]
@@ -213,6 +238,6 @@ mod tests {
         let result = transcriber.transcribe(&audio);
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "long audio transcription");
+        assert_eq!(result.unwrap().text, "long audio transcription");
     }
 }

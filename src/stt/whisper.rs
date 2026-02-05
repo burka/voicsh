@@ -13,7 +13,7 @@
 
 use crate::defaults;
 use crate::error::{Result, VoicshError};
-use crate::stt::transcriber::Transcriber;
+use crate::stt::transcriber::{Transcriber, TranscriptionResult};
 use std::path::PathBuf;
 
 #[cfg(feature = "whisper")]
@@ -196,7 +196,7 @@ impl WhisperTranscriber {
 
 #[cfg(feature = "whisper")]
 impl Transcriber for WhisperTranscriber {
-    fn transcribe(&self, audio: &[i16]) -> Result<String> {
+    fn transcribe(&self, audio: &[i16]) -> Result<TranscriptionResult> {
         // Convert audio format from i16 to f32
         let audio_f32 = Self::convert_audio(audio);
 
@@ -220,7 +220,11 @@ impl Transcriber for WhisperTranscriber {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
         // Set language
-        params.set_language(Some(&self.config.language));
+        if self.config.language == "auto" {
+            params.set_language(None);
+        } else {
+            params.set_language(Some(&self.config.language));
+        }
 
         // Set number of threads if specified
         if let Some(threads) = self.config.threads {
@@ -240,14 +244,32 @@ impl Transcriber for WhisperTranscriber {
                 message: format!("Whisper inference failed: {}", e),
             })?;
 
-        // Extract transcribed text from all segments using iterator API
+        // Extract detected language
+        let lang_id = state.full_lang_id_from_state();
+        let language = whisper_rs::get_lang_str(lang_id).unwrap_or("").to_string();
+
+        // Extract transcribed text and compute confidence from segment probabilities
         let mut transcription = String::new();
+        let mut confidence_sum = 0.0_f32;
+        let mut segment_count = 0u32;
         for segment in state.as_iter() {
             transcription.push_str(&segment.to_string());
+            // no_speech_probability is 0.0..1.0; confidence = 1 - no_speech_prob
+            confidence_sum += 1.0 - segment.no_speech_probability();
+            segment_count += 1;
         }
 
-        // Trim whitespace from the result
-        Ok(transcription.trim().to_string())
+        let confidence = if segment_count > 0 {
+            (confidence_sum / segment_count as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        Ok(TranscriptionResult {
+            text: transcription.trim().to_string(),
+            language,
+            confidence,
+        })
     }
 
     fn model_name(&self) -> &str {
@@ -262,7 +284,7 @@ impl Transcriber for WhisperTranscriber {
 
 #[cfg(not(feature = "whisper"))]
 impl Transcriber for WhisperTranscriber {
-    fn transcribe(&self, _audio: &[i16]) -> Result<String> {
+    fn transcribe(&self, _audio: &[i16]) -> Result<TranscriptionResult> {
         Err(VoicshError::TranscriptionInferenceFailed {
             message: concat!(
                 "Whisper feature not enabled. This binary was built without speech recognition.\n",
@@ -467,9 +489,12 @@ mod tests {
         let result = transcriber.transcribe(&audio);
 
         assert!(result.is_ok());
-        let text = result.unwrap();
+        let output = result.unwrap();
         // Silent audio should produce empty or minimal transcription
-        println!("Transcription result: '{}'", text);
+        println!(
+            "Transcription result: '{}' (lang={}, conf={})",
+            output.text, output.language, output.confidence
+        );
     }
 
     #[test]
