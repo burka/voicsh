@@ -6,8 +6,8 @@ Phased development plan from MVP to full-featured voice typing application.
 
 | Phase | Focus | Status |
 |-------|-------|--------|
-| **MVP** | Core voice loop | Planned |
-| **Phase 2** | Essential UX | Planned |
+| **MVP** | Core voice loop | Done |
+| **Phase 2** | Essential UX | In Progress |
 | **Phase 3** | Text Intelligence | Planned |
 | **Phase 4** | Advanced Features | Future |
 
@@ -19,22 +19,22 @@ Phased development plan from MVP to full-featured voice typing application.
 
 ### Deliverables
 
-- [ ] **Project scaffold**: Cargo.toml, module structure, CI/CD
-- [ ] **Audio capture**: cpal-based recording at 16kHz mono, device selection
-- [ ] **Voice Activity Detection**: RMS threshold, configurable silence duration, manual stop
-- [ ] **STT integration**: whisper-rs, hardcoded model path, basic post-processing
-- [ ] **Text injection**: Wayland (wl-copy + ydotool), X11 (xsel + xdotool), auto-detection
-- [ ] **CLI**: `voicsh record`, `voicsh devices`, `--version`/`--help`
-- [ ] **Configuration**: TOML config, environment overrides, sensible defaults
+- [x] **Project scaffold**: Cargo.toml, module structure, CI/CD
+- [x] **Audio capture**: cpal-based recording at 16kHz mono, device selection
+- [x] **Voice Activity Detection**: RMS threshold, configurable silence duration, manual stop
+- [x] **STT integration**: whisper-rs, hardcoded model path, basic post-processing
+- [x] **Text injection**: Wayland (wl-copy + ydotool), X11 (xsel + xdotool), auto-detection
+- [x] **CLI**: `voicsh record`, `voicsh devices`, `--version`/`--help`
+- [x] **Configuration**: TOML config, environment overrides, sensible defaults
 
 ### Success Criteria
 
-- [ ] `voicsh record` captures audio and outputs transcription
-- [ ] Text appears in focused application after recording
-- [ ] Works on Wayland (GNOME, KDE, Sway)
-- [ ] Latency < 500ms from silence detection to text
-- [ ] No crashes during 30-minute session
-- [ ] Base.en model produces >90% accuracy for clear speech
+- [x] `voicsh record` captures audio and outputs transcription
+- [x] Text appears in focused application after recording
+- [x] Works on Wayland (GNOME, KDE, Sway)
+- [x] Latency < 500ms from silence detection to text
+- [x] No crashes during 30-minute session
+- [x] Base.en model produces >90% accuracy for clear speech
 
 ---
 
@@ -44,11 +44,11 @@ Phased development plan from MVP to full-featured voice typing application.
 
 ### Model Management
 
-- [ ] Auto-download from HuggingFace with progress bar
-- [ ] SHA-256 verification, retry on failure
-- [ ] Model catalog: tiny.en, base.en, small.en, medium.en, large + quantized
-- [ ] CLI: `voicsh models list/install/remove/use`
-- [ ] XDG-compliant cache at `~/.cache/voicsh/models/`
+- [x] Auto-download from HuggingFace with progress bar
+- [x] SHA-256 verification, retry on failure
+- [x] Model catalog: tiny.en, base.en, small.en, medium.en, large + quantized
+- [x] CLI: `voicsh models list/install/remove/use`
+- [x] XDG-compliant cache at `~/.cache/voicsh/models/`
 
 ### Daemon Mode
 
@@ -135,6 +135,8 @@ Phased development plan from MVP to full-featured voice typing application.
 
 **Goal**: Low-latency continuous transcription with chunked processing
 
+**Status**: Core continuous pipeline with station-based architecture is implemented in `src/pipeline/`. Real-time word-by-word display, whisper.cpp WebSocket, and live correction remain future work.
+
 ```
 ┌─────────────┐    ┌─────────────┐    ┌──────────┐    ┌───────────┐    ┌─────────┐
 │  Continuous │───▶│  Silence    │───▶│ Chunker  │───▶│Transcriber│───▶│ Stitcher│───▶ Inject
@@ -147,19 +149,19 @@ Phased development plan from MVP to full-featured voice typing application.
                               on silence)
 ```
 
-- [ ] **Ring buffer audio capture**
+- [x] **Ring buffer audio capture**
   - Continuous recording to circular buffer
   - Never stops until user ends session
   - Decoupled from transcription timing
 
-- [ ] **Silence detector (separate station)**
+- [x] **Silence detector (separate station)**
   - Monitors audio stream for pauses
   - Sends control frames to chunker:
     - `FlushChunk` - silence detected, process current buffer immediately
     - `SpeechStart` - speech resumed after silence
   - Configurable silence threshold and duration
 
-- [ ] **Chunker**
+- [x] **Chunker**
   - Receives audio data + control frames
   - Emits chunks on:
     - Time threshold reached (~3s default)
@@ -167,7 +169,7 @@ Phased development plan from MVP to full-featured voice typing application.
   - `--chunk-size=N` / `-s N` CLI override
   - Small overlap between chunks for word continuity (~200ms)
 
-- [ ] **Async transcription pipeline**
+- [x] **Async transcription pipeline**
   - Process chunks as they arrive
   - Don't block recording while transcribing
   - Queue management for slow transcription
@@ -177,7 +179,7 @@ Phased development plan from MVP to full-featured voice typing application.
   - Handle word boundaries (avoid duplicates/cuts)
   - Punctuation continuity
 
-- [ ] **Auto-leveling / AGC** (after chunking works)
+- [x] **Auto-leveling / AGC** (after chunking works)
   - Automatic gain control for varying input volumes
   - Normalize audio before transcription
   - Adaptive threshold based on ambient noise
@@ -296,6 +298,9 @@ Phased development plan from MVP to full-featured voice typing application.
 ## Changelog
 
 ### Unreleased
-- Initial project planning
-- Architecture documentation
-- Roadmap definition
+- Unified pipeline architecture (src/pipeline/) with pluggable TextSink
+- Feature-gated dependencies (cpal-audio, whisper, model-download, cli)
+- InjectorSink for voice typing, CollectorSink for text collection
+- Pipeline API: Pipeline::start(source, transcriber, sink) → PipelineHandle
+- --once mode now uses same pipeline with CollectorSink
+- Lib-only build support with --no-default-features

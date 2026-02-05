@@ -23,9 +23,10 @@ Build in dependency order (most testable first):
 | 6 | `audio/recorder.rs` | MEDIUM - trait mock | developer |
 | 7 | `stt/whisper.rs` | MEDIUM - trait mock | developer |
 | 8 | `input/injector.rs` | MEDIUM - mock subprocess | developer |
-| 9 | `ipc/server.rs` | MEDIUM - async socket | developer |
-| 10 | `cli.rs` | MEDIUM - arg parsing | junior |
-| 11 | `main.rs` | LOW - integration | developer |
+| 9 | `pipeline/sink.rs` | MEDIUM - trait mock | developer |
+| 10 | `ipc/server.rs` | MEDIUM - async socket | developer |
+| 11 | `cli.rs` | MEDIUM - arg parsing | junior |
+| 12 | `main.rs` | LOW - integration | developer |
 
 ## Test Strategy
 
@@ -47,12 +48,14 @@ All external dependencies behind traits:
 AudioSource      → MockAudioSource (returns predefined samples)
 Transcriber      → MockTranscriber (returns predefined text)
 CommandExecutor  → RecordingExecutor (captures calls, verifies args)
+TextSink         → CollectorSink (accumulates text, returns on finish())
 ```
 
 ## Quality Checks
 
 ### Before Every Commit
 ```bash
+cargo build --no-default-features --lib  # Verify lib compiles without heavy deps
 cargo fmt && cargo clippy -- -D warnings && cargo test
 ```
 

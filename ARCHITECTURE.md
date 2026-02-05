@@ -30,8 +30,8 @@ Technical architecture of voic.sh, a Rust-based voice typing application for Lin
 │         │                                        │                        │
 │         │                                        ▼                        │
 │         │                               ┌──────────────┐                  │
-│         │                               │   Injector   │                  │
-│         │                               │  (ydotool)   │                  │
+│         │                               │  TextSink    │                  │
+│         │                               │ (pluggable)  │                  │
 │         │                               └──────────────┘                  │
 │         │                                        │                        │
 │         ▼                                        ▼                        │
@@ -71,7 +71,7 @@ External:
 
 **Purpose**: Capture microphone input at 16kHz mono
 
-**Location**: `src/audio/recorder.rs`
+**Location**: Trait defined in `src/audio/recorder.rs`; cpal implementation in `src/audio/capture.rs` (feature-gated behind `cpal-audio`)
 
 **Audio Format** (Whisper requirement):
 - Sample rate: 16,000 Hz
@@ -118,26 +118,26 @@ External:
 
 **Alternative**: HTTP to whisper.cpp server for lowest latency when model is large
 
-### 5. Text Injector
+### 5. Text Output (TextSink)
 
-**Purpose**: Insert transcribed text into the focused application
+**Purpose**: Handle transcribed text output through pluggable sinks
 
-**Location**: `src/input/injector.rs`
+**Location**: `src/pipeline/sink.rs`
 
-**Input Methods**:
-- **Clipboard** (default): Copy to clipboard, simulate Ctrl+V - more reliable
-- **Direct**: Type characters directly - faster but less reliable with special chars
-
-**Session Detection**: Checks `XDG_SESSION_TYPE`, `WAYLAND_DISPLAY`, `DISPLAY`
-
-**External Tools**:
-- Wayland: `wl-copy` + `ydotool`
-- X11: `xsel` + `xdotool`
-
-**Why Clipboard Method is Default**:
-- More reliable character encoding (UTF-8 handled correctly)
-- Works with all applications
-- No issues with special characters
+**Built-in Implementations**:
+- **InjectorSink** — Inserts text into focused application (default for continuous mode)
+  - Input Methods:
+    - **Clipboard** (default): Copy to clipboard, simulate Ctrl+V - more reliable
+    - **Direct**: Type characters directly - faster but less reliable with special chars
+  - Session Detection: Checks `XDG_SESSION_TYPE`, `WAYLAND_DISPLAY`, `DISPLAY`
+  - External Tools:
+    - Wayland: `wl-copy` + `ydotool`
+    - X11: `xsel` + `xdotool`
+  - Why Clipboard is Default:
+    - More reliable character encoding (UTF-8 handled correctly)
+    - Works with all applications
+    - No issues with special characters
+- **CollectorSink** — Accumulates text and returns it on shutdown (for `--once` mode and library use)
 
 ### 6. LLM Refinement (Optional)
 
