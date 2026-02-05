@@ -2,21 +2,41 @@
 //!
 //! Offline-first voice-to-text with optional LLM refinement.
 
-pub mod app;
 pub mod audio;
+#[cfg(feature = "cli")]
 pub mod cli;
 pub mod config;
 pub mod defaults;
+#[cfg(feature = "cli")]
 pub mod diagnostics;
 pub mod error;
 pub mod input;
 pub mod ipc;
+#[cfg(feature = "model-download")]
 pub mod models;
 pub mod pipeline;
 pub mod streaming;
 pub mod stt;
 
-// Re-export key traits for external consumers
+// L4 composition root - needs everything
+#[cfg(all(feature = "cpal-audio", feature = "model-download", feature = "cli"))]
+pub mod app;
+
+// Core traits (source → process → sink)
 pub use audio::recorder::AudioSource;
 pub use input::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
+pub use pipeline::sink::{CollectorSink, InjectorSink, TextSink};
 pub use stt::transcriber::Transcriber;
+
+// Pipeline
+pub use pipeline::orchestrator::{Pipeline, PipelineConfig, PipelineHandle};
+
+// Error handling
+pub use error::{Result, VoicshError};
+
+// Config
+pub use config::{Config, InputMethod};
+
+// Station framework (for advanced users)
+pub use pipeline::error::{ErrorReporter, StationError};
+pub use pipeline::station::Station;

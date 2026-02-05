@@ -1,14 +1,14 @@
-//! Continuous audio pipeline that runs from startup until shutdown.
+//! Audio pipeline that runs from startup until shutdown.
 
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
-use crate::config::InputMethod;
 use crate::error::Result;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::error::{ErrorReporter, LogReporter};
+use crate::pipeline::sink::{SinkStation, TextSink};
 use crate::pipeline::station::StationRunner;
 use crate::pipeline::types::AudioFrame;
-use crate::pipeline::{ChunkerStation, InjectorStation, TranscriberStation, VadStation};
+use crate::pipeline::{ChunkerStation, TranscriberStation, VadStation};
 use crate::stt::transcriber::Transcriber;
 use crossbeam_channel::bounded;
 use std::sync::Arc;
@@ -16,9 +16,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-/// Configuration for the continuous pipeline.
+/// Configuration for the pipeline.
 #[derive(Debug, Clone)]
-pub struct ContinuousPipelineConfig {
+pub struct PipelineConfig {
     /// VAD configuration
     pub vad: VadConfig,
     /// Chunker configuration
@@ -29,10 +29,6 @@ pub struct ContinuousPipelineConfig {
     pub auto_level: bool,
     /// Suppress output messages
     pub quiet: bool,
-    /// Text injection method
-    pub input_method: InputMethod,
-    /// Paste key: "auto" for auto-detection, or explicit like "ctrl+v"
-    pub paste_key: String,
     /// Sample rate
     pub sample_rate: u32,
     /// Channel buffer sizes
@@ -42,7 +38,7 @@ pub struct ContinuousPipelineConfig {
     pub transcribe_buffer: usize,
 }
 
-impl Default for ContinuousPipelineConfig {
+impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
             vad: VadConfig::default(),
@@ -50,8 +46,6 @@ impl Default for ContinuousPipelineConfig {
             show_levels: false,
             auto_level: true,
             quiet: false,
-            input_method: InputMethod::Clipboard,
-            paste_key: "auto".to_string(),
             sample_rate: 16000,
             audio_buffer: 32,
             vad_buffer: 16,
@@ -61,17 +55,19 @@ impl Default for ContinuousPipelineConfig {
     }
 }
 
-/// Handle to a running continuous pipeline.
-pub struct ContinuousPipelineHandle {
+/// Handle to a running pipeline.
+pub struct PipelineHandle {
     /// Flag to signal shutdown
     running: Arc<AtomicBool>,
     /// Join handles for spawned threads
     threads: Vec<JoinHandle<()>>,
+    /// Receiver for sink's finish() result
+    result_rx: Option<crossbeam_channel::Receiver<Option<String>>>,
 }
 
-impl ContinuousPipelineHandle {
-    /// Stops the pipeline gracefully.
-    pub fn stop(mut self) {
+impl PipelineHandle {
+    /// Stops the pipeline gracefully and returns the sink's accumulated result.
+    pub fn stop(mut self) -> Option<String> {
         // Signal shutdown
         self.running.store(false, Ordering::SeqCst);
 
@@ -79,6 +75,9 @@ impl ContinuousPipelineHandle {
         for handle in self.threads.drain(..) {
             let _ = handle.join();
         }
+
+        // Receive sink's finish() result
+        self.result_rx.and_then(|rx| rx.recv().ok().flatten())
     }
 
     /// Returns true if the pipeline is running.
@@ -87,15 +86,15 @@ impl ContinuousPipelineHandle {
     }
 }
 
-/// Continuous audio pipeline.
-pub struct ContinuousPipeline {
-    config: ContinuousPipelineConfig,
+/// Audio pipeline: AudioSource → VAD → Chunker → Transcriber → TextSink.
+pub struct Pipeline {
+    config: PipelineConfig,
     error_reporter: Arc<dyn ErrorReporter>,
 }
 
-impl ContinuousPipeline {
-    /// Creates a new continuous pipeline with default error reporter.
-    pub fn new(config: ContinuousPipelineConfig) -> Self {
+impl Pipeline {
+    /// Creates a new pipeline with default error reporter.
+    pub fn new(config: PipelineConfig) -> Self {
         Self {
             config,
             error_reporter: Arc::new(LogReporter),
@@ -108,11 +107,12 @@ impl ContinuousPipeline {
         self
     }
 
-    /// Starts the continuous pipeline.
+    /// Starts the pipeline.
     ///
     /// # Arguments
     /// * `audio_source` - Audio capture source
     /// * `transcriber` - Transcriber for speech-to-text
+    /// * `sink` - Text output handler (injector, collector, etc.)
     ///
     /// # Returns
     /// Handle to control and stop the pipeline
@@ -120,7 +120,8 @@ impl ContinuousPipeline {
         self,
         mut audio_source: Box<dyn AudioSource>,
         transcriber: Arc<dyn Transcriber>,
-    ) -> Result<ContinuousPipelineHandle> {
+        sink: Box<dyn TextSink>,
+    ) -> Result<PipelineHandle> {
         let running = Arc::new(AtomicBool::new(true));
         let sequence = Arc::new(AtomicU64::new(0));
 
@@ -143,10 +144,10 @@ impl ContinuousPipeline {
         let transcriber_station =
             TranscriberStation::new(transcriber).with_verbose(self.config.show_levels);
 
-        let injector_station =
-            InjectorStation::system(self.config.input_method, self.config.paste_key)
-                .with_quiet(self.config.quiet)
-                .with_verbose(self.config.show_levels);
+        // Create sink station with result channel
+        let (result_tx, result_rx) = bounded(1);
+        let sink_station =
+            SinkStation::new(sink, self.config.quiet, self.config.show_levels, result_tx);
 
         // Spawn station runners
         let vad_runner =
@@ -167,20 +168,23 @@ impl ContinuousPipeline {
         );
 
         // For the terminal station, create a dummy output channel
-        let (inject_tx, inject_rx) = bounded::<()>(self.config.transcribe_buffer);
+        let (sink_out_tx, sink_out_rx) = bounded::<()>(self.config.transcribe_buffer);
 
-        let injector_runner = StationRunner::spawn(
-            injector_station,
+        let sink_runner = StationRunner::spawn(
+            sink_station,
             transcribe_rx,
-            inject_tx,
+            sink_out_tx,
             self.error_reporter.clone(),
         );
 
-        // Drain the inject_rx in a separate thread
+        // Drain the sink output in a separate thread
         let drain_running = running.clone();
         let drain_handle = thread::spawn(move || {
             while drain_running.load(Ordering::SeqCst) {
-                if inject_rx.recv_timeout(Duration::from_millis(100)).is_err() {
+                if sink_out_rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .is_err()
+                {
                     // Timeout or disconnected - check if we should exit
                     if !drain_running.load(Ordering::SeqCst) {
                         break;
@@ -252,10 +256,14 @@ impl ContinuousPipeline {
             let _ = transcriber_runner.join();
         }));
         threads.push(thread::spawn(move || {
-            let _ = injector_runner.join();
+            let _ = sink_runner.join();
         }));
 
-        Ok(ContinuousPipelineHandle { running, threads })
+        Ok(PipelineHandle {
+            running,
+            threads,
+            result_rx: Some(result_rx),
+        })
     }
 }
 
@@ -265,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_config_default() {
-        let config = ContinuousPipelineConfig::default();
+        let config = PipelineConfig::default();
         assert_eq!(config.audio_buffer, 32);
         assert_eq!(config.sample_rate, 16000);
         assert_eq!(config.vad_buffer, 16);
@@ -278,23 +286,23 @@ mod tests {
 
     #[test]
     fn test_pipeline_creation() {
-        let config = ContinuousPipelineConfig::default();
-        let pipeline = ContinuousPipeline::new(config);
+        let config = PipelineConfig::default();
+        let pipeline = Pipeline::new(config);
         // Verify it compiles and doesn't panic
         drop(pipeline);
     }
 
     #[test]
     fn test_pipeline_with_custom_error_reporter() {
-        let config = ContinuousPipelineConfig::default();
+        let config = PipelineConfig::default();
         let reporter = Arc::new(LogReporter);
-        let pipeline = ContinuousPipeline::new(config).with_error_reporter(reporter);
+        let pipeline = Pipeline::new(config).with_error_reporter(reporter);
         drop(pipeline);
     }
 
     #[test]
     fn test_config_builder_pattern() {
-        let config = ContinuousPipelineConfig {
+        let config = PipelineConfig {
             show_levels: true,
             auto_level: false,
             quiet: true,
@@ -313,14 +321,28 @@ mod tests {
     #[test]
     fn test_handle_is_running() {
         let running = Arc::new(AtomicBool::new(true));
-        let handle = ContinuousPipelineHandle {
+        let handle = PipelineHandle {
             running: running.clone(),
             threads: vec![],
+            result_rx: None,
         };
 
         assert!(handle.is_running());
 
         running.store(false, Ordering::SeqCst);
         assert!(!handle.is_running());
+    }
+
+    #[test]
+    fn test_handle_stop_returns_none_without_result() {
+        let running = Arc::new(AtomicBool::new(true));
+        let handle = PipelineHandle {
+            running,
+            threads: vec![],
+            result_rx: None,
+        };
+
+        let result = handle.stop();
+        assert!(result.is_none());
     }
 }

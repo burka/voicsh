@@ -1,4 +1,4 @@
-//! Voice typing pipeline implementation.
+//! Voice typing application entry point.
 //!
 //! Orchestrates the complete voice-to-text flow:
 //! record → transcribe → inject
@@ -6,16 +6,15 @@
 use crate::audio::capture::{CpalAudioSource, suppress_audio_warnings};
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
-use crate::config::{Config, InputMethod};
+use crate::config::Config;
 use crate::error::{Result, VoicshError};
-use crate::input::injector::TextInjector;
 use crate::models::catalog::get_model;
 use crate::models::download::{
     download_model, find_any_installed_model, is_model_installed, model_path,
 };
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
-use crate::pipeline::orchestrator::{ContinuousPipeline, ContinuousPipelineConfig};
-use crate::streaming::{StreamingPipeline, StreamingPipelineConfig};
+use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
+use crate::pipeline::sink::{CollectorSink, InjectorSink};
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 use std::path::PathBuf;
@@ -33,7 +32,7 @@ use std::sync::Arc;
 /// * `verbose` - Show detailed output (chunk progress)
 /// * `no_download` - Prevent automatic model download
 /// * `once` - Exit after first transcription (default: loop continuously)
-/// * `chunk_size` - Chunk duration in seconds (0 = no chunking, transcribe all at once)
+/// * `chunk_size` - Chunk duration in seconds (unused for now, reserved)
 ///
 /// # Returns
 /// Ok(()) on success, or an error if any step fails
@@ -47,7 +46,7 @@ pub async fn run_record_command(
     verbose: bool,
     no_download: bool,
     once: bool,
-    chunk_size: u32,
+    _chunk_size: u32,
 ) -> Result<()> {
     // Suppress noisy JACK/ALSA warnings before audio init
     suppress_audio_warnings();
@@ -76,12 +75,9 @@ pub async fn run_record_command(
         eprintln!("Ready. Listening...");
     }
 
-    // Use continuous pipeline for default mode, streaming for --once
     if once {
-        // Single recording session mode (legacy streaming pipeline)
-        run_single_session(&config, transcriber, quiet, verbose, chunk_size).await
+        run_single_session(&config, transcriber, quiet, verbose).await
     } else {
-        // Continuous mode - new pipeline that runs forever
         run_continuous(&config, transcriber, quiet, verbose).await
     }
 }
@@ -93,12 +89,10 @@ async fn run_continuous(
     quiet: bool,
     verbose: bool,
 ) -> Result<()> {
-    // Create audio source
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
 
-    // Create pipeline config
-    let pipeline_config = ContinuousPipelineConfig {
+    let pipeline_config = PipelineConfig {
         vad: VadConfig {
             speech_threshold: config.audio.vad_threshold,
             silence_duration_ms: config.audio.silence_duration_ms,
@@ -108,15 +102,14 @@ async fn run_continuous(
         show_levels: verbose,
         auto_level: true,
         quiet,
-        input_method: config.input.method.clone(),
-        paste_key: config.input.paste_key.clone(),
         sample_rate: 16000,
         ..Default::default()
     };
 
-    // Start pipeline
-    let pipeline = ContinuousPipeline::new(pipeline_config);
-    let handle = pipeline.start(audio_source, transcriber)?;
+    let sink = InjectorSink::system(config.input.method.clone(), config.input.paste_key.clone());
+
+    let pipeline = Pipeline::new(pipeline_config);
+    let handle = pipeline.start(audio_source, transcriber, Box::new(sink))?;
 
     // Wait for Ctrl+C
     tokio::signal::ctrl_c()
@@ -127,62 +120,62 @@ async fn run_continuous(
         eprintln!("\nShutting down...");
     }
 
-    // Stop pipeline gracefully
     handle.stop();
-
     Ok(())
 }
 
-/// Run a single recording session: record → transcribe → inject.
+/// Run a single recording session using CollectorSink.
+///
+/// Records until Ctrl+C, collects all transcriptions, then injects the result.
 async fn run_single_session(
     config: &Config,
     transcriber: Arc<dyn Transcriber>,
     quiet: bool,
     verbose: bool,
-    chunk_size: u32,
 ) -> Result<()> {
-    // Create audio source
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
 
-    // Configure pipeline
-    let chunk_duration_ms = chunk_size * 1000;
-
-    let pipeline_config = StreamingPipelineConfig::from_config(config)
-        .with_chunk_duration_ms(chunk_duration_ms)
-        .with_show_levels(verbose)
-        .with_auto_level(true);
-
-    let pipeline = StreamingPipeline::with_config(pipeline_config);
-
-    // Run pipeline - in verbose mode show chunks as they come in
-    let transcription = if verbose {
-        pipeline
-            .run_with_callback(audio_source, transcriber, |result| {
-                // Clear level meter line before printing chunk
-                eprint!("\r{:60}\r", "");
-                if !result.text.is_empty() {
-                    eprintln!("  > {}", result.text);
-                }
-            })
-            .await?
-    } else {
-        pipeline.run(audio_source, transcriber).await?
+    let pipeline_config = PipelineConfig {
+        vad: VadConfig {
+            speech_threshold: config.audio.vad_threshold,
+            silence_duration_ms: config.audio.silence_duration_ms,
+            ..Default::default()
+        },
+        chunker: AdaptiveChunkerConfig::default(),
+        show_levels: verbose,
+        auto_level: true,
+        quiet,
+        sample_rate: 16000,
+        ..Default::default()
     };
 
-    if transcription.is_empty() {
-        return Ok(());
-    }
+    let sink = CollectorSink::new();
+    let pipeline = Pipeline::new(pipeline_config);
+    let handle = pipeline.start(audio_source, transcriber, Box::new(sink))?;
 
-    // Show final transcription and inject
+    // Wait for Ctrl+C
+    tokio::signal::ctrl_c()
+        .await
+        .map_err(|e| VoicshError::Other(format!("Failed to wait for Ctrl+C: {}", e)))?;
+
     if !quiet {
-        eprintln!("\"{}\"", transcription);
+        eprintln!("\nProcessing...");
     }
 
-    inject_text(config, &transcription, false)?;
+    // Stop pipeline and get collected text
+    let transcription = handle.stop();
 
-    if !quiet && verbose {
-        eprintln!("  [injected]");
+    if let Some(text) = transcription
+        && !text.is_empty()
+    {
+        if !quiet {
+            eprintln!("\"{}\"", text);
+        }
+        inject_text(config, &text, verbose)?;
+        if !quiet && verbose {
+            eprintln!("  [injected]");
+        }
     }
 
     Ok(())
@@ -196,11 +189,9 @@ async fn create_transcriber(
 ) -> Result<WhisperTranscriber> {
     let configured_model = &config.stt.model;
 
-    // Determine which model to use
     let model_to_use = if is_model_installed(configured_model) {
         configured_model.to_string()
     } else if no_download {
-        // Can't download, try fallback
         if let Some(fallback) = find_any_installed_model() {
             if !quiet {
                 eprintln!(
@@ -219,7 +210,6 @@ async fn create_transcriber(
             });
         }
     } else {
-        // Auto-download the requested model
         if !quiet {
             eprintln!("Downloading model '{}'...", configured_model);
         }
@@ -243,13 +233,14 @@ async fn create_transcriber(
 /// Inject transcribed text using configured input method.
 fn inject_text(config: &Config, text: &str, verbose: bool) -> Result<()> {
     use crate::input::focused_window::resolve_paste_key;
+    use crate::input::injector::TextInjector;
 
     let injector = TextInjector::system();
     let paste_key = resolve_paste_key(&config.input.paste_key, verbose);
 
     match config.input.method {
-        InputMethod::Clipboard => injector.inject_via_clipboard(text, paste_key),
-        InputMethod::Direct => injector.inject_direct(text),
+        crate::config::InputMethod::Clipboard => injector.inject_via_clipboard(text, paste_key),
+        crate::config::InputMethod::Direct => injector.inject_direct(text),
     }
 }
 
@@ -257,17 +248,14 @@ fn inject_text(config: &Config, text: &str, verbose: bool) -> Result<()> {
 fn build_model_path(model: &str) -> Result<PathBuf> {
     let path = PathBuf::from(model);
 
-    // If it's an absolute path or exists as-is, use it directly
     if path.is_absolute() || path.exists() {
         return Ok(path);
     }
 
-    // If it contains a path separator, treat as relative path
     if model.contains('/') || model.contains('\\') {
         return Ok(path);
     }
 
-    // Check if it's a model name from the catalog
     if get_model(model).is_some() {
         if is_model_installed(model) {
             return Ok(model_path(model).expect("path should exist for installed model"));
@@ -281,7 +269,6 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
         });
     }
 
-    // Otherwise, treat as a custom model filename
     let model_filename = if model.ends_with(".bin") {
         model.to_string()
     } else {
@@ -293,14 +280,12 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
 
 /// Check that required system tools are available.
 fn check_prerequisites() -> Result<()> {
-    // Check for wl-copy (Wayland clipboard)
     if Command::new("wl-copy").arg("--version").output().is_err() {
         return Err(VoicshError::InjectionToolNotFound {
             tool: "wl-copy".to_string(),
         });
     }
 
-    // Test wtype
     let wtype_works = match Command::new("wtype").arg("").output() {
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -309,7 +294,6 @@ fn check_prerequisites() -> Result<()> {
         Err(_) => false,
     };
 
-    // Test ydotool
     let ydotool_works = match Command::new("ydotool").args(["type", "--help"]).output() {
         Ok(output) => {
             let stderr = String::from_utf8_lossy(&output.stderr);

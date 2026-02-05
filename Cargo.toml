@@ -25,30 +25,33 @@ anyhow = "1"
 crossbeam-channel = "0.5"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
 
 # Paths
-dirs = "5"
+dirs = { version = "5", optional = true }
 
 # System
 libc = "0.2"
 
 # Audio
-cpal = "0.15"
+cpal = { version = "0.15", optional = true }
 
 # HTTP client for model downloads
-reqwest = { version = "0.12", features = ["stream"] }
-sha2 = "0.10"
-indicatif = "0.17"
-futures-util = "0.3"
+reqwest = { version = "0.12", features = ["stream"], optional = true }
+sha2 = { version = "0.10", optional = true }
+indicatif = { version = "0.17", optional = true }
+futures-util = { version = "0.3", optional = true }
 
 # Speech-to-text (requires cmake to build)
 whisper-rs = { version = "0.15", optional = true }
 
 [features]
-# Whisper enabled by default - disable with --no-default-features for lib/testing
-default = ["whisper"]
+default = ["full"]
+full = ["whisper", "cpal-audio", "model-download", "cli"]
 whisper = ["whisper-rs"]
+cpal-audio = ["dep:cpal"]
+model-download = ["dep:reqwest", "dep:sha2", "dep:indicatif", "dep:futures-util"]
+cli = ["dep:clap", "dep:dirs"]
 
 [dev-dependencies]
 tempfile = "3"

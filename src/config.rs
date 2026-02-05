@@ -1,7 +1,9 @@
 use crate::defaults;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "cli")]
+use std::path::PathBuf;
 
 /// Root configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -139,6 +141,7 @@ impl Config {
     /// Get the default configuration file path
     ///
     /// Returns ~/.config/voicsh/config.toml on Linux
+    #[cfg(feature = "cli")]
     pub fn default_path() -> PathBuf {
         dirs::config_dir()
             .expect("Could not determine config directory")
@@ -327,6 +330,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "cli")]
     fn test_default_path_is_xdg_compliant() {
         let path = Config::default_path();
         let path_str = path.to_string_lossy();
