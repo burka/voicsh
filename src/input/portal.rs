@@ -30,6 +30,13 @@ pub(crate) trait KeySender: Send + Sync {
     async fn release_key(&self, code: i32) -> Result<()>;
 }
 
+/// Abstracts the D-Bus portal bootstrap sequence.
+#[async_trait::async_trait]
+pub(crate) trait PortalConnector: Send + Sync {
+    /// Create session, select devices, start, verify keyboard → KeySender.
+    async fn connect(&self) -> Result<Arc<dyn KeySender>>;
+}
+
 /// Real D-Bus KeySender wrapping ashpd RemoteDesktop proxy + session.
 struct PortalKeySender {
     proxy: RemoteDesktop<'static>,
@@ -80,6 +87,52 @@ async fn send_key_sequence(sender: &dyn KeySender, codes: &[i32]) -> Result<()> 
     Ok(())
 }
 
+/// Production connector using ashpd D-Bus RemoteDesktop portal.
+struct AshpdConnector;
+
+#[async_trait::async_trait]
+impl PortalConnector for AshpdConnector {
+    async fn connect(&self) -> Result<Arc<dyn KeySender>> {
+        let proxy = RemoteDesktop::new()
+            .await
+            .map_err(|e| VoicshError::Other(format!("Portal RemoteDesktop unavailable: {e}")))?;
+
+        let session = proxy
+            .create_session()
+            .await
+            .map_err(|e| VoicshError::Other(format!("Portal session creation failed: {e}")))?;
+
+        proxy
+            .select_devices(
+                &session,
+                DeviceType::Keyboard.into(),
+                None,
+                PersistMode::ExplicitlyRevoked,
+            )
+            .await
+            .map_err(|e| VoicshError::Other(format!("Portal device selection failed: {e}")))?
+            .response()
+            .map_err(|e| VoicshError::Other(format!("Portal device selection rejected: {e}")))?;
+
+        let response = proxy
+            .start(&session, None)
+            .await
+            .map_err(|e| VoicshError::Other(format!("Portal session start failed: {e}")))?
+            .response()
+            .map_err(|e| VoicshError::Other(format!("Portal session start rejected: {e}")))?;
+
+        let devices = response.devices();
+        if !devices.contains(DeviceType::Keyboard) {
+            return Err(VoicshError::Other(format!(
+                "Portal granted devices {:?} but keyboard not included",
+                devices
+            )));
+        }
+
+        Ok(Arc::new(PortalKeySender { proxy, session }))
+    }
+}
+
 /// Active RemoteDesktop portal session for keyboard input injection.
 ///
 /// Holds a `KeySender` (real D-Bus or mock) and a tokio `Handle`.
@@ -105,70 +158,19 @@ impl PortalSession {
     ///
     /// Returns `Err` if the portal is unavailable or the user denies access.
     pub async fn try_new() -> Result<Self> {
-        let handle = tokio::runtime::Handle::current();
-
-        // Fix stale D-Bus in long-lived tmux/byobu/screen sessions:
-        // our DBUS_SESSION_BUS_ADDRESS may point to a dead bus from a
-        // previous GNOME login. Refresh it from the running gnome-shell.
+        // Fix stale D-Bus in long-lived tmux/byobu/screen sessions
         if let Some(fresh_addr) = crate::input::focused_window::fresh_gnome_dbus_address() {
-            // SAFETY: called at startup before pipeline threads are spawned,
-            // so no concurrent env reads.
             unsafe {
                 std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
             }
         }
-
-        let proxy = RemoteDesktop::new()
-            .await
-            .map_err(|e| VoicshError::Other(format!("Portal RemoteDesktop unavailable: {e}")))?;
-
-        let session = proxy
-            .create_session()
-            .await
-            .map_err(|e| VoicshError::Other(format!("Portal session creation failed: {e}")))?;
-
-        proxy
-            .select_devices(
-                &session,
-                DeviceType::Keyboard.into(),
-                None,
-                PersistMode::ExplicitlyRevoked,
-            )
-            .await
-            .map_err(|e| VoicshError::Other(format!("Portal device selection failed: {e}")))?
-            .response()
-            .map_err(|e| VoicshError::Other(format!("Portal device selection rejected: {e}")))?;
-
-        // Start the session. On first run this shows a permission dialog.
-        // With PersistMode::ExplicitlyRevoked, subsequent runs skip it.
-        let response = proxy
-            .start(&session, None)
-            .await
-            .map_err(|e| VoicshError::Other(format!("Portal session start failed: {e}")))?
-            .response()
-            .map_err(|e| VoicshError::Other(format!("Portal session start rejected: {e}")))?;
-
-        // Verify keyboard access was actually granted
-        let devices = response.devices();
-        if !devices.contains(DeviceType::Keyboard) {
-            return Err(VoicshError::Other(format!(
-                "Portal granted devices {:?} but keyboard not included",
-                devices
-            )));
-        }
-
-        let key_sender = Arc::new(PortalKeySender { proxy, session });
-
-        Ok(Self { key_sender, handle })
+        Self::with_connector(&AshpdConnector).await
     }
 
-    /// Creates a PortalSession with a mock key sender (for testing).
-    #[cfg(test)]
-    fn with_key_sender(sender: Arc<dyn KeySender>, handle: tokio::runtime::Handle) -> Self {
-        Self {
-            key_sender: sender,
-            handle,
-        }
+    async fn with_connector(connector: &dyn PortalConnector) -> Result<Self> {
+        let handle = tokio::runtime::Handle::current();
+        let key_sender = connector.connect().await?;
+        Ok(Self { key_sender, handle })
     }
 
     /// Simulate a paste key combo via the portal.
@@ -249,6 +251,32 @@ mod tests {
                 .unwrap()
                 .push(("release".to_string(), code));
             Ok(())
+        }
+    }
+
+    /// Configurable connector for testing bootstrap error paths.
+    struct TestConnector {
+        result: std::sync::Mutex<Option<Result<Arc<dyn KeySender>>>>,
+    }
+
+    impl TestConnector {
+        fn success(sender: Arc<dyn KeySender>) -> Self {
+            Self {
+                result: std::sync::Mutex::new(Some(Ok(sender))),
+            }
+        }
+
+        fn failure(message: &str) -> Self {
+            Self {
+                result: std::sync::Mutex::new(Some(Err(VoicshError::Other(message.to_string())))),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PortalConnector for TestConnector {
+        async fn connect(&self) -> Result<Arc<dyn KeySender>> {
+            self.result.lock().unwrap().take().unwrap()
         }
     }
 
@@ -475,8 +503,8 @@ mod tests {
     #[tokio::test]
     async fn test_simulate_paste_with_mock() {
         let recorder = Arc::new(RecordingKeySender::new());
-        let handle = tokio::runtime::Handle::current();
-        let session = PortalSession::with_key_sender(recorder.clone(), handle);
+        let connector = TestConnector::success(recorder.clone());
+        let session = PortalSession::with_connector(&connector).await.unwrap();
 
         // Use spawn_blocking since simulate_paste calls block_on
         let recorder_clone = recorder.clone();
@@ -492,8 +520,8 @@ mod tests {
     #[tokio::test]
     async fn test_simulate_paste_invalid_key() {
         let recorder = Arc::new(RecordingKeySender::new());
-        let handle = tokio::runtime::Handle::current();
-        let session = PortalSession::with_key_sender(recorder.clone(), handle);
+        let connector = TestConnector::success(recorder.clone());
+        let session = PortalSession::with_connector(&connector).await.unwrap();
 
         let result = tokio::task::spawn_blocking(move || session.simulate_paste("alt+v"))
             .await
@@ -524,5 +552,81 @@ mod tests {
         assert_eq!(calls[3].1, keycodes::V);
         assert_eq!(calls[4].1, keycodes::LEFT_SHIFT);
         assert_eq!(calls[5].1, keycodes::LEFT_CTRL);
+    }
+
+    #[tokio::test]
+    async fn test_with_connector_success() {
+        let sender = Arc::new(RecordingKeySender::new());
+        let connector = TestConnector::success(sender.clone());
+        let session = PortalSession::with_connector(&connector).await.unwrap();
+
+        // Verify session works by simulating a paste
+        let result = tokio::task::spawn_blocking(move || session.simulate_paste("ctrl+v"))
+            .await
+            .unwrap();
+        assert!(result.is_ok());
+        let calls = sender.calls();
+        assert_eq!(calls.len(), 4); // press ctrl, press v, release v, release ctrl
+    }
+
+    #[tokio::test]
+    async fn test_with_connector_unavailable() {
+        let connector = TestConnector::failure("Portal RemoteDesktop unavailable");
+        let result = PortalSession::with_connector(&connector).await;
+        assert!(result.is_err());
+        match result {
+            Err(VoicshError::Other(msg)) => assert!(msg.contains("unavailable"), "Got: {msg}"),
+            _ => panic!("Expected Other error with unavailable message"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_with_connector_session_failed() {
+        let connector = TestConnector::failure("Portal session creation failed");
+        let result = PortalSession::with_connector(&connector).await;
+        assert!(result.is_err());
+        match result {
+            Err(VoicshError::Other(msg)) => {
+                assert!(msg.contains("session creation failed"), "Got: {msg}")
+            }
+            _ => panic!("Expected Other error with session creation failed message"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_with_connector_device_rejected() {
+        let connector = TestConnector::failure("Portal device selection rejected");
+        let result = PortalSession::with_connector(&connector).await;
+        assert!(result.is_err());
+        match result {
+            Err(VoicshError::Other(msg)) => {
+                assert!(msg.contains("device selection rejected"), "Got: {msg}")
+            }
+            _ => panic!("Expected Other error with device selection rejected message"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_with_connector_start_rejected() {
+        let connector = TestConnector::failure("Portal session start rejected");
+        let result = PortalSession::with_connector(&connector).await;
+        assert!(result.is_err());
+        match result {
+            Err(VoicshError::Other(msg)) => assert!(msg.contains("start rejected"), "Got: {msg}"),
+            _ => panic!("Expected Other error with start rejected message"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_with_connector_no_keyboard() {
+        let connector = TestConnector::failure("keyboard not included");
+        let result = PortalSession::with_connector(&connector).await;
+        assert!(result.is_err());
+        match result {
+            Err(VoicshError::Other(msg)) => {
+                assert!(msg.contains("keyboard not included"), "Got: {msg}")
+            }
+            _ => panic!("Expected Other error with keyboard not included message"),
+        }
     }
 }
