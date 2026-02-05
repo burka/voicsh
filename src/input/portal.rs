@@ -10,10 +10,11 @@ use crate::error::{Result, VoicshError};
 use ashpd::desktop::PersistMode;
 use ashpd::desktop::Session;
 use ashpd::desktop::remote_desktop::{DeviceType, KeyState, RemoteDesktop};
+use std::sync::Arc;
 
 /// Evdev keycodes for paste key simulation.
 /// These are standard Linux input event codes (from linux/input-event-codes.h).
-mod keycodes {
+pub(crate) mod keycodes {
     /// KEY_LEFTCTRL
     pub const LEFT_CTRL: i32 = 29;
     /// KEY_LEFTSHIFT
@@ -22,16 +23,72 @@ mod keycodes {
     pub const V: i32 = 47;
 }
 
+/// Trait for sending individual key events, enabling mock D-Bus in tests.
+#[async_trait::async_trait]
+pub(crate) trait KeySender: Send + Sync {
+    async fn press_key(&self, code: i32) -> Result<()>;
+    async fn release_key(&self, code: i32) -> Result<()>;
+}
+
+/// Real D-Bus KeySender wrapping ashpd RemoteDesktop proxy + session.
+struct PortalKeySender {
+    proxy: RemoteDesktop<'static>,
+    session: Session<'static, RemoteDesktop<'static>>,
+}
+
+#[async_trait::async_trait]
+impl KeySender for PortalKeySender {
+    async fn press_key(&self, code: i32) -> Result<()> {
+        self.proxy
+            .notify_keyboard_keycode(&self.session, code, KeyState::Pressed)
+            .await
+            .map_err(|e| VoicshError::InjectionFailed {
+                message: format!("Portal key press failed: {e}"),
+            })
+    }
+
+    async fn release_key(&self, code: i32) -> Result<()> {
+        self.proxy
+            .notify_keyboard_keycode(&self.session, code, KeyState::Released)
+            .await
+            .map_err(|e| VoicshError::InjectionFailed {
+                message: format!("Portal key release failed: {e}"),
+            })
+    }
+}
+
+/// Send a sequence of keycodes as press-all then release-all-reversed.
+///
+/// Small delays between events ensure the compositor registers the
+/// modifier+key combo (without delays, all events may arrive in the
+/// same input frame and the combo isn't recognized).
+async fn send_key_sequence(sender: &dyn KeySender, codes: &[i32]) -> Result<()> {
+    let delay = std::time::Duration::from_millis(5);
+
+    // Press all keys in order (modifier first, then key)
+    for &code in codes {
+        sender.press_key(code).await?;
+        tokio::time::sleep(delay).await;
+    }
+
+    // Release all keys in reverse order (key first, then modifier)
+    for &code in codes.iter().rev() {
+        sender.release_key(code).await?;
+        tokio::time::sleep(delay).await;
+    }
+
+    Ok(())
+}
+
 /// Active RemoteDesktop portal session for keyboard input injection.
 ///
-/// Holds the D-Bus proxy and session handle. The session remains active
-/// as long as this struct lives (the portal closes it on Drop via Session).
+/// Holds a `KeySender` (real D-Bus or mock) and a tokio `Handle`.
+/// The session remains active as long as this struct lives.
 ///
 /// Created via `try_new()` in an async context; `simulate_paste()` is sync
 /// (uses `Handle::block_on`) so it can be called from pipeline station threads.
 pub struct PortalSession {
-    proxy: RemoteDesktop<'static>,
-    session: Session<'static, RemoteDesktop<'static>>,
+    key_sender: Arc<dyn KeySender>,
     handle: tokio::runtime::Handle,
 }
 
@@ -100,11 +157,18 @@ impl PortalSession {
             )));
         }
 
-        Ok(Self {
-            proxy,
-            session,
+        let key_sender = Arc::new(PortalKeySender { proxy, session });
+
+        Ok(Self { key_sender, handle })
+    }
+
+    /// Creates a PortalSession with a mock key sender (for testing).
+    #[cfg(test)]
+    fn with_key_sender(sender: Arc<dyn KeySender>, handle: tokio::runtime::Handle) -> Self {
+        Self {
+            key_sender: sender,
             handle,
-        })
+        }
     }
 
     /// Simulate a paste key combo via the portal.
@@ -116,40 +180,8 @@ impl PortalSession {
     /// from pipeline station threads that are not tokio worker threads.
     pub fn simulate_paste(&self, paste_key: &str) -> Result<()> {
         let key_sequence = parse_paste_key(paste_key)?;
-        self.handle.block_on(self.send_key_sequence(&key_sequence))
-    }
-
-    /// Send a sequence of keycodes as press-all then release-all-reversed.
-    ///
-    /// Small delays between events ensure the compositor registers the
-    /// modifier+key combo (without delays, all events may arrive in the
-    /// same input frame and the combo isn't recognized).
-    async fn send_key_sequence(&self, codes: &[i32]) -> Result<()> {
-        let delay = std::time::Duration::from_millis(5);
-
-        // Press all keys in order (modifier first, then key)
-        for &code in codes {
-            self.proxy
-                .notify_keyboard_keycode(&self.session, code, KeyState::Pressed)
-                .await
-                .map_err(|e| VoicshError::InjectionFailed {
-                    message: format!("Portal key press failed: {e}"),
-                })?;
-            tokio::time::sleep(delay).await;
-        }
-
-        // Release all keys in reverse order (key first, then modifier)
-        for &code in codes.iter().rev() {
-            self.proxy
-                .notify_keyboard_keycode(&self.session, code, KeyState::Released)
-                .await
-                .map_err(|e| VoicshError::InjectionFailed {
-                    message: format!("Portal key release failed: {e}"),
-                })?;
-            tokio::time::sleep(delay).await;
-        }
-
-        Ok(())
+        self.handle
+            .block_on(send_key_sequence(self.key_sender.as_ref(), &key_sequence))
     }
 }
 
@@ -186,6 +218,39 @@ fn parse_paste_key(paste_key: &str) -> Result<Vec<i32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mock KeySender that records all press/release calls for test verification.
+    struct RecordingKeySender {
+        calls: std::sync::Mutex<Vec<(String, i32)>>,
+    }
+
+    impl RecordingKeySender {
+        fn new() -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<(String, i32)> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl KeySender for RecordingKeySender {
+        async fn press_key(&self, code: i32) -> Result<()> {
+            self.calls.lock().unwrap().push(("press".to_string(), code));
+            Ok(())
+        }
+
+        async fn release_key(&self, code: i32) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("release".to_string(), code));
+            Ok(())
+        }
+    }
 
     #[test]
     fn parse_ctrl_v() {
@@ -343,5 +408,121 @@ mod tests {
         assert_eq!(keycodes::LEFT_CTRL, 29);
         assert_eq!(keycodes::LEFT_SHIFT, 42);
         assert_eq!(keycodes::V, 47);
+    }
+
+    #[tokio::test]
+    async fn test_send_key_sequence_press_release_order() {
+        let sender = RecordingKeySender::new();
+        send_key_sequence(&sender, &[keycodes::LEFT_CTRL, keycodes::V])
+            .await
+            .unwrap();
+
+        let calls = sender.calls();
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0], ("press".to_string(), 29)); // press ctrl
+        assert_eq!(calls[1], ("press".to_string(), 47)); // press v
+        assert_eq!(calls[2], ("release".to_string(), 47)); // release v
+        assert_eq!(calls[3], ("release".to_string(), 29)); // release ctrl
+    }
+
+    #[tokio::test]
+    async fn test_send_key_sequence_empty() {
+        let sender = RecordingKeySender::new();
+        send_key_sequence(&sender, &[]).await.unwrap();
+        assert!(sender.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_send_key_sequence_press_error() {
+        struct FailingKeySender;
+
+        #[async_trait::async_trait]
+        impl KeySender for FailingKeySender {
+            async fn press_key(&self, _code: i32) -> Result<()> {
+                Err(VoicshError::InjectionFailed {
+                    message: "press failed".to_string(),
+                })
+            }
+            async fn release_key(&self, _code: i32) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let result = send_key_sequence(&FailingKeySender, &[29]).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_send_key_sequence_release_error() {
+        struct ReleaseFailKeySender;
+
+        #[async_trait::async_trait]
+        impl KeySender for ReleaseFailKeySender {
+            async fn press_key(&self, _code: i32) -> Result<()> {
+                Ok(())
+            }
+            async fn release_key(&self, _code: i32) -> Result<()> {
+                Err(VoicshError::InjectionFailed {
+                    message: "release failed".to_string(),
+                })
+            }
+        }
+
+        let result = send_key_sequence(&ReleaseFailKeySender, &[29]).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_simulate_paste_with_mock() {
+        let recorder = Arc::new(RecordingKeySender::new());
+        let handle = tokio::runtime::Handle::current();
+        let session = PortalSession::with_key_sender(recorder.clone(), handle);
+
+        // Use spawn_blocking since simulate_paste calls block_on
+        let recorder_clone = recorder.clone();
+        let result = tokio::task::spawn_blocking(move || session.simulate_paste("ctrl+v"))
+            .await
+            .unwrap();
+
+        assert!(result.is_ok());
+        let calls = recorder_clone.calls();
+        assert_eq!(calls.len(), 4); // press ctrl, press v, release v, release ctrl
+    }
+
+    #[tokio::test]
+    async fn test_simulate_paste_invalid_key() {
+        let recorder = Arc::new(RecordingKeySender::new());
+        let handle = tokio::runtime::Handle::current();
+        let session = PortalSession::with_key_sender(recorder.clone(), handle);
+
+        let result = tokio::task::spawn_blocking(move || session.simulate_paste("alt+v"))
+            .await
+            .unwrap();
+
+        assert!(result.is_err());
+        // Should fail at parse_paste_key, no key events sent
+        assert!(recorder.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_send_key_sequence_three_keys() {
+        let sender = RecordingKeySender::new();
+        send_key_sequence(
+            &sender,
+            &[keycodes::LEFT_CTRL, keycodes::LEFT_SHIFT, keycodes::V],
+        )
+        .await
+        .unwrap();
+
+        let calls = sender.calls();
+        assert_eq!(calls.len(), 6); // 3 press + 3 release
+        // Press order: ctrl, shift, v
+        assert_eq!(calls[0].1, keycodes::LEFT_CTRL);
+        assert_eq!(calls[1].1, keycodes::LEFT_SHIFT);
+        assert_eq!(calls[2].1, keycodes::V);
+        // Release order: v, shift, ctrl (reverse)
+        assert_eq!(calls[3].1, keycodes::V);
+        assert_eq!(calls[4].1, keycodes::LEFT_SHIFT);
+        assert_eq!(calls[5].1, keycodes::LEFT_CTRL);
     }
 }

@@ -1,14 +1,15 @@
 //! VAD station that detects voice activity in audio frames.
 
-use crate::audio::vad::{Vad, VadConfig};
+use crate::audio::vad::{Clock, SystemClock, Vad, VadConfig};
 use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::{AudioFrame, VadFrame};
 use std::io::{self, Write};
+use std::sync::Arc;
 
 /// VAD station that processes audio frames and annotates them with speech detection.
 pub struct VadStation {
-    vad: Vad,
+    vad: Vad<Arc<dyn Clock>>,
     show_levels: bool,
     auto_level: bool,
     level_history: Vec<f32>,
@@ -19,13 +20,18 @@ pub struct VadStation {
 impl VadStation {
     /// Creates a new VAD station with the given configuration.
     pub fn new(config: VadConfig) -> Self {
+        Self::with_clock(config, Arc::new(SystemClock))
+    }
+
+    /// Creates a new VAD station with an injectable clock.
+    pub fn with_clock(config: VadConfig, clock: Arc<dyn Clock>) -> Self {
         Self {
-            vad: Vad::new(config),
+            vad: Vad::with_clock(config, clock),
             show_levels: false,
             auto_level: false,
             level_history: Vec::new(),
             level_history_max: 100,
-            sample_rate: 16000, // Default sample rate
+            sample_rate: 16000,
         }
     }
 

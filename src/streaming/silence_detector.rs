@@ -9,10 +9,11 @@
 //! - Level meter display for debugging
 //! - Auto-leveling (AGC) for varying input volumes
 
-use crate::audio::vad::{Vad, VadConfig, VadEvent, VadResult};
+use crate::audio::vad::{Clock, SystemClock, Vad, VadConfig, VadEvent, VadResult};
 use crate::defaults;
 use crate::streaming::frame::{AudioFrame, ControlEvent, PipelineFrame};
 use std::io::{self, Write};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Configuration for the silence detector.
@@ -96,7 +97,7 @@ impl AutoLevel {
 /// Silence detector that wraps VAD and emits control frames.
 pub struct SilenceDetectorStation {
     config: SilenceDetectorConfig,
-    vad: Vad,
+    vad: Vad<Arc<dyn Clock>>,
     speech_active: bool,
     flush_sent: bool,
     auto_level: Option<AutoLevel>,
@@ -112,7 +113,12 @@ impl SilenceDetectorStation {
 
     /// Creates a new silence detector with custom configuration.
     pub fn with_config(config: SilenceDetectorConfig) -> Self {
-        let vad = Vad::new(config.vad);
+        Self::with_clock(config, Arc::new(SystemClock))
+    }
+
+    /// Creates a new silence detector with an injectable clock.
+    pub fn with_clock(config: SilenceDetectorConfig, clock: Arc<dyn Clock>) -> Self {
+        let vad = Vad::with_clock(config.vad, clock);
         let auto_level = if config.auto_level {
             Some(AutoLevel::new())
         } else {

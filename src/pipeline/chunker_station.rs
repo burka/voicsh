@@ -1,9 +1,11 @@
 //! Chunker station that segments speech into transcribable chunks.
 
+use crate::audio::vad::{Clock, SystemClock};
 use crate::pipeline::adaptive_chunker::{AdaptiveChunker, AdaptiveChunkerConfig};
 use crate::pipeline::error::{StationError, eprintln_clear};
 use crate::pipeline::station::Station;
 use crate::pipeline::types::{AudioChunk, VadFrame};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Station that segments VAD frames into speech chunks using adaptive gap detection.
@@ -19,18 +21,25 @@ pub struct ChunkerStation {
     sample_rate: u32,
     silence_start: Option<Instant>,
     verbose: bool,
+    clock: Arc<dyn Clock>,
 }
 
 impl ChunkerStation {
     /// Creates a new chunker station with the given configuration.
     pub fn new(config: AdaptiveChunkerConfig) -> Self {
+        Self::with_clock(config, Arc::new(SystemClock))
+    }
+
+    /// Creates a new chunker station with an injectable clock.
+    pub fn with_clock(config: AdaptiveChunkerConfig, clock: Arc<dyn Clock>) -> Self {
         let sample_rate = config.sample_rate;
         Self {
-            chunker: AdaptiveChunker::new(config),
+            chunker: AdaptiveChunker::with_clock(config, clock.clone()),
             sequence: 0,
             sample_rate,
             silence_start: None,
             verbose: false,
+            clock,
         }
     }
 
@@ -85,14 +94,14 @@ impl ChunkerStation {
         if is_speech {
             self.silence_start = None;
         } else if self.silence_start.is_none() {
-            self.silence_start = Some(Instant::now());
+            self.silence_start = Some(self.clock.now());
         }
     }
 
     /// Gets current silence duration in milliseconds.
     fn current_silence_ms(&self) -> u32 {
         match self.silence_start {
-            Some(start) => start.elapsed().as_millis() as u32,
+            Some(start) => self.clock.now().duration_since(start).as_millis() as u32,
             None => 0,
         }
     }

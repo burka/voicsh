@@ -4,7 +4,8 @@
 //! and state machine logic to handle silence intervals.
 
 use crate::defaults;
-use std::time::Instant;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Trait for time operations, allowing mock time in tests.
 pub trait Clock: Send + Sync {
@@ -19,6 +20,46 @@ pub struct SystemClock;
 impl Clock for SystemClock {
     fn now(&self) -> Instant {
         Instant::now()
+    }
+}
+
+/// Blanket impl enabling `Arc<dyn Clock>` as a Clock.
+impl<C: Clock + ?Sized> Clock for Arc<C> {
+    fn now(&self) -> Instant {
+        (**self).now()
+    }
+}
+
+/// Mock clock for testing that allows manual time advancement.
+#[derive(Debug, Clone)]
+pub struct MockClock {
+    current: Arc<Mutex<Instant>>,
+}
+
+impl MockClock {
+    /// Creates a new mock clock starting at the current instant.
+    pub fn new() -> Self {
+        Self {
+            current: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    /// Advances the mock clock by the given duration.
+    pub fn advance(&self, duration: Duration) {
+        let mut current = self.current.lock().unwrap();
+        *current += duration;
+    }
+}
+
+impl Default for MockClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clock for MockClock {
+    fn now(&self) -> Instant {
+        *self.current.lock().unwrap()
     }
 }
 
@@ -245,35 +286,6 @@ pub fn calculate_rms(samples: &[i16]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-
-    /// Mock clock for testing that allows manual time advancement.
-    #[derive(Debug, Clone)]
-    pub struct MockClock {
-        current: Arc<Mutex<Instant>>,
-    }
-
-    impl MockClock {
-        /// Creates a new mock clock starting at the current instant.
-        pub fn new() -> Self {
-            Self {
-                current: Arc::new(Mutex::new(Instant::now())),
-            }
-        }
-
-        /// Advances the mock clock by the given duration.
-        pub fn advance(&self, duration: Duration) {
-            let mut current = self.current.lock().unwrap();
-            *current += duration;
-        }
-    }
-
-    impl Clock for MockClock {
-        fn now(&self) -> Instant {
-            *self.current.lock().unwrap()
-        }
-    }
 
     fn make_silence(count: usize) -> Vec<i16> {
         vec![0i16; count]

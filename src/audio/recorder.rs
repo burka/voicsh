@@ -54,6 +54,15 @@ impl Default for AudioSourceConfig {
     }
 }
 
+/// A phase in a frame sequence: specific samples repeated `count` times.
+#[derive(Debug, Clone)]
+pub struct FramePhase {
+    /// Samples to return for each read in this phase.
+    pub samples: Vec<i16>,
+    /// Number of reads to serve this phase.
+    pub count: u32,
+}
+
 /// Mock audio source for testing
 #[derive(Debug, Clone)]
 pub struct MockAudioSource {
@@ -63,6 +72,9 @@ pub struct MockAudioSource {
     should_fail_stop: bool,
     should_fail_read: bool,
     error_message: String,
+    frame_sequence: Option<Vec<FramePhase>>,
+    sequence_index: usize,
+    sequence_remaining: u32,
 }
 
 impl MockAudioSource {
@@ -75,12 +87,28 @@ impl MockAudioSource {
             should_fail_stop: false,
             should_fail_read: false,
             error_message: "mock audio error".to_string(),
+            frame_sequence: None,
+            sequence_index: 0,
+            sequence_remaining: 0,
         }
     }
 
     /// Configure the mock to return specific samples
     pub fn with_samples(mut self, samples: Vec<i16>) -> Self {
         self.samples = samples;
+        self
+    }
+
+    /// Configure the mock with a sequence of frame phases.
+    ///
+    /// Each phase defines samples and a repeat count. After all phases
+    /// are exhausted, `read_samples` returns empty (signaling end).
+    pub fn with_frame_sequence(mut self, phases: Vec<FramePhase>) -> Self {
+        if let Some(first) = phases.first() {
+            self.sequence_remaining = first.count;
+        }
+        self.frame_sequence = Some(phases);
+        self.sequence_index = 0;
         self
     }
 
@@ -145,12 +173,31 @@ impl AudioSource for MockAudioSource {
 
     fn read_samples(&mut self) -> Result<Vec<i16>> {
         if self.should_fail_read {
-            Err(VoicshError::AudioCapture {
+            return Err(VoicshError::AudioCapture {
                 message: self.error_message.clone(),
-            })
-        } else {
-            Ok(self.samples.clone())
+            });
         }
+
+        // If a frame sequence is configured, walk through it
+        if let Some(ref phases) = self.frame_sequence {
+            if self.sequence_index >= phases.len() {
+                return Ok(Vec::new()); // Exhausted
+            }
+
+            let samples = phases[self.sequence_index].samples.clone();
+            self.sequence_remaining -= 1;
+
+            if self.sequence_remaining == 0 {
+                self.sequence_index += 1;
+                if self.sequence_index < phases.len() {
+                    self.sequence_remaining = phases[self.sequence_index].count;
+                }
+            }
+
+            return Ok(samples);
+        }
+
+        Ok(self.samples.clone())
     }
 }
 

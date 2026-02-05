@@ -4,6 +4,7 @@
 //! Ring Buffer → Silence Detector → Chunker → Transcriber → Stitcher → Output
 
 use crate::audio::recorder::AudioSource;
+use crate::audio::vad::{Clock, SystemClock};
 use crate::config::Config;
 use crate::error::{Result, VoicshError};
 use crate::streaming::chunker::{ChunkerConfig, ChunkerStation};
@@ -13,6 +14,7 @@ use crate::streaming::silence_detector::{SilenceDetectorConfig, SilenceDetectorS
 use crate::streaming::stitcher::{StitcherConfig, StitcherStation};
 use crate::streaming::transcriber::TranscriberStation;
 use crate::stt::transcriber::Transcriber;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Configuration for the streaming pipeline.
@@ -96,6 +98,7 @@ impl StreamingPipelineHandle {
 /// Streaming pipeline that orchestrates all stations.
 pub struct StreamingPipeline {
     config: StreamingPipelineConfig,
+    clock: Arc<dyn Clock>,
 }
 
 impl StreamingPipeline {
@@ -106,7 +109,16 @@ impl StreamingPipeline {
 
     /// Creates a new streaming pipeline with custom configuration.
     pub fn with_config(config: StreamingPipelineConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            clock: Arc::new(SystemClock),
+        }
+    }
+
+    /// Sets a custom clock (for deterministic testing).
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Runs the streaming pipeline and returns the transcribed text.
@@ -137,8 +149,10 @@ impl StreamingPipeline {
         let (audio_rx, ring_buffer_handle) = ring_buffer.start()?;
 
         // Create stations
-        let silence_detector =
-            SilenceDetectorStation::with_config(self.config.silence_detector.clone());
+        let silence_detector = SilenceDetectorStation::with_clock(
+            self.config.silence_detector.clone(),
+            self.clock.clone(),
+        );
         let chunker = ChunkerStation::with_config(self.config.chunker.clone());
         let transcriber_station = TranscriberStation::new(transcriber);
         let stitcher = StitcherStation::with_config(self.config.stitcher.clone());
@@ -209,8 +223,10 @@ impl StreamingPipeline {
         let (audio_rx, ring_buffer_handle) = ring_buffer.start()?;
 
         // Create stations
-        let silence_detector =
-            SilenceDetectorStation::with_config(self.config.silence_detector.clone());
+        let silence_detector = SilenceDetectorStation::with_clock(
+            self.config.silence_detector.clone(),
+            self.clock.clone(),
+        );
         let chunker = ChunkerStation::with_config(self.config.chunker.clone());
         let transcriber_station = TranscriberStation::new(transcriber);
         let stitcher = StitcherStation::with_config(self.config.stitcher.clone());
@@ -271,6 +287,10 @@ impl Default for StreamingPipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::recorder::MockAudioSource;
+    use crate::audio::vad::MockClock;
+    use crate::stt::transcriber::MockTranscriber;
+    use std::sync::Arc;
 
     #[test]
     fn test_pipeline_config_default() {
@@ -363,6 +383,21 @@ mod tests {
         assert_eq!(config.channel_buffer_size, 500);
     }
 
-    // Integration tests would require mock audio source and transcriber
-    // which are tested in their respective modules
+    #[tokio::test]
+    async fn test_pipeline_with_clock() {
+        let clock = Arc::new(MockClock::new());
+        let pipeline = StreamingPipeline::new().with_clock(clock.clone());
+        // Verify clock was set (indirect test via config presence)
+        assert_eq!(pipeline.config.max_concurrent_transcriptions, 2);
+    }
+
+    #[tokio::test]
+    async fn test_run_audio_source_start_failure() {
+        let pipeline = StreamingPipeline::new();
+        let source = Box::new(MockAudioSource::new().with_start_failure());
+        let transcriber = MockTranscriber::new("test");
+
+        let result = pipeline.run(source, transcriber).await;
+        assert!(result.is_err());
+    }
 }

@@ -3,6 +3,8 @@
 //! Uses research-based thresholds to find natural break points in speech,
 //! becoming more aggressive about finding gaps as speech duration increases.
 
+use crate::audio::vad::{Clock, SystemClock};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Configuration for the adaptive chunker.
@@ -48,13 +50,20 @@ enum ChunkerState {
 pub struct AdaptiveChunker {
     config: AdaptiveChunkerConfig,
     state: ChunkerState,
+    clock: Arc<dyn Clock>,
 }
 
 impl AdaptiveChunker {
     pub fn new(config: AdaptiveChunkerConfig) -> Self {
+        Self::with_clock(config, Arc::new(SystemClock))
+    }
+
+    /// Creates a new chunker with an injectable clock.
+    pub fn with_clock(config: AdaptiveChunkerConfig, clock: Arc<dyn Clock>) -> Self {
         Self {
             config,
             state: ChunkerState::Idle,
+            clock,
         }
     }
 
@@ -76,7 +85,7 @@ impl AdaptiveChunker {
                     // Start accumulating
                     self.state = ChunkerState::Accumulating {
                         samples: samples.to_vec(),
-                        speech_start: Instant::now(),
+                        speech_start: self.clock.now(),
                         silence_start: None,
                     };
                 }
@@ -94,11 +103,11 @@ impl AdaptiveChunker {
                 if is_speech {
                     *silence_start = None;
                 } else if silence_start.is_none() {
-                    *silence_start = Some(Instant::now());
+                    *silence_start = Some(self.clock.now());
                 }
 
                 // Calculate current duration
-                let duration_ms = speech_start.elapsed().as_millis() as u32;
+                let duration_ms = self.clock.now().duration_since(*speech_start).as_millis() as u32;
 
                 // Calculate required gap inline (to avoid borrow conflict with self.state)
                 let required_gap = Self::calculate_required_gap_static(
