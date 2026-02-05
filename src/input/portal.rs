@@ -50,6 +50,17 @@ impl PortalSession {
     pub async fn try_new() -> Result<Self> {
         let handle = tokio::runtime::Handle::current();
 
+        // Fix stale D-Bus in long-lived tmux/byobu/screen sessions:
+        // our DBUS_SESSION_BUS_ADDRESS may point to a dead bus from a
+        // previous GNOME login. Refresh it from the running gnome-shell.
+        if let Some(fresh_addr) = crate::input::focused_window::fresh_gnome_dbus_address() {
+            // SAFETY: called at startup before pipeline threads are spawned,
+            // so no concurrent env reads.
+            unsafe {
+                std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
+            }
+        }
+
         let proxy = RemoteDesktop::new()
             .await
             .map_err(|e| VoicshError::Other(format!("Portal RemoteDesktop unavailable: {e}")))?;

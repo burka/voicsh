@@ -220,7 +220,7 @@ fn detect_via_gnome_dbus() -> Option<String> {
 ///
 /// This handles the case where the caller's environment has a stale D-Bus address
 /// (common in long-lived tmux/byobu/screen sessions that survive GNOME re-logins).
-fn fresh_gnome_dbus_address() -> Option<String> {
+pub(crate) fn fresh_gnome_dbus_address() -> Option<String> {
     use std::fs;
 
     // Find gnome-shell PID
