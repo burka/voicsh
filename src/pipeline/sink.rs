@@ -3,6 +3,8 @@ use crate::input::injector::{CommandExecutor, SystemCommandExecutor, TextInjecto
 use crate::pipeline::error::{StationError, eprintln_clear};
 use crate::pipeline::station::Station;
 use crate::pipeline::types::TranscribedText;
+#[cfg(feature = "portal")]
+use std::sync::Arc;
 
 /// Pluggable text output handler for pipeline.
 /// Pairs with AudioSource for input - this handles transcription output.
@@ -102,6 +104,20 @@ impl InjectorSink<SystemCommandExecutor> {
     pub fn system(method: InputMethod, paste_key: String) -> Self {
         Self {
             injector: TextInjector::system(),
+            method,
+            paste_key,
+        }
+    }
+
+    /// Create InjectorSink with portal session for key injection.
+    #[cfg(feature = "portal")]
+    pub fn with_portal(
+        method: InputMethod,
+        paste_key: String,
+        portal: Option<Arc<crate::input::portal::PortalSession>>,
+    ) -> Self {
+        Self {
+            injector: TextInjector::system().with_portal(portal),
             method,
             paste_key,
         }

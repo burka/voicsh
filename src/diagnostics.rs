@@ -59,9 +59,57 @@ fn check_ydotool_backend() -> CheckResult {
     }
 }
 
+/// Check if xdg-desktop-portal RemoteDesktop is available.
+fn check_portal() -> CheckResult {
+    match Command::new("gdbus")
+        .args([
+            "introspect",
+            "--session",
+            "--dest",
+            "org.freedesktop.portal.Desktop",
+            "--object-path",
+            "/org/freedesktop/portal/desktop",
+        ])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains("RemoteDesktop") {
+                CheckResult::Ok
+            } else {
+                CheckResult::Warning(
+                    "Portal available but RemoteDesktop interface missing".to_string(),
+                )
+            }
+        }
+        Ok(_) => CheckResult::NotFound,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            CheckResult::Warning("gdbus not found (needed for portal check)".to_string())
+        }
+        Err(e) => CheckResult::Warning(format!("Error checking portal: {}", e)),
+    }
+}
+
 /// Run all dependency checks and print results.
 pub fn check_dependencies() {
     println!("Checking system dependencies...\n");
+
+    // Check xdg-desktop-portal RemoteDesktop (GNOME/KDE key injection)
+    print!("xdg-desktop-portal RemoteDesktop: ");
+    let portal_available = match check_portal() {
+        CheckResult::Ok => {
+            println!("✓ OK (portal key injection available)");
+            true
+        }
+        CheckResult::NotFound => {
+            println!("- not available");
+            false
+        }
+        CheckResult::Warning(msg) => {
+            println!("⚠ WARNING: {}", msg);
+            false
+        }
+    };
 
     // Check wl-copy (clipboard)
     print!("wl-copy (clipboard): ");
@@ -120,9 +168,13 @@ pub fn check_dependencies() {
     }
 
     println!();
+    if portal_available {
+        println!("✓ Portal key injection available (best for GNOME).");
+    }
     if wtype_available {
         println!("✓ Ready to inject text using wtype + wl-copy.");
-    } else {
+    }
+    if !portal_available && !wtype_available {
         println!("⚠ Text injection may not work. Install wtype for best results:");
         println!("  sudo apt install wtype    (Debian/Ubuntu)");
         println!("  sudo pacman -S wtype      (Arch)");

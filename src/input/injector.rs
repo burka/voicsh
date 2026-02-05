@@ -8,6 +8,8 @@
 
 use crate::error::{Result, VoicshError};
 use std::process::{Command, Stdio};
+#[cfg(feature = "portal")]
+use std::sync::Arc;
 
 /// Trait for executing system commands.
 ///
@@ -75,12 +77,25 @@ impl CommandExecutor for SystemCommandExecutor {
 /// Text injector that uses CommandExecutor for system interaction.
 pub struct TextInjector<E: CommandExecutor> {
     executor: E,
+    #[cfg(feature = "portal")]
+    portal: Option<Arc<crate::input::portal::PortalSession>>,
 }
 
 impl<E: CommandExecutor> TextInjector<E> {
     /// Create a new TextInjector with the given executor.
     pub fn new(executor: E) -> Self {
-        Self { executor }
+        Self {
+            executor,
+            #[cfg(feature = "portal")]
+            portal: None,
+        }
+    }
+
+    /// Set the portal session for key injection (highest-priority backend).
+    #[cfg(feature = "portal")]
+    pub fn with_portal(mut self, portal: Option<Arc<crate::input::portal::PortalSession>>) -> Self {
+        self.portal = portal;
+        self
     }
 
     /// Inject text via clipboard mechanism.
@@ -119,11 +134,19 @@ impl<E: CommandExecutor> TextInjector<E> {
         // Delay to ensure clipboard is updated before paste
         std::thread::sleep(std::time::Duration::from_millis(100));
 
+        // Try portal first (works on GNOME where wtype fails)
+        #[cfg(feature = "portal")]
+        if let Some(portal) = &self.portal
+            && portal.simulate_paste(paste_key).is_ok()
+        {
+            return Ok(());
+        }
+
         // Build wtype args from paste_key
         let wtype_args = paste_key_to_wtype_args(paste_key);
         let wtype_arg_refs: Vec<&str> = wtype_args.iter().map(String::as_str).collect();
 
-        // Try wtype first (simpler, no daemon needed)
+        // Try wtype (simpler, no daemon needed)
         if self.executor.execute("wtype", &wtype_arg_refs).is_ok() {
             return Ok(());
         }

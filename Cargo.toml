@@ -24,6 +24,9 @@ anyhow = "1"
 # Concurrency
 crossbeam-channel = "0.5"
 
+# XDG Desktop Portal (RemoteDesktop for GNOME key injection)
+ashpd = { version = "0.12", default-features = false, features = ["tokio"], optional = true }
+
 # CLI
 clap = { version = "4", features = ["derive"], optional = true }
 
@@ -47,11 +50,12 @@ whisper-rs = { version = "0.15", optional = true }
 
 [features]
 default = ["full"]
-full = ["whisper", "cpal-audio", "model-download", "cli"]
+full = ["whisper", "cpal-audio", "model-download", "cli", "portal"]
 whisper = ["whisper-rs"]
 cpal-audio = ["dep:cpal"]
 model-download = ["dep:reqwest", "dep:sha2", "dep:indicatif", "dep:futures-util"]
 cli = ["dep:clap", "dep:dirs"]
+portal = ["dep:ashpd"]
 
 [dev-dependencies]
 tempfile = "3"

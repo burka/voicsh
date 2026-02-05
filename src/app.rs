@@ -8,6 +8,7 @@ use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::config::Config;
 use crate::error::{Result, VoicshError};
+use crate::input::injector::SystemCommandExecutor;
 use crate::models::catalog::get_model;
 use crate::models::download::{
     download_model, find_any_installed_model, is_model_installed, model_path,
@@ -20,6 +21,9 @@ use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
+
+#[cfg(feature = "portal")]
+use crate::input::portal::PortalSession;
 
 /// Run the record command: capture audio → transcribe → inject text.
 ///
@@ -65,6 +69,23 @@ pub async fn run_record_command(
         config.stt.language = l;
     }
 
+    // Try to establish portal session for key injection (GNOME/KDE)
+    #[cfg(feature = "portal")]
+    let portal = match PortalSession::try_new().await {
+        Ok(session) => {
+            if !quiet {
+                eprintln!("Portal keyboard access granted.");
+            }
+            Some(Arc::new(session))
+        }
+        Err(e) => {
+            if verbose {
+                eprintln!("Portal unavailable ({}), using wtype/ydotool fallback.", e);
+            }
+            None
+        }
+    };
+
     // Load model ONCE before the loop (this is the slow part)
     if !quiet {
         eprintln!("Loading model '{}'...", config.stt.model);
@@ -75,10 +96,23 @@ pub async fn run_record_command(
         eprintln!("Ready. Listening...");
     }
 
+    #[cfg(feature = "portal")]
+    let make_sink = |config: &Config| {
+        InjectorSink::with_portal(
+            config.input.method.clone(),
+            config.input.paste_key.clone(),
+            portal.clone(),
+        )
+    };
+    #[cfg(not(feature = "portal"))]
+    let make_sink = |config: &Config| {
+        InjectorSink::system(config.input.method.clone(), config.input.paste_key.clone())
+    };
+
     if once {
-        run_single_session(&config, transcriber, quiet, verbose).await
+        run_single_session(&config, transcriber, quiet, verbose, make_sink).await
     } else {
-        run_continuous(&config, transcriber, quiet, verbose).await
+        run_continuous(&config, transcriber, quiet, verbose, make_sink).await
     }
 }
 
@@ -88,6 +122,7 @@ async fn run_continuous(
     transcriber: Arc<dyn Transcriber>,
     quiet: bool,
     verbose: bool,
+    make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
@@ -106,7 +141,7 @@ async fn run_continuous(
         ..Default::default()
     };
 
-    let sink = InjectorSink::system(config.input.method.clone(), config.input.paste_key.clone());
+    let sink = make_sink(config);
 
     let pipeline = Pipeline::new(pipeline_config);
     let handle = pipeline.start(audio_source, transcriber, Box::new(sink))?;
@@ -132,6 +167,7 @@ async fn run_single_session(
     transcriber: Arc<dyn Transcriber>,
     quiet: bool,
     verbose: bool,
+    make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
@@ -172,7 +208,10 @@ async fn run_single_session(
         if !quiet {
             eprintln!("\"{}\"", text);
         }
-        inject_text(config, &text, verbose)?;
+        // Use the same sink factory to get portal-aware injection
+        let mut injector_sink = make_sink(config);
+        use crate::pipeline::sink::TextSink;
+        injector_sink.handle(&text)?;
         if !quiet && verbose {
             eprintln!("  [injected]");
         }
@@ -228,20 +267,6 @@ async fn create_transcriber(
     };
 
     WhisperTranscriber::new(whisper_config)
-}
-
-/// Inject transcribed text using configured input method.
-fn inject_text(config: &Config, text: &str, verbose: bool) -> Result<()> {
-    use crate::input::focused_window::resolve_paste_key;
-    use crate::input::injector::TextInjector;
-
-    let injector = TextInjector::system();
-    let paste_key = resolve_paste_key(&config.input.paste_key, verbose);
-
-    match config.input.method {
-        crate::config::InputMethod::Clipboard => injector.inject_via_clipboard(text, paste_key),
-        crate::config::InputMethod::Direct => injector.inject_direct(text),
-    }
 }
 
 /// Build the full path to a Whisper model file.
@@ -303,35 +328,51 @@ fn check_prerequisites() -> Result<()> {
     };
 
     if !wtype_works && !ydotool_works {
-        let ydotool_installed = Command::new("ydotool").arg("--version").output().is_ok()
-            || Command::new("ydotool")
-                .arg("type")
-                .arg("--help")
-                .output()
-                .is_ok();
-
-        let wtype_installed = Command::new("wtype").arg("--help").output().is_ok();
-
-        let mut msg = String::from("Text injection not available:\n");
-
-        if wtype_installed {
-            msg.push_str("  - wtype: installed but compositor doesn't support virtual keyboard\n");
-        } else {
-            msg.push_str("  - wtype: not installed\n");
+        // With the portal feature, wtype/ydotool absence is not fatal -
+        // the portal may provide key injection at runtime.
+        #[cfg(feature = "portal")]
+        {
+            eprintln!(
+                "Warning: Neither wtype nor ydotool available.\n\
+                 Will attempt xdg-desktop-portal RemoteDesktop for key injection."
+            );
+            return Ok(());
         }
 
-        if ydotool_installed {
-            msg.push_str("  - ydotool: installed but ydotoold daemon not running\n\n");
-            msg.push_str("Fix: Start ydotoold daemon: sudo ydotoold &\n");
-            msg.push_str("  Or: systemctl --user enable --now ydotool (if available)");
-        } else {
-            msg.push_str("  - ydotool: not installed\n\n");
-            msg.push_str("Install one of:\n");
-            msg.push_str("  sudo apt install wtype  (for Sway/wlroots compositors)\n");
-            msg.push_str("  sudo apt install ydotool  (then start ydotoold daemon)");
-        }
+        #[cfg(not(feature = "portal"))]
+        {
+            let ydotool_installed = Command::new("ydotool").arg("--version").output().is_ok()
+                || Command::new("ydotool")
+                    .arg("type")
+                    .arg("--help")
+                    .output()
+                    .is_ok();
 
-        return Err(VoicshError::InjectionFailed { message: msg });
+            let wtype_installed = Command::new("wtype").arg("--help").output().is_ok();
+
+            let mut msg = String::from("Text injection not available:\n");
+
+            if wtype_installed {
+                msg.push_str(
+                    "  - wtype: installed but compositor doesn't support virtual keyboard\n",
+                );
+            } else {
+                msg.push_str("  - wtype: not installed\n");
+            }
+
+            if ydotool_installed {
+                msg.push_str("  - ydotool: installed but ydotoold daemon not running\n\n");
+                msg.push_str("Fix: Start ydotoold daemon: sudo ydotoold &\n");
+                msg.push_str("  Or: systemctl --user enable --now ydotool (if available)");
+            } else {
+                msg.push_str("  - ydotool: not installed\n\n");
+                msg.push_str("Install one of:\n");
+                msg.push_str("  sudo apt install wtype  (for Sway/wlroots compositors)\n");
+                msg.push_str("  sudo apt install ydotool  (then start ydotoold daemon)");
+            }
+
+            return Err(VoicshError::InjectionFailed { message: msg });
+        }
     }
 
     Ok(())
