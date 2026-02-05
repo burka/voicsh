@@ -78,16 +78,27 @@ impl PortalSession {
                 PersistMode::ExplicitlyRevoked,
             )
             .await
-            .map_err(|e| VoicshError::Other(format!("Portal device selection failed: {e}")))?;
+            .map_err(|e| VoicshError::Other(format!("Portal device selection failed: {e}")))?
+            .response()
+            .map_err(|e| VoicshError::Other(format!("Portal device selection rejected: {e}")))?;
 
         // Start the session. On first run this shows a permission dialog.
         // With PersistMode::ExplicitlyRevoked, subsequent runs skip it.
-        let _response = proxy
+        let response = proxy
             .start(&session, None)
             .await
             .map_err(|e| VoicshError::Other(format!("Portal session start failed: {e}")))?
             .response()
             .map_err(|e| VoicshError::Other(format!("Portal session start rejected: {e}")))?;
+
+        // Verify keyboard access was actually granted
+        let devices = response.devices();
+        if !devices.contains(DeviceType::Keyboard) {
+            return Err(VoicshError::Other(format!(
+                "Portal granted devices {:?} but keyboard not included",
+                devices
+            )));
+        }
 
         Ok(Self {
             proxy,
@@ -109,8 +120,14 @@ impl PortalSession {
     }
 
     /// Send a sequence of keycodes as press-all then release-all-reversed.
+    ///
+    /// Small delays between events ensure the compositor registers the
+    /// modifier+key combo (without delays, all events may arrive in the
+    /// same input frame and the combo isn't recognized).
     async fn send_key_sequence(&self, codes: &[i32]) -> Result<()> {
-        // Press all keys in order
+        let delay = std::time::Duration::from_millis(5);
+
+        // Press all keys in order (modifier first, then key)
         for &code in codes {
             self.proxy
                 .notify_keyboard_keycode(&self.session, code, KeyState::Pressed)
@@ -118,9 +135,10 @@ impl PortalSession {
                 .map_err(|e| VoicshError::InjectionFailed {
                     message: format!("Portal key press failed: {e}"),
                 })?;
+            tokio::time::sleep(delay).await;
         }
 
-        // Release all keys in reverse order
+        // Release all keys in reverse order (key first, then modifier)
         for &code in codes.iter().rev() {
             self.proxy
                 .notify_keyboard_keycode(&self.session, code, KeyState::Released)
@@ -128,6 +146,7 @@ impl PortalSession {
                 .map_err(|e| VoicshError::InjectionFailed {
                     message: format!("Portal key release failed: {e}"),
                 })?;
+            tokio::time::sleep(delay).await;
         }
 
         Ok(())
