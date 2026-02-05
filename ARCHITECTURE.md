@@ -1,321 +1,102 @@
-# voic.sh Architecture
+# voicsh Architecture
 
-Technical architecture of voic.sh, a Rust-based voice typing application for Linux.
+Wayland-only voice typing: audio capture → VAD → chunking → Whisper transcription → text injection.
 
 ## Design Principles
 
-1. **Offline-First**: Core functionality requires no network access
-2. **Single Binary**: No runtime dependencies, easy distribution
-3. **Subprocess Isolation**: External tools (ydotool, whisper) called as subprocesses for reliability
-4. **Progressive Enhancement**: Start simple, add features incrementally
-5. **Fail Fast**: Clear error messages, no silent failures
+1. **Offline-First** — No network for core functionality
+2. **Single Binary** — No runtime interpreters
+3. **Fail Fast** — Clear errors, no silent failures
+4. **Pluggable** — Traits for audio source, transcriber, text sink
 
-## System Overview
-
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                              voic.sh Daemon                                │
-├────────────────────────────────────────────────────────────────────────────┤
-│                                                                            │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐               │
-│  │  IPC Server  │────▶│   Recorder   │────▶│ Transcriber  │               │
-│  │ (Unix Socket)│     │   (cpal)     │     │ (whisper-rs) │               │
-│  └──────────────┘     └──────────────┘     └──────────────┘               │
-│         │                    │                    │                        │
-│         │                    ▼                    ▼                        │
-│         │             ┌──────────────┐     ┌──────────────┐               │
-│         │             │     VAD      │     │  Refinement  │               │
-│         │             │  (threshold) │     │ (LLM - opt)  │               │
-│         │             └──────────────┘     └──────────────┘               │
-│         │                                        │                        │
-│         │                                        ▼                        │
-│         │                               ┌──────────────┐                  │
-│         │                               │  TextSink    │                  │
-│         │                               │ (pluggable)  │                  │
-│         │                               └──────────────┘                  │
-│         │                                        │                        │
-│         ▼                                        ▼                        │
-│  ┌──────────────┐                       ┌──────────────┐                  │
-│  │   Overlay    │                       │   Clipboard  │                  │
-│  │ (layer-shell)│                       │  (wl-copy)   │                  │
-│  └──────────────┘                       └──────────────┘                  │
-│                                                                            │
-└────────────────────────────────────────────────────────────────────────────┘
-
-External:
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Hotkey     │────▶│  voicsh CLI  │────▶│ Unix Socket  │
-│  (Desktop)   │     │   (toggle)   │     │   Message    │
-└──────────────┘     └──────────────┘     └──────────────┘
-```
-
-## Components
-
-### 1. IPC Server
-
-**Purpose**: Receive commands from CLI, coordinate recording state
-
-**Location**: `src/ipc/server.rs`
-
-- Unix socket at `~/.local/share/voicsh/voicsh.sock`
-- Simple line-based JSON protocol
-- Commands: toggle, start, stop, cancel, status, shutdown
-
-**Why Unix Socket**:
-- No network exposure (security)
-- Fast IPC (~1ms latency)
-- Standard Linux pattern
-- Works without D-Bus dependency
-
-### 2. Audio Recorder
-
-**Purpose**: Capture microphone input at 16kHz mono
-
-**Location**: Trait defined in `src/audio/recorder.rs`; cpal implementation in `src/audio/capture.rs` (feature-gated behind `cpal-audio`)
-
-**Audio Format** (Whisper requirement):
-- Sample rate: 16,000 Hz
-- Channels: 1 (mono)
-- Format: i16 PCM (signed 16-bit)
-- Buffer: In-memory, typically 100KB-1MB per utterance
-
-**Device Selection Priority**:
-1. Explicit device from config
-2. `VOICSH_AUDIO_DEVICE` environment variable
-3. PipeWire/PulseAudio default device
-4. ALSA default device
-
-**Crate**: `cpal` for cross-platform audio capture
-
-### 3. Voice Activity Detection (VAD)
-
-**Purpose**: Detect speech start/end for automatic recording control
-
-**Location**: `src/audio/vad.rs`
-
-**Configuration**:
-- `speech_threshold`: RMS threshold to detect speech (default: 0.02)
-- `silence_duration_ms`: Duration of silence before stopping (default: 1500)
-- `min_speech_ms`: Minimum speech duration before allowing stop (default: 300)
-
-**VAD Approaches** (in order of complexity):
-1. **RMS Threshold** (MVP): Simple, effective for quiet environments
-2. **WebRTC VAD**: `webrtc-vad` crate, better noise handling
-3. **Silero VAD**: ONNX model, best accuracy, higher CPU
-
-### 4. Transcriber (STT)
-
-**Purpose**: Convert audio to text using Whisper
-
-**Location**: `src/stt/whisper.rs`
-
-**Crate**: `whisper-rs` (bindings to whisper.cpp)
-
-**Model Loading Strategy**:
-- **Cold Start**: Load model on first transcription (~1-3s for base.en)
-- **Warm (Daemon)**: Keep model loaded in memory (~300MB for base.en)
-- **GPU Acceleration**: Optional CUDA/Metal support via whisper-rs features
-
-**Alternative**: HTTP to whisper.cpp server for lowest latency when model is large
-
-### 5. Text Output (TextSink)
-
-**Purpose**: Handle transcribed text output through pluggable sinks
-
-**Location**: `src/pipeline/sink.rs`
-
-**Built-in Implementations**:
-- **InjectorSink** — Inserts text into focused application (default for continuous mode)
-  - Input Methods:
-    - **Clipboard** (default): Copy to clipboard, simulate Ctrl+V - more reliable
-    - **Direct**: Type characters directly - faster but less reliable with special chars
-  - Session Detection: Checks `XDG_SESSION_TYPE`, `WAYLAND_DISPLAY`, `DISPLAY`
-  - External Tools:
-    - Wayland: `wl-copy` + `ydotool`
-    - X11: `xsel` + `xdotool`
-  - Why Clipboard is Default:
-    - More reliable character encoding (UTF-8 handled correctly)
-    - Works with all applications
-    - No issues with special characters
-- **CollectorSink** — Accumulates text and returns it on shutdown (for `--once` mode and library use)
-
-### 6. LLM Refinement (Optional)
-
-**Purpose**: Clean up transcription with AI post-processing
-
-**Location**: `src/refinement/mod.rs`
-
-**Providers**:
-- None (passthrough)
-- Ollama (local)
-- llama.cpp server (local)
-- Anthropic Claude API (cloud)
-- OpenAI API (cloud)
-
-**Behavior**:
-- Async with configurable timeout
-- Falls back to raw transcription on error/timeout
-- Default prompt: punctuation/grammar cleanup
-
-### 7. Overlay (Wayland Layer-Shell)
-
-**Purpose**: Visual feedback during recording
-
-**Location**: `src/overlay/mod.rs`
-
-**States**:
-- Hidden
-- Recording (red indicator)
-- Transcribing (orange indicator)
-- Error (bright red)
-
-**Implementation**: `smithay-client-toolkit` for Wayland layer-shell protocol
-
-**Fallback for X11**: Desktop notification or GTK overlay
-
-### 8. Model Manager
-
-**Purpose**: Download and manage Whisper models
-
-**Location**: `src/models/manager.rs`
-
-**Features**:
-- Auto-download from HuggingFace
-- SHA-256 verification
-- Progress bar during download
-- Model catalog with size/accuracy metadata
-
-**Cache Location**: `~/.cache/voicsh/models/`
-
-### 9. Configuration
-
-**Purpose**: User settings management
-
-**Location**: `src/config.rs`
-
-**Format**: TOML
-
-**Sections**: audio, stt, input, refinement, overlay
-
-**Environment Overrides**: `VOICSH_*` variables override config file
-
-## Directory Structure
+## Pipeline
 
 ```
-~/.config/voicsh/
-└── config.toml              # User configuration
-
-~/.cache/voicsh/
-└── models/
-    ├── ggml-tiny.en.bin
-    ├── ggml-base.en.bin
-    └── ggml-small.en.bin
-
-~/.local/share/voicsh/
-├── voicsh.sock              # IPC socket (daemon)
-└── voicsh.log               # Optional debug log
+AudioSource → VadStation → ChunkerStation → TranscriberStation → SinkStation
+    │              │              │                  │                 │
+    └──────────────┴──────────────┴──────────────────┴─────────────────┘
+                        All connected via crossbeam::channel::bounded
 ```
 
-## Data Flow
+Each station implements `Station<Input, Output>` and runs in its own thread via `StationRunner`.
 
-### Recording Flow
+### Stations
 
-1. User presses hotkey
-2. Desktop runs: `voicsh toggle`
-3. CLI connects to Unix socket
-4. CLI sends toggle command
-5. Daemon starts audio recording (cpal)
-6. Daemon shows overlay → Recording state
-7. Audio samples flow to VAD
-8. VAD detects silence (1.5s)
-9. Daemon stops recording
-10. Daemon shows overlay → Transcribing state
-11. Audio sent to whisper-rs
-12. Whisper returns text
-13. (Optional) Text sent to LLM for refinement
-14. Text copied to clipboard (wl-copy)
-15. Paste keystroke simulated (ydotool)
-16. Overlay hidden
-17. Text appears in focused application
+| Station | Input | Output | Purpose |
+|---------|-------|--------|---------|
+| VadStation | AudioFrame | VadFrame | RMS-based speech detection, level meter (`-v`) |
+| ChunkerStation | VadFrame | AudioChunk | Gap-shrinking adaptive chunker |
+| TranscriberStation | AudioChunk | TranscribedText | whisper-rs inference |
+| SinkStation | TranscribedText | () | Delegates to TextSink impl |
 
-### Latency Budget
+### TextSink Implementations
 
-**Target**: < 500ms from silence detection to text insertion
+- **InjectorSink** — Clipboard + paste key simulation (continuous mode)
+- **CollectorSink** — Accumulates text, returns on finish (`--once` mode)
 
-| Step | Time |
-|------|------|
-| Silence detection | 0ms (already detected) |
-| Audio finalization | 10ms |
-| Whisper inference | 200-400ms (base.en) |
-| Clipboard copy | 10ms |
-| Keystroke simulation | 20ms |
-| Application paste | 50ms |
-| **Total** | **290-490ms** |
+### Text Injection Fallback Chain
 
-(Add 0-2000ms if LLM refinement enabled)
+1. **Portal** — xdg-desktop-portal RemoteDesktop key injection (GNOME 45+, KDE 6.1+)
+2. **wtype** — wlroots virtual keyboard
+3. **ydotool** — uinput-based, works everywhere but needs daemon
 
-## Error Handling
+Paste key auto-detection: queries swaymsg → hyprctl → GNOME Shell Introspect → GNOME fallback → generic fallback.
 
-### Graceful Degradation
+## Module Map
 
-| Error | Fallback Chain |
-|-------|----------------|
-| Audio device not found | Try fallback devices → Error with suggestion |
-| ydotool not running | Start ydotool → Clipboard-only mode |
-| Model not found | Auto-download → Manual instructions |
-| LLM timeout | Use raw transcription |
-| Wayland not detected | Fall back to X11 → Error if neither |
+```
+src/
+├── app.rs                  # Orchestrates record command (feature-gated: cpal-audio+model-download+cli)
+├── cli.rs                  # clap argument parsing (-v/-vv, --once, --fan-out, etc.)
+├── config.rs               # TOML config + env overrides
+├── diagnostics.rs          # `voicsh check` dependency validation
+├── audio/
+│   ├── capture.rs          # cpal AudioSource impl (feature: cpal-audio)
+│   ├── recorder.rs         # AudioSource trait + MockAudioSource
+│   └── vad.rs              # Voice activity detection (RMS threshold + state machine)
+├── input/
+│   ├── injector.rs         # TextInjector with CommandExecutor trait (wl-copy, wtype, ydotool)
+│   ├── portal.rs           # ashpd PortalSession for key injection (feature: portal)
+│   └── focused_window.rs   # Paste key detection (sway/hyprland/GNOME)
+├── pipeline/
+│   ├── orchestrator.rs     # Pipeline + PipelineConfig + PipelineHandle
+│   ├── station.rs          # Station trait + StationRunner
+│   ├── sink.rs             # TextSink trait, SinkStation, InjectorSink, CollectorSink
+│   ├── adaptive_chunker.rs # Gap-shrinking chunker algorithm
+│   ├── vad_station.rs      # VAD as Station
+│   ├── chunker_station.rs  # Chunker as Station
+│   ├── transcriber_station.rs # Transcriber as Station
+│   ├── types.rs            # AudioFrame, VadFrame, AudioChunk, TranscribedText
+│   └── error.rs            # StationError + ErrorReporter trait
+├── streaming/              # Experimental streaming pipeline (ring buffer, stitcher)
+├── stt/
+│   ├── transcriber.rs      # Transcriber trait + MockTranscriber
+│   ├── whisper.rs          # WhisperTranscriber (feature: whisper)
+│   └── fan_out.rs          # Parallel model comparison (--fan-out)
+├── models/
+│   ├── catalog.rs          # Model metadata, English/multilingual variants
+│   └── download.rs         # HuggingFace download with SHA-256 (feature: model-download)
+└── ipc/
+    ├── protocol.rs         # JSON command/response types
+    └── server.rs           # Unix socket IPC server
+```
 
-### User Feedback
+## Feature Gates
 
-- Overlay shows state changes
-- CLI commands return clear error messages
-- `voicsh status` shows full system health
-- Debug mode logs to file
+```toml
+default = ["full"]
+full    = ["whisper", "cpal-audio", "model-download", "cli", "portal"]
+```
 
-## Security Considerations
+Use `--no-default-features` for fast lib-only builds (skips whisper-rs compilation).
 
-1. **No Network by Default**: Core functionality is offline
-2. **Unix Socket Permissions**: Socket created with user-only permissions (0600)
-3. **No Root Required**: Runs entirely in userspace
-4. **Audio Privacy**: Audio processed locally, never stored permanently
-5. **LLM API Keys**: Environment variables or user-readable config file
+## Verbosity
 
-## Technology Choices
+- No flag: text only (`"transcribed text"`)
+- `-v`: volume meter + result lines (`[ok 43ch] "text"`)
+- `-vv`: full diagnostics (chunk timing, transcribing progress, paste detection steps)
 
-### Why These Tools?
+## Configuration
 
-| Component | Choice | Rationale |
-|-----------|--------|-----------|
-| Audio | cpal | Cross-platform, PipeWire/Pulse/ALSA support |
-| STT | whisper-rs | Best accuracy, active development, Rust bindings |
-| Overlay | smithay-client-toolkit | Native Wayland layer-shell |
-| Config | TOML + serde | Rust idiomatic, human-readable |
-| CLI | clap | Best-in-class arg parsing |
-| Async | tokio | Industry standard |
-| IPC | Unix socket | Simple, secure, fast |
-
-### Alternatives Considered
-
-| Alternative | Why Not |
-|-------------|---------|
-| D-Bus instead of Unix socket | Heavier dependency |
-| Embedding model in binary | Too large, harder to update |
-| Direct uinput for text injection | Requires root/capabilities |
-| GTK/Qt for overlay | Heavier, but more portable |
-| VOSK instead of Whisper | Lower accuracy for English |
-
-## Future Considerations
-
-### Potential Optimizations
-- GPU acceleration for Whisper (CUDA/Metal)
-- Streaming transcription (word-by-word)
-- Voice command detection
-- Multiple language support
-- Custom wake words
-
-### Technical Debt to Avoid
-- Don't embed large models
-- Don't require root privileges
-- Don't bypass clipboard for special apps
-- Don't add GUI settings (config file is enough)
+TOML at `~/.config/voicsh/config.toml`. Sections: `[audio]`, `[stt]`, `[input]`.
+Environment overrides: `VOICSH_MODEL`, `VOICSH_AUDIO_DEVICE`, etc.
