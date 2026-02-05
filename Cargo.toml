@@ -1,6 +1,6 @@
 [package]
 name = "voicsh"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 rust-version = "1.93"
 description = "Voice typing for Wayland Linux"
@@ -39,6 +39,9 @@ libc = "0.2"
 # Audio
 cpal = { version = "0.15", optional = true }
 
+# WAV file parsing
+hound = "3.5"
+
 # HTTP client for model downloads
 reqwest = { version = "0.13", features = ["stream"], optional = true }
 sha1 = { version = "0.10", optional = true }
@@ -56,6 +59,10 @@ cpal-audio = ["dep:cpal"]
 model-download = ["dep:reqwest", "dep:sha1", "dep:indicatif", "dep:futures-util"]
 cli = ["dep:clap", "dep:dirs"]
 portal = ["dep:ashpd"]
+cuda = ["whisper-rs/cuda"]
+vulkan = ["whisper-rs/vulkan"]
+hipblas = ["whisper-rs/hipblas"]
+openblas = ["whisper-rs/openblas"]
 
 [dev-dependencies]
 tempfile = "3"

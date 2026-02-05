@@ -206,6 +206,20 @@ impl TextSink for CollectorSink {
     }
 }
 
+/// Pipe mode sink — writes transcribed text to stdout.
+pub struct StdoutSink;
+
+impl TextSink for StdoutSink {
+    fn handle(&mut self, text: &str) -> crate::error::Result<()> {
+        println!("{}", text);
+        Ok(())
+    }
+
+    fn name(&self) -> &'static str {
+        "stdout"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +429,11 @@ mod tests {
     fn injector_sink_name() {
         let sink = InjectorSink::system(InputMethod::Clipboard, "ctrl+v".to_string(), 0);
         assert_eq!(sink.name(), "injector");
+    }
+
+    #[test]
+    fn stdout_sink_name() {
+        let sink = StdoutSink;
+        assert_eq!(sink.name(), "stdout");
     }
 }

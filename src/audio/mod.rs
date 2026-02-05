@@ -4,3 +4,4 @@
 pub mod capture;
 pub mod recorder;
 pub mod vad;
+pub mod wav;

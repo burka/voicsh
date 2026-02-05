@@ -6,6 +6,7 @@
 use crate::audio::capture::{CpalAudioSource, suppress_audio_warnings};
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
+use crate::audio::wav::WavAudioSource;
 use crate::config::Config;
 use crate::defaults;
 use crate::error::{Result, VoicshError};
@@ -16,7 +17,7 @@ use crate::models::download::{
 };
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
-use crate::pipeline::sink::{CollectorSink, InjectorSink};
+use crate::pipeline::sink::{CollectorSink, InjectorSink, StdoutSink};
 use crate::stt::fan_out::FanOutTranscriber;
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
@@ -26,6 +27,67 @@ use std::sync::Arc;
 
 #[cfg(feature = "portal")]
 use crate::input::portal::PortalSession;
+
+/// Run pipe mode: read WAV from stdin → transcribe → write to stdout.
+///
+/// # Arguments
+/// * `config` - Base configuration (can be overridden by CLI args)
+/// * `model` - Optional model override from CLI
+/// * `language` - Optional language override from CLI
+/// * `quiet` - Suppress status messages
+/// * `verbosity` - Verbosity level (0=default, 1=clean output, 2=full diagnostics)
+/// * `no_download` - Prevent automatic model download
+///
+/// # Returns
+/// Ok(()) on success, or an error if any step fails
+pub async fn run_pipe_command(
+    mut config: Config,
+    model: Option<String>,
+    language: Option<String>,
+    quiet: bool,
+    verbosity: u8,
+    no_download: bool,
+) -> Result<()> {
+    // Apply CLI overrides
+    if let Some(m) = model {
+        config.stt.model = m;
+    }
+    if let Some(l) = language {
+        config.stt.language = l;
+    }
+
+    // Load model
+    if verbosity >= 1 {
+        eprintln!("Loading model '{}'...", config.stt.model);
+    }
+    let transcriber: Arc<dyn Transcriber> =
+        create_transcriber(&config, quiet, verbosity, no_download).await?;
+
+    // Read WAV from stdin
+    let audio_source: Box<dyn AudioSource> = Box::new(WavAudioSource::from_stdin()?);
+
+    let pipeline_config = PipelineConfig {
+        vad: VadConfig {
+            speech_threshold: config.audio.vad_threshold,
+            silence_duration_ms: config.audio.silence_duration_ms,
+            ..Default::default()
+        },
+        chunker: AdaptiveChunkerConfig::default(),
+        verbosity,
+        auto_level: false, // No auto-level for file input
+        quiet: true,       // No meter display for pipe mode
+        sample_rate: 16000,
+        ..Default::default()
+    };
+
+    let sink = StdoutSink;
+    let pipeline = Pipeline::new(pipeline_config);
+    let handle = pipeline.start(audio_source, transcriber, Box::new(sink))?;
+
+    // Wait for pipeline to finish (EOF cascades through channels)
+    handle.stop();
+    Ok(())
+}
 
 /// Run the record command: capture audio → transcribe → inject text.
 ///
@@ -80,7 +142,7 @@ pub async fn run_record_command(
     #[cfg(feature = "portal")]
     let portal = match PortalSession::try_new().await {
         Ok(session) => {
-            if !quiet {
+            if verbosity >= 1 {
                 eprintln!("Portal keyboard access granted.");
             }
             Some(Arc::new(session))
@@ -97,7 +159,8 @@ pub async fn run_record_command(
     if !quiet {
         eprintln!("Loading model '{}'...", config.stt.model);
     }
-    let transcriber: Arc<dyn Transcriber> = create_transcriber(&config, quiet, no_download).await?;
+    let transcriber: Arc<dyn Transcriber> =
+        create_transcriber(&config, quiet, verbosity, no_download).await?;
     if !quiet {
         eprintln!("Ready. Listening...");
     }
@@ -235,6 +298,7 @@ async fn run_single_session(
 async fn create_transcriber(
     config: &Config,
     quiet: bool,
+    verbosity: u8,
     no_download: bool,
 ) -> Result<Arc<dyn Transcriber>> {
     let resolved_model = resolve_model_for_language(&config.stt.model, &config.stt.language, quiet);
@@ -248,7 +312,7 @@ async fn create_transcriber(
         let ml =
             load_single_model(&resolved_model, &config.stt.language, quiet, no_download).await?;
         let en = load_single_model(en, defaults::ENGLISH_LANGUAGE, quiet, no_download).await?;
-        if !quiet {
+        if verbosity >= 1 {
             eprintln!("Fan-out: {} + {}", ml.model_name(), en.model_name());
         }
         return Ok(Arc::new(FanOutTranscriber::new(vec![

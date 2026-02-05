@@ -25,7 +25,7 @@ pub mod app;
 // Core traits (source → process → sink)
 pub use audio::recorder::AudioSource;
 pub use input::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
-pub use pipeline::sink::{CollectorSink, InjectorSink, TextSink};
+pub use pipeline::sink::{CollectorSink, InjectorSink, StdoutSink, TextSink};
 pub use stt::transcriber::Transcriber;
 
 // Pipeline

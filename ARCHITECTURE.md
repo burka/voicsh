@@ -33,6 +33,7 @@ Each station implements `Station<Input, Output>` and runs in its own thread via 
 
 - **InjectorSink** — Clipboard + paste key simulation (continuous mode)
 - **CollectorSink** — Accumulates text, returns on finish (`--once` mode)
+- **StdoutSink** — Writes to stdout (pipe mode: `cat file.wav | voicsh`)
 
 ### Text Injection Fallback Chain
 
@@ -53,6 +54,7 @@ src/
 ├── audio/
 │   ├── capture.rs          # cpal AudioSource impl (feature: cpal-audio)
 │   ├── recorder.rs         # AudioSource trait + MockAudioSource
+│   ├── wav.rs              # WavAudioSource: WAV file input with resampling (hound)
 │   └── vad.rs              # Voice activity detection (RMS threshold + state machine)
 ├── input/
 │   ├── injector.rs         # TextInjector with CommandExecutor trait (wl-copy, wtype, ydotool)
@@ -61,7 +63,7 @@ src/
 ├── pipeline/
 │   ├── orchestrator.rs     # Pipeline + PipelineConfig + PipelineHandle
 │   ├── station.rs          # Station trait + StationRunner
-│   ├── sink.rs             # TextSink trait, SinkStation, InjectorSink, CollectorSink
+│   ├── sink.rs             # TextSink trait, SinkStation, InjectorSink, CollectorSink, StdoutSink
 │   ├── adaptive_chunker.rs # Gap-shrinking chunker algorithm
 │   ├── vad_station.rs      # VAD as Station
 │   ├── chunker_station.rs  # Chunker as Station
@@ -86,6 +88,10 @@ src/
 ```toml
 default = ["full"]
 full    = ["whisper", "cpal-audio", "model-download", "cli", "portal"]
+cuda    = ["whisper-rs/cuda"]       # NVIDIA GPU
+vulkan  = ["whisper-rs/vulkan"]     # Cross-platform GPU
+hipblas = ["whisper-rs/hipblas"]    # AMD GPU
+openblas = ["whisper-rs/openblas"]  # CPU BLAS
 ```
 
 Use `--no-default-features` for fast lib-only builds (skips whisper-rs compilation).

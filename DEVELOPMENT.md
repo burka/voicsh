@@ -6,8 +6,8 @@
 
 ```bash
 # Fast (no whisper-rs compilation):
-cargo test --lib --no-default-features --features portal   # 302 tests
-cargo test --lib --no-default-features                      # 294 tests (no portal)
+cargo test --lib --no-default-features --features portal   # 326 tests
+cargo test --lib --no-default-features                      # 318 tests (no portal)
 
 # Full (slow, compiles whisper-rs):
 cargo test --lib
@@ -21,10 +21,10 @@ All external dependencies are behind traits with test doubles:
 
 | Trait | Production | Test |
 |-------|-----------|------|
-| `AudioSource` | `CpalAudioSource` | `MockAudioSource` |
+| `AudioSource` | `CpalAudioSource`, `WavAudioSource` | `MockAudioSource` |
 | `Transcriber` | `WhisperTranscriber` | `MockTranscriber` |
 | `CommandExecutor` | `SystemCommandExecutor` | `MockCommandExecutor` / `RecordingExecutor` |
-| `TextSink` | `InjectorSink` | `CollectorSink` |
+| `TextSink` | `InjectorSink`, `StdoutSink` | `CollectorSink` |
 
 ### Conventions
 

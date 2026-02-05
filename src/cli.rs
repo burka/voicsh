@@ -11,7 +11,7 @@ use std::path::PathBuf;
 pub struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 
     /// Path to configuration file
     #[arg(long, global = true, value_name = "PATH")]
@@ -24,42 +24,39 @@ pub struct Cli {
     /// Verbose output (-v: meter + results, -vv: full diagnostics)
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
+
+    /// Audio input device (e.g., hw:0)
+    #[arg(long, value_name = "DEVICE")]
+    pub device: Option<String>,
+
+    /// Whisper model (default: base, multilingual). Use base.en for English-only optimized
+    #[arg(long, value_name = "MODEL")]
+    pub model: Option<String>,
+
+    /// Language code for transcription (default: auto-detect). Examples: auto, en, de, es, fr
+    #[arg(long, value_name = "LANG")]
+    pub language: Option<String>,
+
+    /// Prevent automatic model download if configured model is missing
+    #[arg(long)]
+    pub no_download: bool,
+
+    /// Exit after first transcription (default: keep recording)
+    #[arg(long)]
+    pub once: bool,
+
+    /// Run English-optimized and multilingual models in parallel, pick best result
+    #[arg(long)]
+    pub fan_out: bool,
+
+    /// Chunk duration in seconds for progressive transcription
+    #[arg(long, short = 'c', value_name = "SECONDS", default_value = "3")]
+    pub chunk_size: u32,
 }
 
 /// Available commands
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Start recording, transcribe when done
-    Record {
-        /// Audio input device (e.g., hw:0)
-        #[arg(long, value_name = "DEVICE")]
-        device: Option<String>,
-
-        /// Whisper model (default: base, multilingual). Use base.en for English-only optimized
-        #[arg(long, value_name = "MODEL")]
-        model: Option<String>,
-
-        /// Language code for transcription (default: auto-detect). Examples: auto, en, de, es, fr
-        #[arg(long, value_name = "LANG")]
-        language: Option<String>,
-
-        /// Prevent automatic model download if configured model is missing
-        #[arg(long)]
-        no_download: bool,
-
-        /// Exit after first transcription (default: keep recording)
-        #[arg(long)]
-        once: bool,
-
-        /// Run English-optimized and multilingual models in parallel, pick best result
-        #[arg(long)]
-        fan_out: bool,
-
-        /// Chunk duration in seconds for progressive transcription
-        #[arg(long, short = 'c', value_name = "SECONDS", default_value = "3")]
-        chunk_size: u32,
-    },
-
     /// List available audio input devices
     Devices,
 
@@ -69,22 +66,6 @@ pub enum Commands {
         #[command(subcommand)]
         action: ModelsAction,
     },
-
-    /// Start the voicsh daemon
-    Start {
-        /// Run in foreground instead of daemonizing
-        #[arg(long)]
-        foreground: bool,
-    },
-
-    /// Stop the voicsh daemon
-    Stop,
-
-    /// Toggle recording (daemon mode)
-    Toggle,
-
-    /// Show daemon status
-    Status,
 
     /// Check system dependencies
     Check,
@@ -107,28 +88,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_record_simple() {
-        let cli = Cli::try_parse_from(["voicsh", "record"]).unwrap();
-        match cli.command {
-            Commands::Record {
-                device,
-                model,
-                language,
-                no_download,
-                once,
-                fan_out,
-                chunk_size,
-            } => {
-                assert!(device.is_none());
-                assert!(model.is_none());
-                assert!(language.is_none());
-                assert!(!no_download);
-                assert!(!once);
-                assert!(!fan_out);
-                assert_eq!(chunk_size, 3); // default: 3 seconds
-            }
-            _ => panic!("Expected Record command"),
-        }
+    fn test_parse_default_command() {
+        let cli = Cli::try_parse_from(["voicsh"]).unwrap();
+        assert!(cli.command.is_none());
+        assert!(cli.device.is_none());
+        assert!(cli.model.is_none());
+        assert!(cli.language.is_none());
+        assert!(!cli.no_download);
+        assert!(!cli.once);
+        assert!(!cli.fan_out);
+        assert_eq!(cli.chunk_size, 3); // default: 3 seconds
         assert!(!cli.quiet);
         assert_eq!(cli.verbose, 0);
         assert!(cli.config.is_none());
@@ -136,27 +105,26 @@ mod tests {
 
     #[test]
     fn test_parse_verbose_single() {
-        let cli = Cli::try_parse_from(["voicsh", "-v", "record"]).unwrap();
+        let cli = Cli::try_parse_from(["voicsh", "-v"]).unwrap();
         assert_eq!(cli.verbose, 1);
     }
 
     #[test]
     fn test_parse_verbose_double() {
-        let cli = Cli::try_parse_from(["voicsh", "-vv", "record"]).unwrap();
+        let cli = Cli::try_parse_from(["voicsh", "-vv"]).unwrap();
         assert_eq!(cli.verbose, 2);
     }
 
     #[test]
     fn test_parse_verbose_repeated_flags() {
-        let cli = Cli::try_parse_from(["voicsh", "-v", "-v", "record"]).unwrap();
+        let cli = Cli::try_parse_from(["voicsh", "-v", "-v"]).unwrap();
         assert_eq!(cli.verbose, 2);
     }
 
     #[test]
-    fn test_parse_record_with_options() {
+    fn test_parse_with_options() {
         let cli = Cli::try_parse_from([
             "voicsh",
-            "record",
             "--device",
             "hw:0",
             "--model",
@@ -166,94 +134,28 @@ mod tests {
         ])
         .unwrap();
 
-        match cli.command {
-            Commands::Record {
-                device,
-                model,
-                language,
-                no_download,
-                once,
-                fan_out,
-                ..
-            } => {
-                assert_eq!(device.as_deref(), Some("hw:0"));
-                assert_eq!(model.as_deref(), Some("base.en"));
-                assert_eq!(language.as_deref(), Some("en"));
-                assert!(!no_download);
-                assert!(!once);
-                assert!(!fan_out);
-            }
-            _ => panic!("Expected Record command"),
-        }
+        assert_eq!(cli.device.as_deref(), Some("hw:0"));
+        assert_eq!(cli.model.as_deref(), Some("base.en"));
+        assert_eq!(cli.language.as_deref(), Some("en"));
+        assert!(!cli.no_download);
+        assert!(!cli.once);
+        assert!(!cli.fan_out);
     }
 
     #[test]
     fn test_parse_devices() {
         let cli = Cli::try_parse_from(["voicsh", "devices"]).unwrap();
         match cli.command {
-            Commands::Devices => {}
+            Some(Commands::Devices) => {}
             _ => panic!("Expected Devices command"),
         }
     }
 
     #[test]
-    fn test_parse_start_simple() {
-        let cli = Cli::try_parse_from(["voicsh", "start"]).unwrap();
-        match cli.command {
-            Commands::Start { foreground } => {
-                assert!(!foreground);
-            }
-            _ => panic!("Expected Start command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_start_foreground() {
-        let cli = Cli::try_parse_from(["voicsh", "start", "--foreground"]).unwrap();
-        match cli.command {
-            Commands::Start { foreground } => {
-                assert!(foreground);
-            }
-            _ => panic!("Expected Start command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_stop() {
-        let cli = Cli::try_parse_from(["voicsh", "stop"]).unwrap();
-        match cli.command {
-            Commands::Stop => {}
-            _ => panic!("Expected Stop command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_toggle() {
-        let cli = Cli::try_parse_from(["voicsh", "toggle"]).unwrap();
-        match cli.command {
-            Commands::Toggle => {}
-            _ => panic!("Expected Toggle command"),
-        }
-    }
-
-    #[test]
-    fn test_parse_status() {
-        let cli = Cli::try_parse_from(["voicsh", "status"]).unwrap();
-        match cli.command {
-            Commands::Status => {}
-            _ => panic!("Expected Status command"),
-        }
-    }
-
-    #[test]
     fn test_parse_global_config() {
-        let cli =
-            Cli::try_parse_from(["voicsh", "--config", "/path/to/config.toml", "record"]).unwrap();
+        let cli = Cli::try_parse_from(["voicsh", "--config", "/path/to/config.toml"]).unwrap();
         assert_eq!(cli.config, Some(PathBuf::from("/path/to/config.toml")));
-        match cli.command {
-            Commands::Record { .. } => {}
-            _ => panic!("Expected Record command"),
-        }
+        assert!(cli.command.is_none());
     }
 
     #[test]
@@ -261,37 +163,16 @@ mod tests {
         let cli = Cli::try_parse_from(["voicsh", "--quiet", "devices"]).unwrap();
         assert!(cli.quiet);
         match cli.command {
-            Commands::Devices => {}
+            Some(Commands::Devices) => {}
             _ => panic!("Expected Devices command"),
         }
     }
 
     #[test]
     fn test_parse_quiet_short_flag() {
-        let cli = Cli::try_parse_from(["voicsh", "-q", "status"]).unwrap();
+        let cli = Cli::try_parse_from(["voicsh", "-q"]).unwrap();
         assert!(cli.quiet);
-    }
-
-    #[test]
-    fn test_parse_combined_global_options() {
-        let cli = Cli::try_parse_from([
-            "voicsh",
-            "--config",
-            "/etc/voicsh.toml",
-            "--quiet",
-            "start",
-            "--foreground",
-        ])
-        .unwrap();
-
-        assert_eq!(cli.config, Some(PathBuf::from("/etc/voicsh.toml")));
-        assert!(cli.quiet);
-        match cli.command {
-            Commands::Start { foreground } => {
-                assert!(foreground);
-            }
-            _ => panic!("Expected Start command"),
-        }
+        assert!(cli.command.is_none());
     }
 
     #[test]
@@ -324,66 +205,40 @@ mod tests {
     fn test_global_options_after_command() {
         // Global options should work before or after the command
         let cli =
-            Cli::try_parse_from(["voicsh", "record", "--config", "/tmp/config.toml"]).unwrap();
+            Cli::try_parse_from(["voicsh", "devices", "--config", "/tmp/config.toml"]).unwrap();
 
         assert_eq!(cli.config, Some(PathBuf::from("/tmp/config.toml")));
     }
 
     #[test]
-    fn test_record_with_partial_options() {
-        let cli = Cli::try_parse_from(["voicsh", "record", "--model", "base"]).unwrap();
+    fn test_partial_options() {
+        let cli = Cli::try_parse_from(["voicsh", "--model", "base"]).unwrap();
 
-        match cli.command {
-            Commands::Record {
-                device,
-                model,
-                language,
-                no_download,
-                once,
-                fan_out,
-                ..
-            } => {
-                assert!(device.is_none());
-                assert_eq!(model.as_deref(), Some("base"));
-                assert!(language.is_none());
-                assert!(!no_download);
-                assert!(!once);
-                assert!(!fan_out);
-            }
-            _ => panic!("Expected Record command"),
-        }
+        assert!(cli.device.is_none());
+        assert_eq!(cli.model.as_deref(), Some("base"));
+        assert!(cli.language.is_none());
+        assert!(!cli.no_download);
+        assert!(!cli.once);
+        assert!(!cli.fan_out);
     }
 
     #[test]
-    fn test_parse_record_with_no_download() {
-        let cli = Cli::try_parse_from(["voicsh", "record", "--no-download"]).unwrap();
+    fn test_no_download() {
+        let cli = Cli::try_parse_from(["voicsh", "--no-download"]).unwrap();
 
-        match cli.command {
-            Commands::Record {
-                device,
-                model,
-                language,
-                no_download,
-                once,
-                fan_out,
-                ..
-            } => {
-                assert!(device.is_none());
-                assert!(model.is_none());
-                assert!(language.is_none());
-                assert!(no_download);
-                assert!(!once);
-                assert!(!fan_out);
-            }
-            _ => panic!("Expected Record command"),
-        }
+        assert!(cli.device.is_none());
+        assert!(cli.model.is_none());
+        assert!(cli.language.is_none());
+        assert!(cli.no_download);
+        assert!(!cli.once);
+        assert!(!cli.fan_out);
     }
 
     #[test]
     fn test_parse_models_list() {
         let cli = Cli::try_parse_from(["voicsh", "models", "list"]).unwrap();
         match cli.command {
-            Commands::Models { action } => match action {
+            Some(Commands::Models { action }) => match action {
                 ModelsAction::List => {}
                 _ => panic!("Expected List action"),
             },
@@ -395,7 +250,7 @@ mod tests {
     fn test_parse_models_install() {
         let cli = Cli::try_parse_from(["voicsh", "models", "install", "base.en"]).unwrap();
         match cli.command {
-            Commands::Models { action } => match action {
+            Some(Commands::Models { action }) => match action {
                 ModelsAction::Install { name } => {
                     assert_eq!(name, "base.en");
                 }
@@ -409,7 +264,7 @@ mod tests {
     fn test_parse_models_install_different_model() {
         let cli = Cli::try_parse_from(["voicsh", "models", "install", "tiny"]).unwrap();
         match cli.command {
-            Commands::Models { action } => match action {
+            Some(Commands::Models { action }) => match action {
                 ModelsAction::Install { name } => {
                     assert_eq!(name, "tiny");
                 }
@@ -435,68 +290,38 @@ mod tests {
     fn test_parse_check() {
         let cli = Cli::try_parse_from(["voicsh", "check"]).unwrap();
         match cli.command {
-            Commands::Check => {}
+            Some(Commands::Check) => {}
             _ => panic!("Expected Check command"),
         }
     }
 
     #[test]
-    fn test_parse_record_with_once() {
-        let cli = Cli::try_parse_from(["voicsh", "record", "--once"]).unwrap();
+    fn test_once() {
+        let cli = Cli::try_parse_from(["voicsh", "--once"]).unwrap();
 
-        match cli.command {
-            Commands::Record {
-                device,
-                model,
-                language,
-                no_download,
-                once,
-                fan_out,
-                ..
-            } => {
-                assert!(device.is_none());
-                assert!(model.is_none());
-                assert!(language.is_none());
-                assert!(!no_download);
-                assert!(once);
-                assert!(!fan_out);
-            }
-            _ => panic!("Expected Record command"),
-        }
+        assert!(cli.device.is_none());
+        assert!(cli.model.is_none());
+        assert!(cli.language.is_none());
+        assert!(!cli.no_download);
+        assert!(cli.once);
+        assert!(!cli.fan_out);
     }
 
     #[test]
-    fn test_parse_record_with_fan_out() {
-        let cli = Cli::try_parse_from(["voicsh", "record", "--fan-out"]).unwrap();
-        match cli.command {
-            Commands::Record { fan_out, .. } => {
-                assert!(fan_out);
-            }
-            _ => panic!("Expected Record command"),
-        }
+    fn test_fan_out() {
+        let cli = Cli::try_parse_from(["voicsh", "--fan-out"]).unwrap();
+        assert!(cli.fan_out);
     }
 
     #[test]
-    fn test_parse_record_with_chunk_size() {
-        let cli = Cli::try_parse_from(["voicsh", "record", "--chunk-size", "5"]).unwrap();
-
-        match cli.command {
-            Commands::Record { chunk_size, .. } => {
-                assert_eq!(chunk_size, 5);
-            }
-            _ => panic!("Expected Record command"),
-        }
+    fn test_chunk_size() {
+        let cli = Cli::try_parse_from(["voicsh", "--chunk-size", "5"]).unwrap();
+        assert_eq!(cli.chunk_size, 5);
     }
 
     #[test]
-    fn test_parse_record_chunk_size_short_flag() {
-        let cli = Cli::try_parse_from(["voicsh", "record", "-c", "2"]).unwrap();
-
-        match cli.command {
-            Commands::Record { chunk_size, .. } => {
-                assert_eq!(chunk_size, 2);
-            }
-            _ => panic!("Expected Record command"),
-        }
+    fn test_chunk_size_short() {
+        let cli = Cli::try_parse_from(["voicsh", "-c", "2"]).unwrap();
+        assert_eq!(cli.chunk_size, 2);
     }
 }

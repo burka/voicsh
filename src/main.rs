@@ -1,8 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
+use std::io::IsTerminal;
 use voicsh::app::run_record_command;
 use voicsh::audio::capture::list_devices;
-use voicsh::cli::{Cli, Commands, ModelsAction};
+use voicsh::cli::{Cli, ModelsAction};
 use voicsh::config::Config;
 use voicsh::diagnostics::check_dependencies;
 use voicsh::models::catalog::list_models;
@@ -13,60 +14,43 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Record {
-            device,
-            model,
-            language,
-            no_download,
-            once,
-            fan_out,
-            chunk_size,
-        } => {
-            // Load configuration
+        None => {
             let config = load_config(cli.config.as_deref())?;
-
-            // Run the record pipeline
-            run_record_command(
-                config,
-                device,
-                model,
-                language,
-                cli.quiet,
-                cli.verbose,
-                no_download,
-                once,
-                fan_out,
-                chunk_size,
-            )
-            .await?;
+            if std::io::stdin().is_terminal() {
+                // Mic mode
+                run_record_command(
+                    config,
+                    cli.device,
+                    cli.model,
+                    cli.language,
+                    cli.quiet,
+                    cli.verbose,
+                    cli.no_download,
+                    cli.once,
+                    cli.fan_out,
+                    cli.chunk_size,
+                )
+                .await?;
+            } else {
+                // Pipe mode: stdin has WAV data
+                voicsh::app::run_pipe_command(
+                    config,
+                    cli.model,
+                    cli.language,
+                    cli.quiet,
+                    cli.verbose,
+                    cli.no_download,
+                )
+                .await?;
+            }
         }
-        Commands::Devices => {
+        Some(voicsh::cli::Commands::Devices) => {
             list_audio_devices()?;
         }
-        Commands::Models { action } => {
+        Some(voicsh::cli::Commands::Models { action }) => {
             handle_models_command(action).await?;
         }
-        Commands::Start { foreground } => {
-            if foreground {
-                eprintln!("Starting daemon in foreground... (not implemented)");
-            } else {
-                eprintln!("Starting daemon... (not implemented)");
-            }
-            std::process::exit(1);
-        }
-        Commands::Stop => {
-            eprintln!("Stopping daemon... (not implemented)");
-            std::process::exit(1);
-        }
-        Commands::Toggle => {
-            eprintln!("Toggling recording... (not implemented)");
-            std::process::exit(1);
-        }
-        Commands::Status => {
-            eprintln!("Daemon status... (not implemented)");
-            std::process::exit(1);
-        }
-        Commands::Check => {
+        Some(voicsh::cli::Commands::Check) => {
             check_dependencies();
         }
     }
