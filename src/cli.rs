@@ -51,6 +51,10 @@ pub enum Commands {
         #[arg(long)]
         once: bool,
 
+        /// Run English-optimized and multilingual models in parallel, pick best result
+        #[arg(long)]
+        fan_out: bool,
+
         /// Chunk duration in seconds for progressive transcription
         #[arg(long, short = 'c', value_name = "SECONDS", default_value = "3")]
         chunk_size: u32,
@@ -112,6 +116,7 @@ mod tests {
                 language,
                 no_download,
                 once,
+                fan_out,
                 chunk_size,
             } => {
                 assert!(device.is_none());
@@ -119,6 +124,7 @@ mod tests {
                 assert!(language.is_none());
                 assert!(!no_download);
                 assert!(!once);
+                assert!(!fan_out);
                 assert_eq!(chunk_size, 3); // default: 3 seconds
             }
             _ => panic!("Expected Record command"),
@@ -148,6 +154,7 @@ mod tests {
                 language,
                 no_download,
                 once,
+                fan_out,
                 ..
             } => {
                 assert_eq!(device.as_deref(), Some("hw:0"));
@@ -155,6 +162,7 @@ mod tests {
                 assert_eq!(language.as_deref(), Some("en"));
                 assert!(!no_download);
                 assert!(!once);
+                assert!(!fan_out);
             }
             _ => panic!("Expected Record command"),
         }
@@ -313,6 +321,7 @@ mod tests {
                 language,
                 no_download,
                 once,
+                fan_out,
                 ..
             } => {
                 assert!(device.is_none());
@@ -320,6 +329,7 @@ mod tests {
                 assert!(language.is_none());
                 assert!(!no_download);
                 assert!(!once);
+                assert!(!fan_out);
             }
             _ => panic!("Expected Record command"),
         }
@@ -336,6 +346,7 @@ mod tests {
                 language,
                 no_download,
                 once,
+                fan_out,
                 ..
             } => {
                 assert!(device.is_none());
@@ -343,6 +354,7 @@ mod tests {
                 assert!(language.is_none());
                 assert!(no_download);
                 assert!(!once);
+                assert!(!fan_out);
             }
             _ => panic!("Expected Record command"),
         }
@@ -420,6 +432,7 @@ mod tests {
                 language,
                 no_download,
                 once,
+                fan_out,
                 ..
             } => {
                 assert!(device.is_none());
@@ -427,6 +440,18 @@ mod tests {
                 assert!(language.is_none());
                 assert!(!no_download);
                 assert!(once);
+                assert!(!fan_out);
+            }
+            _ => panic!("Expected Record command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_record_with_fan_out() {
+        let cli = Cli::try_parse_from(["voicsh", "record", "--fan-out"]).unwrap();
+        match cli.command {
+            Commands::Record { fan_out, .. } => {
+                assert!(fan_out);
             }
             _ => panic!("Expected Record command"),
         }

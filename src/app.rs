@@ -9,13 +9,14 @@ use crate::audio::vad::VadConfig;
 use crate::config::Config;
 use crate::error::{Result, VoicshError};
 use crate::input::injector::SystemCommandExecutor;
-use crate::models::catalog::{get_model, multilingual_variant};
+use crate::models::catalog::{english_variant, get_model, multilingual_variant};
 use crate::models::download::{
     download_model, find_any_installed_model, is_model_installed, model_path,
 };
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
 use crate::pipeline::sink::{CollectorSink, InjectorSink};
+use crate::stt::fan_out::FanOutTranscriber;
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 use std::path::PathBuf;
@@ -36,6 +37,7 @@ use crate::input::portal::PortalSession;
 /// * `verbose` - Show detailed output (chunk progress)
 /// * `no_download` - Prevent automatic model download
 /// * `once` - Exit after first transcription (default: loop continuously)
+/// * `fan_out` - Run English + multilingual models in parallel
 /// * `chunk_size` - Chunk duration in seconds (unused for now, reserved)
 ///
 /// # Returns
@@ -50,6 +52,7 @@ pub async fn run_record_command(
     verbose: bool,
     no_download: bool,
     once: bool,
+    fan_out: bool,
     _chunk_size: u32,
 ) -> Result<()> {
     // Suppress noisy JACK/ALSA warnings before audio init
@@ -67,6 +70,9 @@ pub async fn run_record_command(
     }
     if let Some(l) = language {
         config.stt.language = l;
+    }
+    if fan_out {
+        config.stt.fan_out = true;
     }
 
     // Try to establish portal session for key injection (GNOME/KDE)
@@ -90,8 +96,7 @@ pub async fn run_record_command(
     if !quiet {
         eprintln!("Loading model '{}'...", config.stt.model);
     }
-    let transcriber: Arc<dyn Transcriber> =
-        Arc::new(create_transcriber(&config, quiet, no_download).await?);
+    let transcriber: Arc<dyn Transcriber> = create_transcriber(&config, quiet, no_download).await?;
     if !quiet {
         eprintln!("Ready. Listening...");
     }
@@ -246,23 +251,52 @@ fn resolve_model_for_language(model: &str, language: &str, quiet: bool) -> Strin
     model.to_string()
 }
 
-/// Create the transcriber, handling model download if needed.
+/// Create the transcriber, handling model download and fan-out if needed.
 async fn create_transcriber(
     config: &Config,
     quiet: bool,
     no_download: bool,
-) -> Result<WhisperTranscriber> {
-    let configured_model =
-        resolve_model_for_language(&config.stt.model, &config.stt.language, quiet);
+) -> Result<Arc<dyn Transcriber>> {
+    let resolved_model = resolve_model_for_language(&config.stt.model, &config.stt.language, quiet);
 
-    let model_to_use = if is_model_installed(&configured_model) {
-        configured_model
+    // Fan-out: run multilingual + English models in parallel
+    if config.stt.fan_out
+        && config.stt.language == "auto"
+        && let Some(en) = english_variant(&resolved_model)
+        && en != resolved_model
+    {
+        let ml =
+            load_single_model(&resolved_model, &config.stt.language, quiet, no_download).await?;
+        let en = load_single_model(en, "en", quiet, no_download).await?;
+        if !quiet {
+            eprintln!("Fan-out: {} + {}", ml.model_name(), en.model_name());
+        }
+        return Ok(Arc::new(FanOutTranscriber::new(vec![
+            Arc::new(ml) as Arc<dyn Transcriber>,
+            Arc::new(en) as Arc<dyn Transcriber>,
+        ])));
+    }
+
+    let transcriber =
+        load_single_model(&resolved_model, &config.stt.language, quiet, no_download).await?;
+    Ok(Arc::new(transcriber))
+}
+
+/// Load a single Whisper model, downloading if needed.
+async fn load_single_model(
+    model_name: &str,
+    language: &str,
+    quiet: bool,
+    no_download: bool,
+) -> Result<WhisperTranscriber> {
+    let model_to_use = if is_model_installed(model_name) {
+        model_name.to_string()
     } else if no_download {
         if let Some(fallback) = find_any_installed_model() {
             if !quiet {
                 eprintln!(
                     "Model '{}' not installed (--no-download). Using '{}'.",
-                    configured_model, fallback
+                    model_name, fallback
                 );
             }
             fallback
@@ -271,25 +305,25 @@ async fn create_transcriber(
                 message: format!(
                     "Model '{}' not installed and --no-download specified.\n\
                      Run: voicsh models install {}",
-                    configured_model, configured_model
+                    model_name, model_name
                 ),
             });
         }
     } else {
         if !quiet {
-            eprintln!("Downloading model '{}'...", configured_model);
+            eprintln!("Downloading model '{}'...", model_name);
         }
-        download_model(&configured_model, !quiet).await?;
+        download_model(model_name, !quiet).await?;
         if !quiet {
             eprintln!("Download complete.");
         }
-        configured_model
+        model_name.to_string()
     };
 
     let model_path = build_model_path(&model_to_use)?;
     let whisper_config = WhisperConfig {
         model_path,
-        language: config.stt.language.clone(),
+        language: language.to_string(),
         threads: None,
     };
 

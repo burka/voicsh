@@ -30,6 +30,7 @@ pub struct AudioConfig {
 pub struct SttConfig {
     pub model: String,
     pub language: String,
+    pub fan_out: bool,
 }
 
 /// Input method configuration
@@ -63,6 +64,7 @@ impl Default for SttConfig {
         Self {
             model: defaults::DEFAULT_MODEL.to_string(),
             language: defaults::DEFAULT_LANGUAGE.to_string(),
+            fan_out: false,
         }
     }
 }

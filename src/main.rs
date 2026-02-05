@@ -19,6 +19,7 @@ async fn main() -> Result<()> {
             language,
             no_download,
             once,
+            fan_out,
             chunk_size,
         } => {
             // Load configuration
@@ -34,6 +35,7 @@ async fn main() -> Result<()> {
                 cli.verbose,
                 no_download,
                 once,
+                fan_out,
                 chunk_size,
             )
             .await?;
