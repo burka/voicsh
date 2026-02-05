@@ -1,12 +1,12 @@
 use anyhow::Result;
 use clap::Parser;
+use voicsh::app::run_record_command;
 use voicsh::audio::capture::list_devices;
 use voicsh::cli::{Cli, Commands, ModelsAction};
 use voicsh::config::Config;
 use voicsh::diagnostics::check_dependencies;
 use voicsh::models::catalog::list_models;
 use voicsh::models::download::{download_model, format_model_info};
-use voicsh::pipeline::run_record_command;
 
 #[tokio::main]
 async fn main() -> Result<()> {

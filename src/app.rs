@@ -7,14 +7,14 @@ use crate::audio::capture::{CpalAudioSource, suppress_audio_warnings};
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::config::{Config, InputMethod};
-use crate::continuous::adaptive_chunker::AdaptiveChunkerConfig;
-use crate::continuous::pipeline::{ContinuousPipeline, ContinuousPipelineConfig};
 use crate::error::{Result, VoicshError};
 use crate::input::injector::TextInjector;
 use crate::models::catalog::get_model;
 use crate::models::download::{
     download_model, find_any_installed_model, is_model_installed, model_path,
 };
+use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
+use crate::pipeline::orchestrator::{ContinuousPipeline, ContinuousPipelineConfig};
 use crate::streaming::{StreamingPipeline, StreamingPipelineConfig};
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};

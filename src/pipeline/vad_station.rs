@@ -1,9 +1,9 @@
 //! VAD station that detects voice activity in audio frames.
 
 use crate::audio::vad::{Vad, VadConfig};
-use crate::continuous::error::StationError;
-use crate::continuous::station::Station;
-use crate::continuous::types::{AudioFrame, VadFrame};
+use crate::pipeline::error::StationError;
+use crate::pipeline::station::Station;
+use crate::pipeline::types::{AudioFrame, VadFrame};
 use std::io::{self, Write};
 
 /// VAD station that processes audio frames and annotates them with speech detection.

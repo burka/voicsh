@@ -1,9 +1,9 @@
 //! Chunker station that segments speech into transcribable chunks.
 
-use crate::continuous::adaptive_chunker::{AdaptiveChunker, AdaptiveChunkerConfig};
-use crate::continuous::error::{StationError, eprintln_clear};
-use crate::continuous::station::Station;
-use crate::continuous::types::{AudioChunk, VadFrame};
+use crate::pipeline::adaptive_chunker::{AdaptiveChunker, AdaptiveChunkerConfig};
+use crate::pipeline::error::{StationError, eprintln_clear};
+use crate::pipeline::station::Station;
+use crate::pipeline::types::{AudioChunk, VadFrame};
 use std::time::Instant;
 
 /// Station that segments VAD frames into speech chunks using adaptive gap detection.

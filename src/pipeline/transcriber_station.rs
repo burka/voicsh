@@ -1,8 +1,8 @@
 //! Transcriber station that converts audio chunks to text via Whisper.
 
-use crate::continuous::error::{StationError, eprintln_clear};
-use crate::continuous::station::Station;
-use crate::continuous::types::{AudioChunk, TranscribedText};
+use crate::pipeline::error::{StationError, eprintln_clear};
+use crate::pipeline::station::Station;
+use crate::pipeline::types::{AudioChunk, TranscribedText};
 use crate::stt::transcriber::Transcriber;
 use std::sync::Arc;
 use std::time::Instant;

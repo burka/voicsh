@@ -1,10 +1,10 @@
 //! Injector station that outputs transcribed text to the system.
 
 use crate::config::InputMethod;
-use crate::continuous::error::{StationError, eprintln_clear};
-use crate::continuous::station::Station;
-use crate::continuous::types::TranscribedText;
 use crate::input::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
+use crate::pipeline::error::{StationError, eprintln_clear};
+use crate::pipeline::station::Station;
+use crate::pipeline::types::TranscribedText;
 
 /// Station that injects transcribed text into the system.
 ///

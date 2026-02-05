@@ -1,6 +1,6 @@
 //! Core station abstraction and runner for the continuous pipeline.
 
-use crate::continuous::error::{ErrorReporter, StationError};
+use crate::pipeline::error::{ErrorReporter, StationError};
 use crossbeam_channel::{Receiver, Sender};
 use std::marker::PhantomData;
 use std::sync::Arc;

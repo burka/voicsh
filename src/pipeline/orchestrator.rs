@@ -3,12 +3,12 @@
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::config::InputMethod;
-use crate::continuous::adaptive_chunker::AdaptiveChunkerConfig;
-use crate::continuous::error::{ErrorReporter, LogReporter};
-use crate::continuous::station::StationRunner;
-use crate::continuous::types::AudioFrame;
-use crate::continuous::{ChunkerStation, InjectorStation, TranscriberStation, VadStation};
 use crate::error::Result;
+use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
+use crate::pipeline::error::{ErrorReporter, LogReporter};
+use crate::pipeline::station::StationRunner;
+use crate::pipeline::types::AudioFrame;
+use crate::pipeline::{ChunkerStation, InjectorStation, TranscriberStation, VadStation};
 use crate::stt::transcriber::Transcriber;
 use crossbeam_channel::bounded;
 use std::sync::Arc;
