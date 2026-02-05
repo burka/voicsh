@@ -313,7 +313,7 @@ mod tests {
     fn test_whisper_config_default() {
         let config = WhisperConfig::default();
         assert_eq!(config.model_path, PathBuf::from("models/ggml-base.bin"));
-        assert_eq!(config.language, "en");
+        assert_eq!(config.language, "auto");
         assert_eq!(config.threads, None);
     }
 

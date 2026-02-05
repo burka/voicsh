@@ -9,7 +9,7 @@ use crate::audio::vad::VadConfig;
 use crate::config::Config;
 use crate::error::{Result, VoicshError};
 use crate::input::injector::SystemCommandExecutor;
-use crate::models::catalog::get_model;
+use crate::models::catalog::{get_model, multilingual_variant};
 use crate::models::download::{
     download_model, find_any_installed_model, is_model_installed, model_path,
 };
@@ -220,16 +220,43 @@ async fn run_single_session(
     Ok(())
 }
 
+/// Resolve the model name based on the configured language.
+///
+/// Ensures a multilingual model is used when language is not English.
+/// - `language="auto"` + `model="base.en"` → switch to `"base"`, warn
+/// - `language="de"` + `model="base.en"` → switch to `"base"`, warn
+/// - `language="en"` + `model="base.en"` → keep as-is
+/// - `language="auto"` + `model="base"` → keep as-is
+fn resolve_model_for_language(model: &str, language: &str, quiet: bool) -> String {
+    let needs_multilingual = language == "auto" || (language != "en" && !language.is_empty());
+    let is_english_only = model.ends_with(".en");
+
+    if needs_multilingual
+        && is_english_only
+        && let Some(ml) = multilingual_variant(model)
+    {
+        if !quiet {
+            eprintln!(
+                "Switching model '{}' → '{}' (language='{}' needs multilingual model).",
+                model, ml, language
+            );
+        }
+        return ml.to_string();
+    }
+    model.to_string()
+}
+
 /// Create the transcriber, handling model download if needed.
 async fn create_transcriber(
     config: &Config,
     quiet: bool,
     no_download: bool,
 ) -> Result<WhisperTranscriber> {
-    let configured_model = &config.stt.model;
+    let configured_model =
+        resolve_model_for_language(&config.stt.model, &config.stt.language, quiet);
 
-    let model_to_use = if is_model_installed(configured_model) {
-        configured_model.to_string()
+    let model_to_use = if is_model_installed(&configured_model) {
+        configured_model
     } else if no_download {
         if let Some(fallback) = find_any_installed_model() {
             if !quiet {
@@ -252,11 +279,11 @@ async fn create_transcriber(
         if !quiet {
             eprintln!("Downloading model '{}'...", configured_model);
         }
-        download_model(configured_model, !quiet).await?;
+        download_model(&configured_model, !quiet).await?;
         if !quiet {
             eprintln!("Download complete.");
         }
-        configured_model.to_string()
+        configured_model
     };
 
     let model_path = build_model_path(&model_to_use)?;
@@ -432,5 +459,36 @@ mod tests {
                 err_msg
             );
         }
+    }
+
+    #[test]
+    fn test_resolve_auto_with_english_model_switches_to_multilingual() {
+        let result = resolve_model_for_language("base.en", "auto", true);
+        assert_eq!(result, "base");
+    }
+
+    #[test]
+    fn test_resolve_non_english_with_english_model_switches() {
+        let result = resolve_model_for_language("base.en", "de", true);
+        assert_eq!(result, "base");
+    }
+
+    #[test]
+    fn test_resolve_english_with_english_model_keeps() {
+        let result = resolve_model_for_language("base.en", "en", true);
+        assert_eq!(result, "base.en");
+    }
+
+    #[test]
+    fn test_resolve_auto_with_multilingual_model_keeps() {
+        let result = resolve_model_for_language("base", "auto", true);
+        assert_eq!(result, "base");
+    }
+
+    #[test]
+    fn test_resolve_unknown_model_keeps_as_is() {
+        let result = resolve_model_for_language("custom-model.en", "auto", true);
+        // Unknown model, no catalog entry, keep as-is
+        assert_eq!(result, "custom-model.en");
     }
 }

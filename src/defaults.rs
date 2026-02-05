@@ -24,10 +24,12 @@ pub const SILENCE_DURATION_MS: u32 = 1500;
 
 /// Default Whisper model name.
 ///
-/// "base.en" provides a good balance between accuracy and speed for English transcription.
-pub const DEFAULT_MODEL: &str = "base.en";
+/// "base" (multilingual) supports auto-detection of any language.
+/// Use "base.en" explicitly for English-only optimized transcription.
+pub const DEFAULT_MODEL: &str = "base";
 
 /// Default language code for transcription.
 ///
-/// "en" targets English language transcription.
-pub const DEFAULT_LANGUAGE: &str = "en";
+/// "auto" lets Whisper detect the spoken language automatically.
+/// Set to a specific code (e.g., "en", "de") to force a language.
+pub const DEFAULT_LANGUAGE: &str = "auto";

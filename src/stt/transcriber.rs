@@ -195,7 +195,7 @@ mod tests {
     fn test_transcriber_config_default() {
         let config = TranscriberConfig::default();
         assert_eq!(config.model_path, PathBuf::from(""));
-        assert_eq!(config.language, "en");
+        assert_eq!(config.language, "auto");
     }
 
     #[test]

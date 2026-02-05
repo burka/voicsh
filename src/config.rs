@@ -187,8 +187,8 @@ mod tests {
         assert_eq!(config.audio.silence_duration_ms, 1500);
 
         // STT defaults
-        assert_eq!(config.stt.model, "base.en");
-        assert_eq!(config.stt.language, "en");
+        assert_eq!(config.stt.model, "base");
+        assert_eq!(config.stt.language, "auto");
 
         // Input defaults
         assert_eq!(config.input.method, InputMethod::Clipboard);
@@ -250,7 +250,7 @@ mod tests {
         assert_eq!(config.audio.sample_rate, 16000);
         assert_eq!(config.audio.vad_threshold, 0.02);
         assert_eq!(config.audio.silence_duration_ms, 1500);
-        assert_eq!(config.stt.language, "en");
+        assert_eq!(config.stt.language, "auto");
         assert_eq!(config.input.method, InputMethod::Clipboard);
         assert_eq!(config.input.paste_key, "auto");
     }
@@ -264,7 +264,7 @@ mod tests {
         let config = Config::default().with_env_overrides();
 
         assert_eq!(config.stt.model, "tiny.en");
-        assert_eq!(config.stt.language, "en"); // Not overridden
+        assert_eq!(config.stt.language, "auto"); // Not overridden
 
         clear_voicsh_env();
     }
@@ -309,7 +309,7 @@ mod tests {
         let config = Config::default().with_env_overrides();
 
         // Empty string should not override default
-        assert_eq!(config.stt.model, "base.en");
+        assert_eq!(config.stt.model, "base");
 
         clear_voicsh_env();
     }

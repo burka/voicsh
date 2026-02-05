@@ -112,14 +112,36 @@ pub fn list_models() -> &'static [ModelInfo] {
 
 /// Get the default recommended model.
 ///
-/// The default is `base.en` - a good balance between speed and accuracy
-/// for English-language use cases.
+/// The default is `base` (multilingual) — supports auto-detection of any language.
 ///
 /// # Returns
 ///
 /// The default model info.
 pub fn default_model() -> &'static ModelInfo {
-    get_model("base.en").expect("base.en model should always be present in catalog")
+    get_model("base").expect("base model should always be present in catalog")
+}
+
+/// Return the multilingual variant for a model name.
+///
+/// - `"base.en"` → `Some("base")`
+/// - `"base"` → `Some("base")` (already multilingual)
+/// - `"large"` → `Some("large")` (only multilingual exists)
+/// - `"unknown"` → `None`
+pub fn multilingual_variant(name: &str) -> Option<&'static str> {
+    let base = name.strip_suffix(".en").unwrap_or(name);
+    get_model(base).map(|m| m.name)
+}
+
+/// Return the English-only variant for a model name.
+///
+/// - `"base"` → `Some("base.en")`
+/// - `"base.en"` → `Some("base.en")` (already English)
+/// - `"large"` → `None` (no .en variant exists)
+/// - `"unknown"` → `None`
+pub fn english_variant(name: &str) -> Option<&'static str> {
+    let base = name.strip_suffix(".en").unwrap_or(name);
+    let en_name = format!("{}.en", base);
+    get_model(&en_name).map(|m| m.name)
 }
 
 #[cfg(test)]
@@ -150,11 +172,29 @@ mod tests {
     }
 
     #[test]
-    fn test_default_model_is_base_en() {
+    fn test_default_model_is_base() {
         let default = default_model();
-        assert_eq!(default.name, "base.en");
+        assert_eq!(default.name, "base");
         assert_eq!(default.size_mb, 142);
-        assert!(default.english_only);
+        assert!(!default.english_only);
+    }
+
+    #[test]
+    fn test_multilingual_variant() {
+        assert_eq!(multilingual_variant("base.en"), Some("base"));
+        assert_eq!(multilingual_variant("base"), Some("base"));
+        assert_eq!(multilingual_variant("small.en"), Some("small"));
+        assert_eq!(multilingual_variant("large"), Some("large"));
+        assert_eq!(multilingual_variant("unknown"), None);
+    }
+
+    #[test]
+    fn test_english_variant() {
+        assert_eq!(english_variant("base"), Some("base.en"));
+        assert_eq!(english_variant("base.en"), Some("base.en"));
+        assert_eq!(english_variant("small"), Some("small.en"));
+        assert_eq!(english_variant("large"), None);
+        assert_eq!(english_variant("unknown"), None);
     }
 
     #[test]
