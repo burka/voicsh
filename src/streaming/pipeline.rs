@@ -287,7 +287,9 @@ mod tests {
 
     #[test]
     fn test_pipeline_creation() {
-        let _pipeline = StreamingPipeline::new();
+        let pipeline = StreamingPipeline::new();
+        assert_eq!(pipeline.config.max_concurrent_transcriptions, 2);
+        assert_eq!(pipeline.config.channel_buffer_size, 100);
     }
 
     #[test]
@@ -298,6 +300,67 @@ mod tests {
         };
         let pipeline = StreamingPipeline::with_config(config);
         assert_eq!(pipeline.config.max_concurrent_transcriptions, 4);
+    }
+
+    #[test]
+    fn test_pipeline_default_trait() {
+        let pipeline = StreamingPipeline::default();
+        assert_eq!(pipeline.config.max_concurrent_transcriptions, 2);
+        assert_eq!(pipeline.config.channel_buffer_size, 100);
+    }
+
+    #[test]
+    fn test_config_with_show_levels() {
+        let config = StreamingPipelineConfig::default().with_show_levels(true);
+        assert!(config.silence_detector.show_levels);
+
+        let config = StreamingPipelineConfig::default().with_show_levels(false);
+        assert!(!config.silence_detector.show_levels);
+    }
+
+    #[test]
+    fn test_config_with_auto_level() {
+        let config = StreamingPipelineConfig::default().with_auto_level(false);
+        assert!(!config.silence_detector.auto_level);
+
+        let config = StreamingPipelineConfig::default().with_auto_level(true);
+        assert!(config.silence_detector.auto_level);
+    }
+
+    #[test]
+    fn test_config_builder_chaining() {
+        let config = StreamingPipelineConfig::default()
+            .with_chunk_duration_ms(1500)
+            .with_show_levels(true)
+            .with_auto_level(false);
+        assert_eq!(config.chunker.chunk_duration_ms, 1500);
+        assert!(config.silence_detector.show_levels);
+        assert!(!config.silence_detector.auto_level);
+    }
+
+    #[test]
+    fn test_config_from_config() {
+        let app_config = Config::default();
+        let pipeline_config = StreamingPipelineConfig::from_config(&app_config);
+        assert_eq!(
+            pipeline_config.silence_detector.vad.speech_threshold,
+            app_config.audio.vad_threshold
+        );
+        assert_eq!(
+            pipeline_config.silence_detector.vad.silence_duration_ms,
+            app_config.audio.silence_duration_ms
+        );
+    }
+
+    #[test]
+    fn test_config_custom_buffer_sizes() {
+        let config = StreamingPipelineConfig {
+            max_concurrent_transcriptions: 8,
+            channel_buffer_size: 500,
+            ..Default::default()
+        };
+        assert_eq!(config.max_concurrent_transcriptions, 8);
+        assert_eq!(config.channel_buffer_size, 500);
     }
 
     // Integration tests would require mock audio source and transcriber

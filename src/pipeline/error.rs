@@ -63,8 +63,85 @@ mod tests {
     #[test]
     fn test_log_reporter() {
         let reporter = LogReporter;
-        let error = StationError::Recoverable("test error".to_string());
-        // Just ensure it doesn't panic
-        reporter.report("TestStation", &error);
+
+        // Test Recoverable variant - ensure it doesn't panic
+        let recoverable = StationError::Recoverable("test error".to_string());
+        reporter.report("TestStation", &recoverable);
+
+        // Test Fatal variant - ensure it doesn't panic
+        let fatal = StationError::Fatal("critical error".to_string());
+        reporter.report("TestStation", &fatal);
+    }
+
+    #[test]
+    fn test_recording_reporter() {
+        use std::sync::Mutex;
+
+        /// Test-only reporter that records calls for verification.
+        struct RecordingReporter {
+            calls: Mutex<Vec<(String, String)>>,
+        }
+
+        impl ErrorReporter for RecordingReporter {
+            fn report(&self, station: &str, error: &StationError) {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((station.to_string(), error.to_string()));
+            }
+        }
+
+        let reporter = RecordingReporter {
+            calls: Mutex::new(Vec::new()),
+        };
+
+        // Test Recoverable error
+        let recoverable = StationError::Recoverable("temp failure".to_string());
+        reporter.report("AudioStation", &recoverable);
+
+        // Test Fatal error
+        let fatal = StationError::Fatal("shutdown required".to_string());
+        reporter.report("TranscriberStation", &fatal);
+
+        // Verify both calls were recorded correctly
+        let calls = reporter.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+
+        assert_eq!(calls[0].0, "AudioStation");
+        assert_eq!(calls[0].1, "Recoverable error: temp failure");
+
+        assert_eq!(calls[1].0, "TranscriberStation");
+        assert_eq!(calls[1].1, "Fatal error: shutdown required");
+    }
+
+    #[test]
+    fn test_station_error_is_std_error() {
+        let error = StationError::Recoverable("test".to_string());
+        // Verify it can be used as std::error::Error trait object
+        let _: &dyn std::error::Error = &error;
+
+        let fatal = StationError::Fatal("test".to_string());
+        let _: &dyn std::error::Error = &fatal;
+    }
+
+    #[test]
+    fn test_station_error_clone() {
+        // Test Clone for Recoverable variant
+        let recoverable = StationError::Recoverable("original".to_string());
+        let cloned = recoverable.clone();
+        assert_eq!(recoverable.to_string(), cloned.to_string());
+
+        // Test Clone for Fatal variant
+        let fatal = StationError::Fatal("critical".to_string());
+        let cloned = fatal.clone();
+        assert_eq!(fatal.to_string(), cloned.to_string());
+    }
+
+    #[test]
+    fn test_eprintln_clear() {
+        // Verify it doesn't panic - it writes to stderr so we can't capture output
+        eprintln_clear("test message");
+        eprintln_clear("");
+        eprintln_clear("longer message with special chars: !@#$%");
     }
 }

@@ -258,7 +258,7 @@ mod tests {
         // 3000ms -> 250ms, 3500ms -> 150ms
         // Midpoint: (250 + 150) / 2 = 200ms
         let gap = chunker.required_gap_ms(3250);
-        assert!(gap >= 195 && gap <= 205, "Expected ~200ms, got {}", gap);
+        assert!((195..=205).contains(&gap), "Expected ~200ms, got {}", gap);
     }
 
     #[test]

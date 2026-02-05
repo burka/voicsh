@@ -270,6 +270,83 @@ impl Pipeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{Result, VoicshError};
+    use crate::pipeline::sink::CollectorSink;
+    use crate::stt::transcriber::MockTranscriber;
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicU32;
+
+    // Test audio source that produces samples and can be stopped
+    struct TestAudioSource {
+        samples: Vec<i16>,
+        started: Arc<Mutex<bool>>,
+        stopped: Arc<Mutex<bool>>,
+        read_count: Arc<AtomicU32>,
+        max_reads: u32,
+    }
+
+    impl TestAudioSource {
+        fn new(samples: Vec<i16>, max_reads: u32) -> Self {
+            Self {
+                samples,
+                started: Arc::new(Mutex::new(false)),
+                stopped: Arc::new(Mutex::new(false)),
+                read_count: Arc::new(AtomicU32::new(0)),
+                max_reads,
+            }
+        }
+    }
+
+    impl crate::audio::recorder::AudioSource for TestAudioSource {
+        fn start(&mut self) -> Result<()> {
+            *self.started.lock().unwrap() = true;
+            Ok(())
+        }
+
+        fn stop(&mut self) -> Result<()> {
+            *self.stopped.lock().unwrap() = true;
+            Ok(())
+        }
+
+        fn read_samples(&mut self) -> Result<Vec<i16>> {
+            let count = self.read_count.fetch_add(1, Ordering::Relaxed);
+            if count >= self.max_reads {
+                // Return empty to signal we're done
+                Ok(Vec::new())
+            } else {
+                Ok(self.samples.clone())
+            }
+        }
+    }
+
+    // Failing audio source for error testing
+    struct FailingAudioSource {
+        error_message: String,
+    }
+
+    impl FailingAudioSource {
+        fn new(message: &str) -> Self {
+            Self {
+                error_message: message.to_string(),
+            }
+        }
+    }
+
+    impl crate::audio::recorder::AudioSource for FailingAudioSource {
+        fn start(&mut self) -> Result<()> {
+            Err(VoicshError::AudioCapture {
+                message: self.error_message.clone(),
+            })
+        }
+
+        fn stop(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn read_samples(&mut self) -> Result<Vec<i16>> {
+            Ok(Vec::new())
+        }
+    }
 
     #[test]
     fn test_config_default() {
@@ -344,5 +421,128 @@ mod tests {
 
         let result = handle.stop();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_handle_stop_sets_running_false() {
+        let running = Arc::new(AtomicBool::new(true));
+        let (result_tx, result_rx) = bounded(1);
+        result_tx.send(Some("test".to_string())).unwrap();
+        drop(result_tx);
+
+        let handle = PipelineHandle {
+            running: running.clone(),
+            threads: vec![],
+            result_rx: Some(result_rx),
+        };
+
+        assert!(running.load(Ordering::SeqCst));
+        let _result = handle.stop();
+        assert!(!running.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_handle_stop_returns_result_from_channel() {
+        let running = Arc::new(AtomicBool::new(true));
+        let (result_tx, result_rx) = bounded(1);
+        result_tx.send(Some("collected text".to_string())).unwrap();
+        drop(result_tx);
+
+        let handle = PipelineHandle {
+            running,
+            threads: vec![],
+            result_rx: Some(result_rx),
+        };
+
+        let result = handle.stop();
+        assert_eq!(result, Some("collected text".to_string()));
+    }
+
+    #[test]
+    fn test_handle_stop_returns_none_when_channel_disconnected() {
+        let running = Arc::new(AtomicBool::new(true));
+        let (result_tx, result_rx) = bounded::<Option<String>>(1);
+        // Drop sender immediately so recv returns Err(disconnected)
+        drop(result_tx);
+
+        let handle = PipelineHandle {
+            running,
+            threads: vec![],
+            result_rx: Some(result_rx),
+        };
+
+        let result = handle.stop();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pipeline_start_audio_source_fails() {
+        let config = PipelineConfig::default();
+        let pipeline = Pipeline::new(config);
+
+        let audio_source = Box::new(FailingAudioSource::new("audio init failed"));
+        let transcriber = Arc::new(MockTranscriber::new("test-model"));
+        let sink = Box::new(CollectorSink::new());
+
+        let result = pipeline.start(audio_source, transcriber, sink);
+        assert!(result.is_err());
+
+        match result {
+            Err(VoicshError::AudioCapture { message }) => {
+                assert_eq!(message, "audio init failed");
+            }
+            _ => panic!("Expected AudioCapture error"),
+        }
+    }
+
+    // Integration test - verifies pipeline can start and stop
+    // Note: This spawns real threads and channels, so it's more of an integration test
+    #[test]
+    #[ignore] // Ignore by default - run with --ignored to test full integration
+    fn test_pipeline_start_and_stop_integration() {
+        let config = PipelineConfig {
+            quiet: true,
+            verbosity: 0,
+            ..Default::default()
+        };
+        let pipeline = Pipeline::new(config);
+
+        // Create audio source with minimal samples
+        let samples = vec![1000i16; 160];
+        let audio_source = Box::new(TestAudioSource::new(samples, 2));
+
+        // Create transcriber that returns "hello"
+        let transcriber = Arc::new(MockTranscriber::new("test-model").with_response("hello"));
+
+        // Create collector sink
+        let sink = Box::new(CollectorSink::new());
+
+        // Start pipeline
+        let handle = pipeline.start(audio_source, transcriber, sink).unwrap();
+
+        // Verify pipeline is running
+        assert!(handle.is_running());
+
+        // Stop pipeline immediately (minimal runtime)
+        let _result = handle.stop();
+    }
+
+    #[test]
+    fn test_pipeline_start_creates_running_handle() {
+        // This test verifies handle creation without actually waiting for threads
+        let running = Arc::new(AtomicBool::new(true));
+        let (_, result_rx) = bounded::<Option<String>>(1);
+
+        let handle = PipelineHandle {
+            running: running.clone(),
+            threads: vec![],
+            result_rx: Some(result_rx),
+        };
+
+        // Handle should report running
+        assert!(handle.is_running());
+
+        // Stop should set running to false
+        drop(handle);
     }
 }

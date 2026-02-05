@@ -196,7 +196,7 @@ mod tests {
         // Should be resampled to ~16000 samples
         assert!(source.samples.len() >= 15900 && source.samples.len() <= 16100);
         // Values should be close to original
-        assert!(source.samples.iter().all(|&s| s >= 900 && s <= 1100));
+        assert!(source.samples.iter().all(|&s| (900..=1100).contains(&s)));
     }
 
     #[test]
@@ -357,7 +357,7 @@ mod tests {
         let resampled = resample(&samples, 16000, 8000);
 
         // All resampled values should be close to 1000
-        assert!(resampled.iter().all(|&s| s >= 999 && s <= 1001));
+        assert!(resampled.iter().all(|&s| (999..=1001).contains(&s)));
     }
 
     #[test]

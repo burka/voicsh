@@ -230,6 +230,107 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_trailing_plus() {
+        let result = parse_paste_key("ctrl+v+");
+        assert!(result.is_err());
+        if let Err(VoicshError::InjectionFailed { message }) = result {
+            // Empty string after last '+' should be treated as unknown key
+            assert!(message.contains("Unknown key") || message.contains("''"));
+        } else {
+            panic!("Expected InjectionFailed error");
+        }
+    }
+
+    #[test]
+    fn test_parse_leading_plus() {
+        let result = parse_paste_key("+ctrl+v");
+        assert!(result.is_err());
+        if let Err(VoicshError::InjectionFailed { message }) = result {
+            // Empty string before first '+' should be treated as unknown key
+            assert!(message.contains("Unknown key") || message.contains("''"));
+        } else {
+            panic!("Expected InjectionFailed error");
+        }
+    }
+
+    #[test]
+    fn test_parse_double_plus() {
+        let result = parse_paste_key("ctrl++v");
+        assert!(result.is_err());
+        if let Err(VoicshError::InjectionFailed { message }) = result {
+            // Empty string between '++' should be treated as unknown key
+            assert!(message.contains("Unknown key") || message.contains("''"));
+        } else {
+            panic!("Expected InjectionFailed error");
+        }
+    }
+
+    #[test]
+    fn test_parse_only_plus() {
+        let result = parse_paste_key("+");
+        assert!(result.is_err());
+        // All parts empty, should error with unknown key
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_whitespace_in_key() {
+        let result = parse_paste_key("ctrl + v");
+        assert!(result.is_err());
+        if let Err(VoicshError::InjectionFailed { message }) = result {
+            // " ctrl " won't match "ctrl", should error with " ctrl " as unknown
+            assert!(message.contains("Unknown key"));
+        } else {
+            panic!("Expected InjectionFailed error");
+        }
+    }
+
+    #[test]
+    fn test_parse_single_modifier() {
+        let codes = parse_paste_key("ctrl").unwrap();
+        assert_eq!(codes, vec![keycodes::LEFT_CTRL]);
+    }
+
+    #[test]
+    fn test_parse_single_key_v() {
+        let codes = parse_paste_key("v").unwrap();
+        assert_eq!(codes, vec![keycodes::V]);
+    }
+
+    #[test]
+    fn test_parse_shift_only() {
+        let codes = parse_paste_key("shift").unwrap();
+        assert_eq!(codes, vec![keycodes::LEFT_SHIFT]);
+    }
+
+    #[test]
+    fn test_parse_all_keys_combined() {
+        // Test order preservation: shift first, then ctrl, then v
+        let codes = parse_paste_key("shift+ctrl+v").unwrap();
+        assert_eq!(
+            codes,
+            vec![keycodes::LEFT_SHIFT, keycodes::LEFT_CTRL, keycodes::V]
+        );
+    }
+
+    #[test]
+    fn test_parse_error_message_contains_key() {
+        let result = parse_paste_key("alt+v");
+        assert!(result.is_err());
+        // Extract error and verify it contains the unknown key name
+        match result {
+            Err(VoicshError::InjectionFailed { message }) => {
+                assert!(
+                    message.contains("alt"),
+                    "Error message should contain 'alt' but got: {}",
+                    message
+                );
+            }
+            _ => panic!("Expected InjectionFailed error variant"),
+        }
+    }
+
+    #[test]
     fn portal_session_is_send_and_sync() {
         fn assert_send<T: Send>() {}
         fn assert_sync<T: Sync>() {}

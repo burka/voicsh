@@ -430,4 +430,287 @@ mod tests {
 
         drop(input_tx);
     }
+
+    #[test]
+    fn test_silence_without_speech_active() {
+        let mut detector = SilenceDetectorStation::new();
+
+        // Process silence frames without prior speech
+        for i in 0..10 {
+            let frame = AudioFrame::new(i, make_silence(160));
+            let control = detector.process(&frame);
+            assert!(
+                control.is_none(),
+                "Silence without speech should return None"
+            );
+        }
+
+        assert!(!detector.is_speech_active());
+    }
+
+    #[test]
+    fn test_speech_event_resets_flush_sent() {
+        let config = SilenceDetectorConfig {
+            auto_level: false,
+            show_levels: false,
+            flush_pause_ms: 100, // Shorter duration for testing
+            sample_rate: 16000,
+            vad: VadConfig {
+                silence_duration_ms: 2000, // Long enough to not trigger SpeechEnd
+                ..Default::default()
+            },
+        };
+        let mut detector = SilenceDetectorStation::with_config(config);
+
+        // Trigger speech start
+        let frame = AudioFrame::new(0, make_speech(160, 3000));
+        let control = detector.process(&frame);
+        assert_eq!(control, Some(ControlEvent::SpeechStart));
+
+        // Send silence frames and wait for flush_pause_ms to elapse
+        for i in 1..10 {
+            let frame = AudioFrame::new(i, make_silence(160));
+            detector.process(&frame);
+        }
+
+        // Wait for flush pause duration to pass
+        std::thread::sleep(std::time::Duration::from_millis(110));
+
+        // Next silence frame should trigger flush
+        let frame = AudioFrame::new(10, make_silence(160));
+        let control = detector.process(&frame);
+        assert_eq!(
+            control,
+            Some(ControlEvent::FlushChunk),
+            "First flush should occur"
+        );
+
+        // Send speech again - this should reset flush_sent
+        let frame = AudioFrame::new(11, make_speech(160, 3000));
+        let control = detector.process(&frame);
+        assert!(control.is_none(), "Speech event should return None");
+
+        // Send silence again and wait
+        for i in 12..20 {
+            let frame = AudioFrame::new(i, make_silence(160));
+            detector.process(&frame);
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(110));
+
+        let frame = AudioFrame::new(20, make_silence(160));
+        let control = detector.process(&frame);
+        assert_eq!(
+            control,
+            Some(ControlEvent::FlushChunk),
+            "Second flush should occur after speech reset flush_sent"
+        );
+    }
+
+    #[test]
+    fn test_flush_sent_only_once_per_pause() {
+        let config = SilenceDetectorConfig {
+            auto_level: false,
+            show_levels: false,
+            flush_pause_ms: 100, // Shorter duration for testing
+            sample_rate: 16000,
+            vad: VadConfig {
+                silence_duration_ms: 2000, // Long enough to not trigger SpeechEnd
+                ..Default::default()
+            },
+        };
+        let mut detector = SilenceDetectorStation::with_config(config);
+
+        // Trigger speech start
+        let frame = AudioFrame::new(0, make_speech(160, 3000));
+        detector.process(&frame);
+
+        // Send silence frames
+        for i in 1..10 {
+            let frame = AudioFrame::new(i, make_silence(160));
+            detector.process(&frame);
+        }
+
+        // Wait for flush pause duration
+        std::thread::sleep(std::time::Duration::from_millis(110));
+
+        let frame = AudioFrame::new(10, make_silence(160));
+        let control = detector.process(&frame);
+        assert_eq!(
+            control,
+            Some(ControlEvent::FlushChunk),
+            "First flush should occur"
+        );
+
+        // More silence should return None (flush already sent)
+        for i in 11..20 {
+            let frame = AudioFrame::new(i, make_silence(160));
+            let control = detector.process(&frame);
+            assert!(
+                control.is_none(),
+                "Subsequent silence should not trigger flush"
+            );
+        }
+    }
+
+    #[test]
+    fn test_speech_end_event() {
+        let config = SilenceDetectorConfig {
+            auto_level: false,
+            show_levels: false,
+            vad: VadConfig {
+                silence_duration_ms: 100, // Short duration for testing
+                ..Default::default()
+            },
+            flush_pause_ms: 50, // Shorter than silence_duration_ms
+            ..Default::default()
+        };
+        let mut detector = SilenceDetectorStation::with_config(config);
+
+        // Trigger speech start
+        let frame = AudioFrame::new(0, make_speech(160, 3000));
+        let control = detector.process(&frame);
+        assert_eq!(control, Some(ControlEvent::SpeechStart));
+        assert!(detector.is_speech_active());
+
+        // Send silence frames
+        for i in 1..10 {
+            let frame = AudioFrame::new(i, make_silence(160));
+            detector.process(&frame);
+        }
+
+        // Wait for silence_duration_ms to pass
+        std::thread::sleep(std::time::Duration::from_millis(110));
+
+        // Next silence frame should trigger SpeechEnd
+        let frame = AudioFrame::new(10, make_silence(160));
+        let control = detector.process(&frame);
+        assert_eq!(
+            control,
+            Some(ControlEvent::SpeechEnd),
+            "SpeechEnd event should be emitted"
+        );
+        assert!(
+            !detector.is_speech_active(),
+            "speech_active should be false"
+        );
+    }
+
+    #[test]
+    fn test_auto_level_skips_first_10_samples() {
+        let mut al = AutoLevel::new();
+        let initial_ambient = al.ambient();
+
+        // Feed 10 samples with a specific level
+        for _ in 0..10 {
+            al.update(0.05, false);
+        }
+
+        // Ambient should still be at initial value (0.01)
+        assert_eq!(
+            al.ambient(),
+            initial_ambient,
+            "First 10 samples should not update ambient"
+        );
+
+        // 11th sample should update ambient
+        al.update(0.05, false);
+        assert!(
+            al.ambient() != initial_ambient,
+            "11th sample should update ambient"
+        );
+    }
+
+    #[test]
+    fn test_auto_level_fast_vs_slow_learning() {
+        // Fast learning (first 100 samples)
+        let mut al_fast = AutoLevel::new();
+        // Skip first 10
+        for _ in 0..11 {
+            al_fast.update(0.0, false);
+        }
+        // Feed target level
+        for _ in 0..50 {
+            al_fast.update(0.05, false);
+        }
+        let fast_ambient = al_fast.ambient();
+
+        // Slow learning (after 100 samples)
+        let mut al_slow = AutoLevel::new();
+        // Skip first 10
+        for _ in 0..11 {
+            al_slow.update(0.0, false);
+        }
+        // Feed 90 more to cross 100 threshold
+        for _ in 0..90 {
+            al_slow.update(0.0, false);
+        }
+        // Now feed target level for same number of iterations
+        for _ in 0..50 {
+            al_slow.update(0.05, false);
+        }
+        let slow_ambient = al_slow.ambient();
+
+        // Fast learning should converge more than slow learning
+        assert!(
+            fast_ambient > slow_ambient,
+            "Fast learning (alpha=0.1) should converge faster than slow learning (alpha=0.05)"
+        );
+    }
+
+    #[test]
+    fn test_auto_level_threshold_floor() {
+        let mut al = AutoLevel::new();
+
+        // Feed very low levels
+        for _ in 0..50 {
+            let threshold = al.update(0.0001, false);
+            assert!(
+                threshold >= 0.01,
+                "Threshold should never go below min_threshold (0.01)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_display_level_doesnt_panic() {
+        let config = SilenceDetectorConfig {
+            auto_level: false,
+            show_levels: true, // Enable level display
+            ..Default::default()
+        };
+        let mut detector = SilenceDetectorStation::with_config(config);
+
+        // Process a speech frame which triggers display_level
+        let frame = AudioFrame::new(0, make_speech(160, 3000));
+        detector.process(&frame);
+
+        // If we got here without panic, test passes
+    }
+
+    #[test]
+    fn test_clear_level_display_with_levels_enabled() {
+        let config = SilenceDetectorConfig {
+            auto_level: false,
+            show_levels: true,
+            ..Default::default()
+        };
+        let detector = SilenceDetectorStation::with_config(config);
+
+        // Call clear_level_display - should write to stderr but not panic
+        detector.clear_level_display();
+    }
+
+    #[test]
+    fn test_clear_level_display_with_levels_disabled() {
+        let config = SilenceDetectorConfig {
+            auto_level: false,
+            show_levels: false,
+            ..Default::default()
+        };
+        let detector = SilenceDetectorStation::with_config(config);
+
+        // Call clear_level_display - should be a no-op
+        detector.clear_level_display();
+    }
 }
