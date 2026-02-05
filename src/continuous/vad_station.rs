@@ -61,7 +61,7 @@ impl VadStation {
         let noise_floor = sorted[percentile_idx];
 
         // Set threshold to noise_floor * 2.0, clamped to reasonable bounds
-        let new_threshold = (noise_floor * 2.0).clamp(0.01, 0.2);
+        let new_threshold = (noise_floor * 2.0).clamp(0.002, 0.2);
         self.vad.set_threshold(new_threshold);
     }
 
@@ -114,6 +114,11 @@ impl Station for VadStation {
     }
 
     fn process(&mut self, frame: AudioFrame) -> Result<Option<VadFrame>, StationError> {
+        // Skip empty frames
+        if frame.samples.is_empty() {
+            return Ok(None);
+        }
+
         // Process VAD
         let result = self.vad.process_with_info(&frame.samples, self.sample_rate);
 

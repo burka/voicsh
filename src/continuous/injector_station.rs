@@ -1,7 +1,7 @@
 //! Injector station that outputs transcribed text to the system.
 
 use crate::config::InputMethod;
-use crate::continuous::error::StationError;
+use crate::continuous::error::{StationError, eprintln_clear};
 use crate::continuous::station::Station;
 use crate::continuous::types::TranscribedText;
 use crate::input::injector::TextInjector;
@@ -44,9 +44,14 @@ impl Station for InjectorStation {
     }
 
     fn process(&mut self, text: TranscribedText) -> Result<Option<()>, StationError> {
+        // Skip empty text
+        if text.text.is_empty() {
+            return Ok(None);
+        }
+
         // Print transcription to stderr if not quiet
         if !self.quiet {
-            eprintln!("\"{}\"", text.text);
+            eprintln_clear(&format!("\"{}\"", text.text));
         }
 
         // Inject text via configured method
@@ -55,13 +60,20 @@ impl Station for InjectorStation {
             InputMethod::Direct => self.injector.inject_direct(&text.text),
         };
 
-        // Convert injection errors to recoverable station errors
+        // Log injection result and convert errors to recoverable
         match result {
-            Ok(()) => Ok(Some(())),
-            Err(e) => Err(StationError::Recoverable(format!(
-                "Injection failed: {}",
-                e
-            ))),
+            Ok(()) => {
+                if !self.quiet {
+                    eprintln_clear("  [injected]");
+                }
+                Ok(Some(()))
+            }
+            Err(e) => {
+                // Log the error but return Recoverable so pipeline continues
+                eprintln_clear(&format!("  [injection failed: {}]", e));
+                // Return Ok(None) instead of error - injection failure shouldn't stop the pipeline
+                Ok(None)
+            }
         }
     }
 }
@@ -165,6 +177,11 @@ mod tests {
         }
 
         fn process(&mut self, text: TranscribedText) -> Result<Option<()>, StationError> {
+            // Skip empty text
+            if text.text.is_empty() {
+                return Ok(None);
+            }
+
             if !self.quiet {
                 eprintln!("\"{}\"", text.text);
             }
@@ -176,10 +193,10 @@ mod tests {
 
             match result {
                 Ok(()) => Ok(Some(())),
-                Err(e) => Err(StationError::Recoverable(format!(
-                    "Injection failed: {}",
-                    e
-                ))),
+                Err(_e) => {
+                    // Return Ok(None) - injection failure shouldn't stop the pipeline
+                    Ok(None)
+                }
             }
         }
     }
@@ -235,19 +252,28 @@ mod tests {
     }
 
     #[test]
-    fn test_process_injection_failure() {
+    fn test_process_injection_failure_continues() {
+        // Injection failures should return Ok(None) so pipeline continues
         let mut station = MockInjectorStation::with_failure(InputMethod::Clipboard);
 
         let text = TranscribedText::new("Test".to_string(), Instant::now());
         let result = station.process(text);
 
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            StationError::Recoverable(msg) => {
-                assert!(msg.contains("Injection failed"));
-            }
-            StationError::Fatal(_) => panic!("Expected Recoverable error"),
-        }
+        // Should be Ok(None) - error is logged but pipeline continues
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_process_empty_text_skipped() {
+        let mut station = MockInjectorStation::new(InputMethod::Direct);
+        let text = TranscribedText::new("".to_string(), Instant::now());
+        let result = station.process(text);
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+        // No commands should have been executed
+        assert!(station.calls().is_empty());
     }
 
     #[test]
@@ -267,15 +293,16 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_text() {
+    fn test_empty_text_skipped_by_mock() {
         let mut station = MockInjectorStation::new(InputMethod::Direct);
         let text = TranscribedText::new("".to_string(), Instant::now());
         let result = station.process(text);
 
         assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+        // No commands should have been executed for empty text
         let calls = station.calls();
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].1, vec![""]);
+        assert!(calls.is_empty());
     }
 
     #[test]

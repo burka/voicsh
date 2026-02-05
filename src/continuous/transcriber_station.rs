@@ -1,6 +1,6 @@
 //! Transcriber station that converts audio chunks to text via Whisper.
 
-use crate::continuous::error::StationError;
+use crate::continuous::error::{StationError, eprintln_clear};
 use crate::continuous::station::Station;
 use crate::continuous::types::{AudioChunk, TranscribedText};
 use crate::stt::transcriber::Transcriber;
@@ -31,12 +31,24 @@ fn clean_transcription(text: &str) -> String {
 /// Station that transcribes audio chunks using a Whisper transcriber.
 pub struct TranscriberStation<T: Transcriber> {
     transcriber: Arc<T>,
+    quiet: bool,
 }
 
 impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
     /// Creates a new transcriber station.
     pub fn new(transcriber: Arc<T>) -> Self {
-        Self { transcriber }
+        Self {
+            transcriber,
+            quiet: false,
+        }
+    }
+
+    /// Configure whether to suppress output to stderr.
+    ///
+    /// When quiet is false (default), diagnostic info is logged during transcription.
+    pub fn with_quiet(mut self, quiet: bool) -> Self {
+        self.quiet = quiet;
+        self
     }
 }
 
@@ -49,6 +61,11 @@ impl<T: Transcriber + Send + Sync + 'static> Station for TranscriberStation<T> {
     }
 
     fn process(&mut self, chunk: AudioChunk) -> Result<Option<TranscribedText>, StationError> {
+        // Log transcription start if not quiet
+        if !self.quiet {
+            eprintln_clear(&format!("  [transcribing {}ms...]", chunk.duration_ms));
+        }
+
         // Attempt transcription
         let raw_text = self
             .transcriber
@@ -61,6 +78,11 @@ impl<T: Transcriber + Send + Sync + 'static> Station for TranscriberStation<T> {
         // Skip empty results
         if cleaned_text.is_empty() {
             return Ok(None);
+        }
+
+        // Log transcription completion if not quiet
+        if !self.quiet {
+            eprintln_clear(&format!("  [transcribed: {} chars]", cleaned_text.len()));
         }
 
         // Return transcribed text with current timestamp

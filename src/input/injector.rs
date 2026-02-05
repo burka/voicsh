@@ -107,8 +107,8 @@ impl<E: CommandExecutor> TextInjector<E> {
                 _ => e,
             })?;
 
-        // Small delay to ensure clipboard is updated
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Delay to ensure clipboard is updated before paste
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         // Try wtype first (simpler, no daemon needed)
         if self
@@ -119,9 +119,9 @@ impl<E: CommandExecutor> TextInjector<E> {
             return Ok(());
         }
 
-        // Fall back to ydotool (use --delay 0 to send immediately)
+        // Fall back to ydotool (small delay for reliability)
         self.executor
-            .execute("ydotool", &["key", "--delay", "0", "ctrl+v"])
+            .execute("ydotool", &["key", "--delay", "10", "ctrl+v"])
             .map_err(|e| match &e {
                 VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
                     VoicshError::InjectionFailed {
@@ -154,9 +154,9 @@ impl<E: CommandExecutor> TextInjector<E> {
             return Ok(());
         }
 
-        // Fall back to ydotool (use --delay 0 to send immediately)
+        // Fall back to ydotool (small delay for reliability)
         self.executor
-            .execute("ydotool", &["type", "--delay", "0", text])
+            .execute("ydotool", &["type", "--delay", "10", text])
             .map_err(|e| match &e {
                 VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
                     VoicshError::InjectionFailed {
@@ -419,7 +419,7 @@ mod tests {
         assert_eq!(calls[0].0, "wl-copy");
         assert_eq!(calls[1].0, "wtype");
         assert_eq!(calls[2].0, "ydotool");
-        assert_eq!(calls[2].1, vec!["key", "--delay", "0", "ctrl+v"]);
+        assert_eq!(calls[2].1, vec!["key", "--delay", "10", "ctrl+v"]);
     }
 
     #[test]
@@ -454,7 +454,7 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].0, "wtype");
         assert_eq!(calls[1].0, "ydotool");
-        assert_eq!(calls[1].1, vec!["type", "--delay", "0", "test"]);
+        assert_eq!(calls[1].1, vec!["type", "--delay", "10", "test"]);
     }
 
     #[test]

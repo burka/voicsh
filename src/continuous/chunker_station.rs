@@ -1,7 +1,7 @@
 //! Chunker station that segments speech into transcribable chunks.
 
 use crate::continuous::adaptive_chunker::{AdaptiveChunker, AdaptiveChunkerConfig};
-use crate::continuous::error::StationError;
+use crate::continuous::error::{StationError, eprintln_clear};
 use crate::continuous::station::Station;
 use crate::continuous::types::{AudioChunk, VadFrame};
 use std::time::Instant;
@@ -18,6 +18,7 @@ pub struct ChunkerStation {
     sequence: u64,
     sample_rate: u32,
     silence_start: Option<Instant>,
+    quiet: bool,
 }
 
 impl ChunkerStation {
@@ -29,12 +30,21 @@ impl ChunkerStation {
             sequence: 0,
             sample_rate,
             silence_start: None,
+            quiet: false,
         }
     }
 
     /// Sets a custom sample rate (overrides config value).
     pub fn with_sample_rate(mut self, rate: u32) -> Self {
         self.sample_rate = rate;
+        self
+    }
+
+    /// Configure whether to suppress output to stderr.
+    ///
+    /// When quiet is false (default), diagnostic info is logged when chunks are emitted.
+    pub fn with_quiet(mut self, quiet: bool) -> Self {
+        self.quiet = quiet;
         self
     }
 
@@ -52,7 +62,17 @@ impl ChunkerStation {
         let duration_ms = self.calculate_duration_ms(samples.len());
         let seq = self.sequence;
         self.sequence += 1;
-        AudioChunk::new(samples, duration_ms, seq)
+        let chunk = AudioChunk::new(samples, duration_ms, seq);
+
+        // Log chunk emission if not quiet
+        if !self.quiet {
+            eprintln_clear(&format!(
+                "  [chunk: {}ms, seq {}]",
+                chunk.duration_ms, chunk.sequence
+            ));
+        }
+
+        chunk
     }
 
     /// Calculates duration in milliseconds from sample count.

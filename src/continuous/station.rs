@@ -357,4 +357,54 @@ mod tests {
         runner.join().unwrap();
         assert!(shutdown_flag.load(Ordering::SeqCst));
     }
+
+    #[test]
+    fn test_station_runner_continues_after_multiple_errors() {
+        let (input_tx, input_rx) = bounded(10);
+        let (output_tx, output_rx) = bounded(10);
+        let error_reporter = Arc::new(MockReporter::default());
+        let errors = error_reporter.errors.clone();
+
+        // Station that fails on even inputs
+        struct EvenFailStation;
+        impl Station for EvenFailStation {
+            type Input = i32;
+            type Output = i32;
+            fn process(
+                &mut self,
+                input: Self::Input,
+            ) -> Result<Option<Self::Output>, StationError> {
+                if input % 2 == 0 {
+                    Err(StationError::Recoverable(format!("Even: {}", input)))
+                } else {
+                    Ok(Some(input))
+                }
+            }
+            fn name(&self) -> &'static str {
+                "EvenFail"
+            }
+        }
+
+        let runner = StationRunner::spawn(EvenFailStation, input_rx, output_tx, error_reporter);
+
+        // Send 5 inputs: 1 (ok), 2 (fail), 3 (ok), 4 (fail), 5 (ok)
+        for i in 1..=5 {
+            input_tx.send(i).unwrap();
+        }
+        drop(input_tx);
+
+        let mut outputs = Vec::new();
+        while let Ok(output) = output_rx.recv() {
+            outputs.push(output);
+        }
+
+        // Should have processed all 5, with 3 successes
+        assert_eq!(outputs, vec![1, 3, 5]);
+
+        // Should have reported 2 errors
+        let reported = errors.lock().unwrap();
+        assert_eq!(reported.len(), 2);
+
+        runner.join().unwrap();
+    }
 }

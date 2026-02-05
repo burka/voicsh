@@ -134,10 +134,12 @@ impl ContinuousPipeline {
             .with_auto_level(self.config.auto_level)
             .with_sample_rate(self.config.sample_rate);
 
-        let chunker_station =
-            ChunkerStation::new(self.config.chunker).with_sample_rate(self.config.sample_rate);
+        let chunker_station = ChunkerStation::new(self.config.chunker)
+            .with_sample_rate(self.config.sample_rate)
+            .with_quiet(self.config.quiet);
 
-        let transcriber_station = TranscriberStation::new(transcriber);
+        let transcriber_station =
+            TranscriberStation::new(transcriber).with_quiet(self.config.quiet);
 
         let injector_station =
             InjectorStation::new(self.config.input_method).with_quiet(self.config.quiet);

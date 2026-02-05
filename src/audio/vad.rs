@@ -166,7 +166,19 @@ impl<C: Clock> Vad<C> {
                     }
                 }
             }
-            VadState::Stopped => (VadEvent::Silence, 0),
+            VadState::Stopped => {
+                if is_speech {
+                    // New speech after previous utterance ended - restart
+                    self.state = VadState::Speaking;
+                    self.speech_start = Some(now);
+                    self.silence_start = None;
+                    (VadEvent::SpeechStart, 0)
+                } else {
+                    // Remain idle, ready for next utterance
+                    self.state = VadState::Idle;
+                    (VadEvent::Silence, 0)
+                }
+            }
         };
 
         VadResult {
@@ -442,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn test_vad_stopped_state_remains_silent() {
+    fn test_vad_stopped_transitions_to_idle_on_silence() {
         let config = VadConfig {
             speech_threshold: 0.02,
             silence_duration_ms: 100,
@@ -461,10 +473,77 @@ mod tests {
         vad.process(&silence, 16000);
         assert_eq!(vad.state(), VadState::Stopped);
 
-        // Further silence should keep returning Silence
+        // Next silence frame should transition to Idle (ready for next utterance)
         let event = vad.process(&silence, 16000);
         assert_eq!(event, VadEvent::Silence);
+        assert_eq!(vad.state(), VadState::Idle);
+    }
+
+    #[test]
+    fn test_vad_detects_new_speech_after_stopped() {
+        let config = VadConfig {
+            speech_threshold: 0.02,
+            silence_duration_ms: 100,
+            min_speech_ms: 50,
+        };
+        let clock = MockClock::new();
+        let mut vad = Vad::with_clock(config, clock.clone());
+
+        let speech = make_speech(1000, 3000);
+        let silence = make_silence(1000);
+
+        // First utterance: speak → stop
+        vad.process(&speech, 16000);
+        assert_eq!(vad.state(), VadState::Speaking);
+        vad.process(&silence, 16000);
+        clock.advance(Duration::from_millis(150));
+        let event = vad.process(&silence, 16000);
+        assert_eq!(event, VadEvent::SpeechEnd);
         assert_eq!(vad.state(), VadState::Stopped);
+
+        // Second utterance: should detect new speech
+        let event = vad.process(&speech, 16000);
+        assert_eq!(event, VadEvent::SpeechStart);
+        assert_eq!(vad.state(), VadState::Speaking);
+
+        // Continue speaking
+        let event = vad.process(&speech, 16000);
+        assert_eq!(event, VadEvent::Speech);
+        assert_eq!(vad.state(), VadState::Speaking);
+    }
+
+    #[test]
+    fn test_vad_multiple_utterances() {
+        let config = VadConfig {
+            speech_threshold: 0.02,
+            silence_duration_ms: 100,
+            min_speech_ms: 50,
+        };
+        let clock = MockClock::new();
+        let mut vad = Vad::with_clock(config, clock.clone());
+
+        let speech = make_speech(1000, 3000);
+        let silence = make_silence(1000);
+
+        // Three complete utterances
+        for i in 0..3 {
+            // Start speech
+            let event = vad.process(&speech, 16000);
+            assert_eq!(event, VadEvent::SpeechStart, "Utterance {} should start", i);
+
+            // Continue speech
+            let event = vad.process(&speech, 16000);
+            assert_eq!(event, VadEvent::Speech, "Utterance {} should continue", i);
+
+            // Silence
+            vad.process(&silence, 16000);
+            clock.advance(Duration::from_millis(150));
+            let event = vad.process(&silence, 16000);
+            assert_eq!(event, VadEvent::SpeechEnd, "Utterance {} should end", i);
+
+            // One more silence frame to transition Stopped → Idle
+            vad.process(&silence, 16000);
+        }
     }
 
     #[test]
