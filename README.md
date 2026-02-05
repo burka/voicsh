@@ -49,13 +49,26 @@ cargo build --release
 cp target/release/voicsh ~/.local/bin/
 ```
 
-### With GPU acceleration
+### GPU acceleration
+
+By default voicsh runs on CPU. Enable GPU for ~5-10x faster transcription:
+
+| Backend | Flag | Prerequisites |
+|---------|------|---------------|
+| NVIDIA  | `--features cuda` | [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit) ≥ 11.0 |
+| Cross-platform | `--features vulkan` | [Vulkan SDK](https://vulkan.lunarg.com/) |
+| AMD | `--features hipblas` | [ROCm](https://rocm.docs.amd.com/) |
+| CPU optimized | `--features openblas` | `libopenblas-dev` / `openblas` |
 
 ```bash
-cargo build --release --features cuda     # NVIDIA
-cargo build --release --features vulkan   # Cross-platform
-cargo build --release --features hipblas  # AMD
+cargo build --release --features cuda     # NVIDIA GPU
+cargo build --release --features vulkan   # Any GPU with Vulkan
+cargo build --release --features hipblas  # AMD GPU
+cargo build --release --features openblas # Faster CPU (BLAS)
 ```
+
+Verify with `voicsh check` (shows detected GPU hardware and compiled backend)
+or `voicsh -v` (shows backend on startup).
 
 ### Runtime dependencies (mic mode only)
 

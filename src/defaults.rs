@@ -42,3 +42,32 @@ pub const ENGLISH_ONLY_SUFFIX: &str = ".en";
 
 /// English language code.
 pub const ENGLISH_LANGUAGE: &str = "en";
+
+/// Report the GPU backend compiled into this build.
+///
+/// Returns a human-readable name based on the compile-time feature flags.
+/// Only one GPU backend can be active at a time; if none is enabled, returns "CPU".
+pub fn gpu_backend() -> &'static str {
+    if cfg!(feature = "cuda") {
+        "CUDA"
+    } else if cfg!(feature = "vulkan") {
+        "Vulkan"
+    } else if cfg!(feature = "hipblas") {
+        "HipBLAS (AMD)"
+    } else if cfg!(feature = "openblas") {
+        "OpenBLAS"
+    } else {
+        "CPU"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gpu_backend_returns_cpu_by_default() {
+        // In default test builds (no GPU feature enabled), should return "CPU"
+        assert_eq!(gpu_backend(), "CPU");
+    }
+}

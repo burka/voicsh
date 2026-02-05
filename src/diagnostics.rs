@@ -2,6 +2,7 @@
 //!
 //! Verifies that required system tools are installed and configured correctly.
 
+use crate::defaults;
 use std::process::Command;
 
 /// Result of a dependency check.
@@ -167,6 +168,15 @@ pub fn check_dependencies() {
         }
     }
 
+    // GPU acceleration
+    println!();
+    println!("GPU acceleration:");
+    let compiled = defaults::gpu_backend();
+    println!("  Compiled backend: {}", compiled);
+    check_gpu_nvidia(compiled);
+    check_gpu_vulkan(compiled);
+    check_gpu_rocm(compiled);
+
     println!();
     if portal_available {
         println!("✓ Portal key injection available (best for GNOME).");
@@ -178,6 +188,63 @@ pub fn check_dependencies() {
         println!("⚠ Text injection may not work. Install wtype for best results:");
         println!("  sudo apt install wtype    (Debian/Ubuntu)");
         println!("  sudo pacman -S wtype      (Arch)");
+    }
+}
+
+/// Check for NVIDIA GPU via `nvidia-smi`.
+fn check_gpu_nvidia(compiled: &str) {
+    print!("  NVIDIA (CUDA):   ");
+    match Command::new("nvidia-smi")
+        .arg("--query-gpu=gpu_name")
+        .arg("--format=csv,noheader")
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if compiled == "CUDA" {
+                println!("✓ Active ({})", name);
+            } else {
+                println!(
+                    "✓ {} found → rebuild with: cargo build --release --features cuda",
+                    name
+                );
+            }
+        }
+        _ => println!("- nvidia-smi not found"),
+    }
+}
+
+/// Check for Vulkan support via `vulkaninfo`.
+fn check_gpu_vulkan(compiled: &str) {
+    print!("  Vulkan:          ");
+    match Command::new("vulkaninfo").arg("--summary").output() {
+        Ok(output) if output.status.success() => {
+            if compiled == "Vulkan" {
+                println!("✓ Active");
+            } else {
+                println!(
+                    "✓ vulkaninfo found → rebuild with: cargo build --release --features vulkan"
+                );
+            }
+        }
+        _ => println!("- vulkaninfo not found"),
+    }
+}
+
+/// Check for AMD GPU via `rocminfo`.
+fn check_gpu_rocm(compiled: &str) {
+    print!("  AMD (ROCm):      ");
+    match Command::new("rocminfo").output() {
+        Ok(output) if output.status.success() => {
+            if compiled == "HipBLAS (AMD)" {
+                println!("✓ Active");
+            } else {
+                println!(
+                    "✓ rocminfo found → rebuild with: cargo build --release --features hipblas"
+                );
+            }
+        }
+        _ => println!("- rocminfo not found"),
     }
 }
 
@@ -225,5 +292,21 @@ mod tests {
     fn test_check_dependencies_runs_without_panic() {
         // Just verify it doesn't panic
         check_dependencies();
+    }
+
+    #[test]
+    fn gpu_nvidia_runs_without_panic() {
+        // Just verify it doesn't panic regardless of whether nvidia-smi exists
+        check_gpu_nvidia("CPU");
+    }
+
+    #[test]
+    fn gpu_vulkan_runs_without_panic() {
+        check_gpu_vulkan("CPU");
+    }
+
+    #[test]
+    fn gpu_rocm_runs_without_panic() {
+        check_gpu_rocm("CPU");
     }
 }

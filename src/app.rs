@@ -58,7 +58,11 @@ pub async fn run_pipe_command(
 
     // Load model
     if verbosity >= 1 {
-        eprintln!("Loading model '{}'...", config.stt.model);
+        eprintln!(
+            "Loading model '{}'... ({})",
+            config.stt.model,
+            defaults::gpu_backend()
+        );
     }
     let transcriber: Arc<dyn Transcriber> =
         create_transcriber(&config, quiet, verbosity, no_download).await?;
@@ -84,7 +88,7 @@ pub async fn run_pipe_command(
     let pipeline = Pipeline::new(pipeline_config);
     let handle = pipeline.start(audio_source, transcriber, Box::new(sink))?;
 
-    // Wait for pipeline to finish (EOF cascades through channels)
+    // Stop the pipeline (triggers channel cascade shutdown)
     handle.stop();
     Ok(())
 }
@@ -157,7 +161,11 @@ pub async fn run_record_command(
 
     // Load model ONCE before the loop (this is the slow part)
     if !quiet {
-        eprintln!("Loading model '{}'...", config.stt.model);
+        eprintln!(
+            "Loading model '{}'... ({})",
+            config.stt.model,
+            defaults::gpu_backend()
+        );
     }
     let transcriber: Arc<dyn Transcriber> =
         create_transcriber(&config, quiet, verbosity, no_download).await?;
