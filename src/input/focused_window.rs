@@ -118,12 +118,20 @@ fn detect_window_kind_verbose(verbose: bool) -> (WindowKind, Option<String>, &'s
         eprintln!("  [paste] hyprctl: not available");
     }
 
-    // Try GNOME Shell D-Bus
+    // Try GNOME Shell D-Bus (Shell.Eval — disabled on GNOME 45+)
     if let Some(app_id) = detect_via_gnome_dbus() {
         return (classify_app_id(&app_id), Some(app_id), "gnome-dbus");
     }
     if verbose {
         eprintln!("  [paste] gnome-dbus: not available (GNOME may have disabled Shell.Eval)");
+    }
+
+    // Try GNOME Shell Introspect (works on GNOME 41+, unlike Shell.Eval)
+    if let Some(app_id) = detect_via_gnome_introspect() {
+        return (classify_app_id(&app_id), Some(app_id), "gnome-introspect");
+    }
+    if verbose {
+        eprintln!("  [paste] gnome-introspect: not available");
     }
 
     // All detection failed
@@ -278,6 +286,85 @@ fn extract_gnome_eval_result(response: &str) -> Option<String> {
     }
 
     Some(class.to_string())
+}
+
+/// Query GNOME Shell Introspect for the focused window's app-id.
+///
+/// Uses `org.gnome.Shell.Introspect.GetWindows` which is available on GNOME 41+
+/// and works even when `Shell.Eval` is disabled (the default on GNOME 45+).
+///
+/// The output is GVariant text format. We parse it by finding the window entry
+/// that contains `'has-focus': <true>` and extracting its `'app-id'`.
+fn detect_via_gnome_introspect() -> Option<String> {
+    let mut cmd = Command::new("gdbus");
+    cmd.args([
+        "call",
+        "--session",
+        "--dest",
+        "org.gnome.Shell",
+        "--object-path",
+        "/org/gnome/Shell/Introspect",
+        "--method",
+        "org.gnome.Shell.Introspect.GetWindows",
+    ]);
+
+    if let Some(fresh_addr) = fresh_gnome_dbus_address() {
+        cmd.env("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
+    }
+
+    let output = cmd.output().ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    extract_focused_app_from_introspect(&stdout)
+}
+
+/// Extract the focused window's app-id from GVariant text output.
+///
+/// The output contains window entries like:
+/// ```text
+/// uint64 123: {'app-id': <'org.gnome.Ptyxis'>, ..., 'has-focus': <true>}
+/// ```
+///
+/// Strategy: find `'has-focus': <true>`, then search backwards in the same
+/// window entry block for `'app-id': <'...'>` or `'wm-class': <'...'>`.
+fn extract_focused_app_from_introspect(output: &str) -> Option<String> {
+    let focus_pos = output.find("'has-focus': <true>")?;
+
+    // The window entry block starts at the nearest preceding `uint64` or `{`
+    let before_focus = &output[..focus_pos];
+
+    // Try app-id first (native Wayland apps)
+    if let Some(app_id) = extract_gvariant_string(before_focus, "'app-id': <'")
+        && !app_id.is_empty()
+    {
+        return Some(app_id);
+    }
+
+    // Fall back to wm-class (XWayland apps)
+    if let Some(wm_class) = extract_gvariant_string(before_focus, "'wm-class': <'")
+        && !wm_class.is_empty()
+    {
+        return Some(wm_class);
+    }
+
+    None
+}
+
+/// Extract a string value from GVariant text, searching backwards from the end.
+///
+/// Looks for `marker` followed by the value and a closing `'`.
+/// e.g. for marker `'app-id': <'` in `...'app-id': <'org.gnome.Ptyxis'>, ...`
+/// returns `Some("org.gnome.Ptyxis")`.
+fn extract_gvariant_string(text: &str, marker: &str) -> Option<String> {
+    let marker_pos = text.rfind(marker)?;
+    let value_start = marker_pos + marker.len();
+    let rest = &text[value_start..];
+    let value_end = rest.find('\'')?;
+    Some(rest[..value_end].to_string())
 }
 
 /// Parse sway's get_tree JSON to find the focused node's app_id.
@@ -639,5 +726,66 @@ mod tests {
         assert_eq!(classify_app_id("ptyxis"), WindowKind::Terminal);
         assert_eq!(classify_app_id("org.gnome.Ptyxis"), WindowKind::Terminal);
         assert_eq!(classify_app_id("Ptyxis"), WindowKind::Terminal);
+    }
+
+    // --- GNOME Introspect parsing ---
+
+    #[test]
+    fn test_introspect_focused_terminal() {
+        let output = r#"({uint64 1234: {'app-id': <'org.gnome.Ptyxis'>, 'wm-class': <'ptyxis'>, 'has-focus': <true>}, uint64 5678: {'app-id': <'org.mozilla.firefox'>, 'has-focus': <false>}},)"#;
+        assert_eq!(
+            extract_focused_app_from_introspect(output),
+            Some("org.gnome.Ptyxis".to_string())
+        );
+    }
+
+    #[test]
+    fn test_introspect_focused_gui_app() {
+        let output = r#"({uint64 1: {'app-id': <'org.gnome.Ptyxis'>, 'has-focus': <false>}, uint64 2: {'app-id': <'org.mozilla.firefox'>, 'wm-class': <'firefox'>, 'has-focus': <true>}},)"#;
+        assert_eq!(
+            extract_focused_app_from_introspect(output),
+            Some("org.mozilla.firefox".to_string())
+        );
+    }
+
+    #[test]
+    fn test_introspect_no_focused_window() {
+        let output = r#"({uint64 1: {'app-id': <'firefox'>, 'has-focus': <false>}},)"#;
+        assert_eq!(extract_focused_app_from_introspect(output), None);
+    }
+
+    #[test]
+    fn test_introspect_empty_app_id_falls_back_to_wm_class() {
+        let output = r#"({uint64 1: {'app-id': <''>, 'wm-class': <'XTerm'>, 'has-focus': <true>}},)"#;
+        assert_eq!(
+            extract_focused_app_from_introspect(output),
+            Some("XTerm".to_string())
+        );
+    }
+
+    #[test]
+    fn test_introspect_multiline() {
+        let output = "({uint64 42: {'app-id': <'alacritty'>,\n \
+                       'title': <'~'>,\n \
+                       'has-focus': <true>}},)";
+        assert_eq!(
+            extract_focused_app_from_introspect(output),
+            Some("alacritty".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_gvariant_string_basic() {
+        let text = "{'app-id': <'org.gnome.Ptyxis'>, 'wm-class': <'ptyxis'>}";
+        assert_eq!(
+            extract_gvariant_string(text, "'app-id': <'"),
+            Some("org.gnome.Ptyxis".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_gvariant_string_no_match() {
+        let text = "{'wm-class': <'ptyxis'>}";
+        assert_eq!(extract_gvariant_string(text, "'app-id': <'"), None);
     }
 }
