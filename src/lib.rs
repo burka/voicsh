@@ -15,3 +15,8 @@ pub mod models;
 pub mod pipeline;
 pub mod streaming;
 pub mod stt;
+
+// Re-export key traits for external consumers
+pub use audio::recorder::AudioSource;
+pub use input::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
+pub use stt::transcriber::Transcriber;

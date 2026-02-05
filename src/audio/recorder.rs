@@ -24,6 +24,21 @@ pub trait AudioSource: Send + Sync {
     fn read_samples(&mut self) -> Result<Vec<i16>>;
 }
 
+/// Blanket implementation for Box<dyn AudioSource> to enable trait object usage
+impl AudioSource for Box<dyn AudioSource> {
+    fn start(&mut self) -> Result<()> {
+        (**self).start()
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        (**self).stop()
+    }
+
+    fn read_samples(&mut self) -> Result<Vec<i16>> {
+        (**self).read_samples()
+    }
+}
+
 /// Configuration for audio source initialization
 #[derive(Debug, Clone)]
 pub struct AudioSourceConfig {

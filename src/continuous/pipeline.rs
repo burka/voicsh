@@ -1,6 +1,5 @@
 //! Continuous audio pipeline that runs from startup until shutdown.
 
-use crate::audio::capture::CpalAudioSource;
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::config::InputMethod;
@@ -117,10 +116,10 @@ impl ContinuousPipeline {
     ///
     /// # Returns
     /// Handle to control and stop the pipeline
-    pub fn start<T: Transcriber + Send + Sync + 'static>(
+    pub fn start(
         self,
-        mut audio_source: CpalAudioSource,
-        transcriber: Arc<T>,
+        mut audio_source: Box<dyn AudioSource>,
+        transcriber: Arc<dyn Transcriber>,
     ) -> Result<ContinuousPipelineHandle> {
         let running = Arc::new(AtomicBool::new(true));
         let sequence = Arc::new(AtomicU64::new(0));
@@ -145,7 +144,7 @@ impl ContinuousPipeline {
             TranscriberStation::new(transcriber).with_verbose(self.config.show_levels);
 
         let injector_station =
-            InjectorStation::new(self.config.input_method, self.config.paste_key)
+            InjectorStation::system(self.config.input_method, self.config.paste_key)
                 .with_quiet(self.config.quiet)
                 .with_verbose(self.config.show_levels);
 

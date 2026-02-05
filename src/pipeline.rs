@@ -4,6 +4,7 @@
 //! record → transcribe → inject
 
 use crate::audio::capture::{CpalAudioSource, suppress_audio_warnings};
+use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::config::{Config, InputMethod};
 use crate::continuous::adaptive_chunker::AdaptiveChunkerConfig;
@@ -15,6 +16,7 @@ use crate::models::download::{
     download_model, find_any_installed_model, is_model_installed, model_path,
 };
 use crate::streaming::{StreamingPipeline, StreamingPipelineConfig};
+use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 use std::path::PathBuf;
 use std::process::Command;
@@ -68,7 +70,8 @@ pub async fn run_record_command(
     if !quiet {
         eprintln!("Loading model '{}'...", config.stt.model);
     }
-    let transcriber = Arc::new(create_transcriber(&config, quiet, no_download).await?);
+    let transcriber: Arc<dyn Transcriber> =
+        Arc::new(create_transcriber(&config, quiet, no_download).await?);
     if !quiet {
         eprintln!("Ready. Listening...");
     }
@@ -86,13 +89,13 @@ pub async fn run_record_command(
 /// Run the continuous pipeline until interrupted.
 async fn run_continuous(
     config: &Config,
-    transcriber: Arc<WhisperTranscriber>,
+    transcriber: Arc<dyn Transcriber>,
     quiet: bool,
     verbose: bool,
 ) -> Result<()> {
     // Create audio source
     let device_name = config.audio.device.as_deref();
-    let audio_source = CpalAudioSource::new(device_name)?;
+    let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
 
     // Create pipeline config
     let pipeline_config = ContinuousPipelineConfig {
@@ -133,14 +136,14 @@ async fn run_continuous(
 /// Run a single recording session: record → transcribe → inject.
 async fn run_single_session(
     config: &Config,
-    transcriber: Arc<WhisperTranscriber>,
+    transcriber: Arc<dyn Transcriber>,
     quiet: bool,
     verbose: bool,
     chunk_size: u32,
 ) -> Result<()> {
     // Create audio source
     let device_name = config.audio.device.as_deref();
-    let audio_source = CpalAudioSource::new(device_name)?;
+    let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
 
     // Configure pipeline
     let chunk_duration_ms = chunk_size * 1000;

@@ -4,30 +4,30 @@ use crate::config::InputMethod;
 use crate::continuous::error::{StationError, eprintln_clear};
 use crate::continuous::station::Station;
 use crate::continuous::types::TranscribedText;
-use crate::input::injector::TextInjector;
+use crate::input::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
 
 /// Station that injects transcribed text into the system.
 ///
 /// This is a terminal station that outputs text via either clipboard or direct injection.
 /// It does not produce any output for downstream stations.
-pub struct InjectorStation {
-    injector: TextInjector<crate::input::injector::SystemCommandExecutor>,
+pub struct InjectorStation<E: CommandExecutor> {
+    injector: TextInjector<E>,
     method: InputMethod,
     paste_key: String,
     quiet: bool,
     verbose: bool,
 }
 
-impl InjectorStation {
-    /// Create a new injector station with the specified input method and paste key.
+impl<E: CommandExecutor> InjectorStation<E> {
+    /// Create a new injector station with a custom injector.
     ///
     /// The `paste_key` controls how clipboard paste is triggered:
     /// - `"auto"` → detects whether the focused window is a terminal at injection time
     /// - `"ctrl+v"` → always uses Ctrl+V (GUI apps)
     /// - `"ctrl+shift+v"` → always uses Ctrl+Shift+V (terminals)
-    pub fn new(method: InputMethod, paste_key: String) -> Self {
+    pub fn new(injector: TextInjector<E>, method: InputMethod, paste_key: String) -> Self {
         Self {
-            injector: TextInjector::system(),
+            injector,
             method,
             paste_key,
             quiet: false,
@@ -50,7 +50,25 @@ impl InjectorStation {
     }
 }
 
-impl Station for InjectorStation {
+impl InjectorStation<SystemCommandExecutor> {
+    /// Create an injector station using system commands.
+    ///
+    /// The `paste_key` controls how clipboard paste is triggered:
+    /// - `"auto"` → detects whether the focused window is a terminal at injection time
+    /// - `"ctrl+v"` → always uses Ctrl+V (GUI apps)
+    /// - `"ctrl+shift+v"` → always uses Ctrl+Shift+V (terminals)
+    pub fn system(method: InputMethod, paste_key: String) -> Self {
+        Self {
+            injector: TextInjector::system(),
+            method,
+            paste_key,
+            quiet: false,
+            verbose: false,
+        }
+    }
+}
+
+impl<E: CommandExecutor + 'static> Station for InjectorStation<E> {
     type Input = TranscribedText;
     type Output = (); // Terminal station - doesn't produce output
 
@@ -231,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_injector_station_creation() {
-        let station = InjectorStation::new(InputMethod::Clipboard, "auto".to_string());
+        let station = InjectorStation::system(InputMethod::Clipboard, "auto".to_string());
         assert_eq!(station.name(), "injector");
         assert!(!station.quiet);
         assert!(!station.verbose);
@@ -240,7 +258,7 @@ mod tests {
     #[test]
     fn test_injector_station_with_quiet() {
         let station =
-            InjectorStation::new(InputMethod::Clipboard, "auto".to_string()).with_quiet(true);
+            InjectorStation::system(InputMethod::Clipboard, "auto".to_string()).with_quiet(true);
         assert_eq!(station.name(), "injector");
         assert!(station.quiet);
     }
@@ -362,7 +380,7 @@ mod tests {
     #[test]
     fn test_injector_station_with_verbose() {
         let station =
-            InjectorStation::new(InputMethod::Clipboard, "auto".to_string()).with_verbose(true);
+            InjectorStation::system(InputMethod::Clipboard, "auto".to_string()).with_verbose(true);
         assert_eq!(station.name(), "injector");
         assert!(station.verbose);
         assert!(!station.quiet);

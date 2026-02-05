@@ -29,14 +29,14 @@ fn clean_transcription(text: &str) -> String {
 }
 
 /// Station that transcribes audio chunks using a Whisper transcriber.
-pub struct TranscriberStation<T: Transcriber> {
-    transcriber: Arc<T>,
+pub struct TranscriberStation {
+    transcriber: Arc<dyn Transcriber>,
     verbose: bool,
 }
 
-impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
+impl TranscriberStation {
     /// Creates a new transcriber station.
-    pub fn new(transcriber: Arc<T>) -> Self {
+    pub fn new(transcriber: Arc<dyn Transcriber>) -> Self {
         Self {
             transcriber,
             verbose: false,
@@ -52,7 +52,7 @@ impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
     }
 }
 
-impl<T: Transcriber + Send + Sync + 'static> Station for TranscriberStation<T> {
+impl Station for TranscriberStation {
     type Input = AudioChunk;
     type Output = TranscribedText;
 

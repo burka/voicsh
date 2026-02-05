@@ -3,7 +3,7 @@
 //! Connects all stations together and manages the complete streaming flow:
 //! Ring Buffer → Silence Detector → Chunker → Transcriber → Stitcher → Output
 
-use crate::audio::capture::CpalAudioSource;
+use crate::audio::recorder::AudioSource;
 use crate::config::Config;
 use crate::error::{Result, VoicshError};
 use crate::streaming::chunker::{ChunkerConfig, ChunkerStation};
@@ -121,7 +121,7 @@ impl StreamingPipeline {
     /// The combined transcription from all chunks
     pub async fn run<T: Transcriber + Send + Sync + 'static>(
         &self,
-        audio_source: CpalAudioSource,
+        audio_source: Box<dyn AudioSource>,
         transcriber: T,
     ) -> Result<String> {
         // Create channels between stations
@@ -188,7 +188,7 @@ impl StreamingPipeline {
     /// The combined transcription from all chunks
     pub async fn run_with_callback<T, F>(
         &self,
-        audio_source: CpalAudioSource,
+        audio_source: Box<dyn AudioSource>,
         transcriber: T,
         mut on_chunk: F,
     ) -> Result<String>

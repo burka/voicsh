@@ -24,7 +24,7 @@ pub trait Transcriber: Send + Sync {
 }
 
 /// Implement Transcriber for Arc<T> to allow sharing across sessions.
-impl<T: Transcriber> Transcriber for Arc<T> {
+impl<T: Transcriber + ?Sized> Transcriber for Arc<T> {
     fn transcribe(&self, audio: &[i16]) -> Result<String> {
         (**self).transcribe(audio)
     }
