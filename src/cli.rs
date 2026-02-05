@@ -35,11 +35,11 @@ pub enum Commands {
         #[arg(long, value_name = "DEVICE")]
         device: Option<String>,
 
-        /// Whisper model to use (tiny, base, small, medium, large)
+        /// Whisper model (default: base, multilingual). Use base.en for English-only optimized
         #[arg(long, value_name = "MODEL")]
         model: Option<String>,
 
-        /// Language code for transcription (e.g., en, es, fr)
+        /// Language code for transcription (default: auto-detect). Examples: auto, en, de, es, fr
         #[arg(long, value_name = "LANG")]
         language: Option<String>,
 
