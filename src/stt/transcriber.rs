@@ -82,6 +82,8 @@ pub struct MockTranscriber {
     model_name: String,
     response: String,
     should_fail: bool,
+    confidence: f32,
+    language: String,
 }
 
 impl MockTranscriber {
@@ -91,6 +93,8 @@ impl MockTranscriber {
             model_name: model_name.to_string(),
             response: "mock transcription".to_string(),
             should_fail: false,
+            confidence: 1.0,
+            language: String::new(),
         }
     }
 
@@ -105,6 +109,18 @@ impl MockTranscriber {
         self.should_fail = true;
         self
     }
+
+    /// Configure the mock to return a specific confidence score
+    pub fn with_confidence(mut self, confidence: f32) -> Self {
+        self.confidence = confidence;
+        self
+    }
+
+    /// Configure the mock to return a specific language
+    pub fn with_language(mut self, language: &str) -> Self {
+        self.language = language.to_string();
+        self
+    }
 }
 
 impl Transcriber for MockTranscriber {
@@ -114,7 +130,11 @@ impl Transcriber for MockTranscriber {
                 message: "mock transcription failure".to_string(),
             })
         } else {
-            Ok(TranscriptionResult::from_text(self.response.clone()))
+            Ok(TranscriptionResult {
+                text: self.response.clone(),
+                language: self.language.clone(),
+                confidence: self.confidence,
+            })
         }
     }
 
@@ -239,5 +259,48 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().text, "long audio transcription");
+    }
+
+    #[test]
+    fn test_mock_transcriber_with_confidence() {
+        let transcriber = MockTranscriber::new("test-model")
+            .with_response("test text")
+            .with_confidence(0.75);
+
+        let audio = vec![0i16; 1000];
+        let result = transcriber.transcribe(&audio).unwrap();
+
+        assert_eq!(result.text, "test text");
+        assert_eq!(result.confidence, 0.75);
+        assert!(result.language.is_empty());
+    }
+
+    #[test]
+    fn test_mock_transcriber_with_language() {
+        let transcriber = MockTranscriber::new("test-model")
+            .with_response("test text")
+            .with_language("en");
+
+        let audio = vec![0i16; 1000];
+        let result = transcriber.transcribe(&audio).unwrap();
+
+        assert_eq!(result.text, "test text");
+        assert_eq!(result.language, "en");
+        assert_eq!(result.confidence, 1.0);
+    }
+
+    #[test]
+    fn test_mock_transcriber_with_confidence_and_language() {
+        let transcriber = MockTranscriber::new("test-model")
+            .with_response("test text")
+            .with_confidence(0.85)
+            .with_language("de");
+
+        let audio = vec![0i16; 1000];
+        let result = transcriber.transcribe(&audio).unwrap();
+
+        assert_eq!(result.text, "test text");
+        assert_eq!(result.confidence, 0.85);
+        assert_eq!(result.language, "de");
     }
 }

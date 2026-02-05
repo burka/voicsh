@@ -33,3 +33,9 @@ pub const DEFAULT_MODEL: &str = "base";
 /// "auto" lets Whisper detect the spoken language automatically.
 /// Set to a specific code (e.g., "en", "de") to force a language.
 pub const DEFAULT_LANGUAGE: &str = "auto";
+
+/// Language value that triggers automatic language detection.
+pub const AUTO_LANGUAGE: &str = "auto";
+
+/// Suffix for English-only model variants.
+pub const ENGLISH_ONLY_SUFFIX: &str = ".en";

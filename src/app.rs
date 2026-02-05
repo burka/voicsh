@@ -7,9 +7,10 @@ use crate::audio::capture::{CpalAudioSource, suppress_audio_warnings};
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::config::Config;
+use crate::defaults;
 use crate::error::{Result, VoicshError};
 use crate::input::injector::SystemCommandExecutor;
-use crate::models::catalog::{english_variant, get_model, multilingual_variant};
+use crate::models::catalog::{english_variant, get_model, resolve_model_for_language};
 use crate::models::download::{
     download_model, find_any_installed_model, is_model_installed, model_path,
 };
@@ -230,32 +231,6 @@ async fn run_single_session(
     Ok(())
 }
 
-/// Resolve the model name based on the configured language.
-///
-/// Ensures a multilingual model is used when language is not English.
-/// - `language="auto"` + `model="base.en"` → switch to `"base"`, warn
-/// - `language="de"` + `model="base.en"` → switch to `"base"`, warn
-/// - `language="en"` + `model="base.en"` → keep as-is
-/// - `language="auto"` + `model="base"` → keep as-is
-fn resolve_model_for_language(model: &str, language: &str, quiet: bool) -> String {
-    let needs_multilingual = language == "auto" || (language != "en" && !language.is_empty());
-    let is_english_only = model.ends_with(".en");
-
-    if needs_multilingual
-        && is_english_only
-        && let Some(ml) = multilingual_variant(model)
-    {
-        if !quiet {
-            eprintln!(
-                "Switching model '{}' → '{}' (language='{}' needs multilingual model).",
-                model, ml, language
-            );
-        }
-        return ml.to_string();
-    }
-    model.to_string()
-}
-
 /// Create the transcriber, handling model download and fan-out if needed.
 async fn create_transcriber(
     config: &Config,
@@ -266,7 +241,7 @@ async fn create_transcriber(
 
     // Fan-out: run multilingual + English models in parallel
     if config.stt.fan_out
-        && config.stt.language == "auto"
+        && config.stt.language == defaults::AUTO_LANGUAGE
         && let Some(en) = english_variant(&resolved_model)
         && en != resolved_model
     {
@@ -280,6 +255,14 @@ async fn create_transcriber(
             Arc::new(ml) as Arc<dyn Transcriber>,
             Arc::new(en) as Arc<dyn Transcriber>,
         ])));
+    }
+
+    // Warn if fan-out was requested but won't be used
+    if config.stt.fan_out && config.stt.language != defaults::AUTO_LANGUAGE && !quiet {
+        eprintln!(
+            "Note: --fan-out is only used with language='auto' (current: '{}'). Using single model.",
+            config.stt.language
+        );
     }
 
     let transcriber =
@@ -343,10 +326,6 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
         return Ok(path);
     }
 
-    if model.contains('/') || model.contains('\\') {
-        return Ok(path);
-    }
-
     if get_model(model).is_some() {
         if is_model_installed(model) {
             return Ok(model_path(model).expect("path should exist for installed model"));
@@ -356,6 +335,17 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
             message: format!(
                 "Model '{}' is not installed. Run 'voicsh models install {}' to download it.",
                 model, model
+            ),
+        });
+    }
+
+    // Reject path traversal in model names that aren't absolute/explicit paths
+    if model.contains("..") || model.contains('/') || model.contains('\\') {
+        return Err(VoicshError::Transcription {
+            message: format!(
+                "Invalid model name '{}'. Use a catalog model name (e.g., 'base', 'tiny.en') \
+                 or an absolute path to a model file.",
+                model
             ),
         });
     }
@@ -456,8 +446,14 @@ mod tests {
 
     #[test]
     fn test_build_model_path_with_relative_path() {
-        let path = build_model_path("./custom/model.bin").unwrap();
-        assert_eq!(path, PathBuf::from("./custom/model.bin"));
+        let result = build_model_path("./custom/model.bin");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid model name")
+        );
     }
 
     #[test]
@@ -477,8 +473,14 @@ mod tests {
 
     #[test]
     fn test_build_model_path_with_windows_path() {
-        let path = build_model_path("custom\\models\\model.bin").unwrap();
-        assert_eq!(path, PathBuf::from("custom\\models\\model.bin"));
+        let result = build_model_path("custom\\models\\model.bin");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid model name")
+        );
     }
 
     #[test]
@@ -501,33 +503,33 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_auto_with_english_model_switches_to_multilingual() {
-        let result = resolve_model_for_language("base.en", "auto", true);
-        assert_eq!(result, "base");
+    fn test_build_model_path_rejects_traversal() {
+        let result = build_model_path("../../etc/passwd");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid model name")
+        );
     }
 
     #[test]
-    fn test_resolve_non_english_with_english_model_switches() {
-        let result = resolve_model_for_language("base.en", "de", true);
-        assert_eq!(result, "base");
+    fn test_build_model_path_rejects_traversal_with_extension() {
+        let result = build_model_path("../../../tmp/evil.bin");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid model name")
+        );
     }
 
     #[test]
-    fn test_resolve_english_with_english_model_keeps() {
-        let result = resolve_model_for_language("base.en", "en", true);
-        assert_eq!(result, "base.en");
-    }
-
-    #[test]
-    fn test_resolve_auto_with_multilingual_model_keeps() {
-        let result = resolve_model_for_language("base", "auto", true);
-        assert_eq!(result, "base");
-    }
-
-    #[test]
-    fn test_resolve_unknown_model_keeps_as_is() {
-        let result = resolve_model_for_language("custom-model.en", "auto", true);
-        // Unknown model, no catalog entry, keep as-is
-        assert_eq!(result, "custom-model.en");
+    fn test_build_model_path_allows_absolute() {
+        let result = build_model_path("/absolute/path/model.bin");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), PathBuf::from("/absolute/path/model.bin"));
     }
 }

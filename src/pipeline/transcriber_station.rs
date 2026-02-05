@@ -88,40 +88,11 @@ impl Station for TranscriberStation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::{Result, VoicshError};
-    use crate::stt::transcriber::TranscriptionResult;
-
-    struct MockTranscriber {
-        response: String,
-        should_fail: bool,
-    }
-
-    impl Transcriber for MockTranscriber {
-        fn transcribe(&self, _samples: &[i16]) -> Result<TranscriptionResult> {
-            if self.should_fail {
-                Err(VoicshError::Transcription {
-                    message: "Mock error".to_string(),
-                })
-            } else {
-                Ok(TranscriptionResult::from_text(self.response.clone()))
-            }
-        }
-
-        fn model_name(&self) -> &str {
-            "mock"
-        }
-
-        fn is_ready(&self) -> bool {
-            true
-        }
-    }
+    use crate::stt::transcriber::MockTranscriber;
 
     #[test]
     fn test_successful_transcription() {
-        let transcriber = Arc::new(MockTranscriber {
-            response: "Hello world".to_string(),
-            should_fail: false,
-        });
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Hello world"));
 
         let mut station = TranscriberStation::new(transcriber);
 
@@ -137,10 +108,7 @@ mod tests {
 
     #[test]
     fn test_error_handling_returns_recoverable() {
-        let transcriber = Arc::new(MockTranscriber {
-            response: String::new(),
-            should_fail: true,
-        });
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_failure());
 
         let mut station = TranscriberStation::new(transcriber);
 
@@ -151,7 +119,7 @@ mod tests {
         match result {
             Err(StationError::Recoverable(msg)) => {
                 assert!(msg.contains("Transcription failed"));
-                assert!(msg.contains("Mock error"));
+                assert!(msg.contains("mock transcription failure"));
             }
             _ => panic!("Expected Recoverable error"),
         }
@@ -159,10 +127,10 @@ mod tests {
 
     #[test]
     fn test_whisper_marker_filtering() {
-        let transcriber = Arc::new(MockTranscriber {
-            response: "Hello [BLANK_AUDIO] world [INAUDIBLE] test".to_string(),
-            should_fail: false,
-        });
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Hello [BLANK_AUDIO] world [INAUDIBLE] test"),
+        );
 
         let mut station = TranscriberStation::new(transcriber);
 
@@ -178,10 +146,10 @@ mod tests {
 
     #[test]
     fn test_multiple_markers_filtered() {
-        let transcriber = Arc::new(MockTranscriber {
-            response: "[MUSIC] [APPLAUSE] Speech here [LAUGHTER] more speech [noise]".to_string(),
-            should_fail: false,
-        });
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("[MUSIC] [APPLAUSE] Speech here [LAUGHTER] more speech [noise]"),
+        );
 
         let mut station = TranscriberStation::new(transcriber);
 
@@ -197,10 +165,7 @@ mod tests {
 
     #[test]
     fn test_empty_result_returns_none() {
-        let transcriber = Arc::new(MockTranscriber {
-            response: String::new(),
-            should_fail: false,
-        });
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response(""));
 
         let mut station = TranscriberStation::new(transcriber);
 
@@ -213,10 +178,7 @@ mod tests {
 
     #[test]
     fn test_whitespace_only_returns_none() {
-        let transcriber = Arc::new(MockTranscriber {
-            response: "   \n\t  ".to_string(),
-            should_fail: false,
-        });
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("   \n\t  "));
 
         let mut station = TranscriberStation::new(transcriber);
 
@@ -229,10 +191,9 @@ mod tests {
 
     #[test]
     fn test_markers_only_returns_none() {
-        let transcriber = Arc::new(MockTranscriber {
-            response: "[BLANK_AUDIO] [INAUDIBLE] [silence]".to_string(),
-            should_fail: false,
-        });
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock").with_response("[BLANK_AUDIO] [INAUDIBLE] [silence]"),
+        );
 
         let mut station = TranscriberStation::new(transcriber);
 
@@ -272,10 +233,7 @@ mod tests {
 
     #[test]
     fn test_station_name() {
-        let transcriber = Arc::new(MockTranscriber {
-            response: String::new(),
-            should_fail: false,
-        });
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response(""));
 
         let station = TranscriberStation::new(transcriber);
         assert_eq!(station.name(), "transcriber");
@@ -283,10 +241,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_is_current() {
-        let transcriber = Arc::new(MockTranscriber {
-            response: "Test text".to_string(),
-            should_fail: false,
-        });
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Test text"));
 
         let mut station = TranscriberStation::new(transcriber);
 

@@ -46,7 +46,15 @@ impl Transcriber for FanOutTranscriber {
                 })
                 .collect();
 
-            handles.into_iter().map(|h| h.join().unwrap()).collect()
+            handles
+                .into_iter()
+                .map(|h| match h.join() {
+                    Ok(result) => result,
+                    Err(_) => Err(crate::error::VoicshError::Transcription {
+                        message: "Transcriber thread panicked".to_string(),
+                    }),
+                })
+                .collect()
         });
 
         // Pick the best result: highest confidence among non-empty successes
@@ -67,7 +75,10 @@ impl Transcriber for FanOutTranscriber {
 
         best.ok_or_else(|| {
             last_err.unwrap_or_else(|| crate::error::VoicshError::Transcription {
-                message: "All transcribers returned empty text".to_string(),
+                message: format!(
+                    "All transcribers returned empty text (models: {})",
+                    self.name
+                ),
             })
         })
     }
@@ -88,17 +99,21 @@ mod tests {
 
     #[test]
     fn test_picks_highest_confidence() {
-        let low =
-            Arc::new(MockTranscriber::new("low").with_response("low text")) as Arc<dyn Transcriber>;
-        let high = Arc::new(MockTranscriber::new("high").with_response("high text"))
-            as Arc<dyn Transcriber>;
+        let low = Arc::new(
+            MockTranscriber::new("low")
+                .with_response("low text")
+                .with_confidence(0.5),
+        ) as Arc<dyn Transcriber>;
+        let high = Arc::new(
+            MockTranscriber::new("high")
+                .with_response("high text")
+                .with_confidence(0.95),
+        ) as Arc<dyn Transcriber>;
 
-        // MockTranscriber always returns confidence=1.0, so both are equal.
-        // To test ordering, we need custom mocks with different confidences.
         let fan = FanOutTranscriber::new(vec![low, high]);
         let result = fan.transcribe(&[0i16; 100]).unwrap();
-        // Both have confidence 1.0, first one wins (or either is fine)
-        assert!(!result.text.is_empty());
+        assert_eq!(result.text, "high text");
+        assert_eq!(result.confidence, 0.95);
     }
 
     #[test]
@@ -157,5 +172,52 @@ mod tests {
     #[should_panic(expected = "need at least one transcriber")]
     fn test_empty_transcribers_panics() {
         FanOutTranscriber::new(vec![]);
+    }
+
+    #[test]
+    fn test_single_transcriber() {
+        let only =
+            Arc::new(MockTranscriber::new("only").with_response("solo")) as Arc<dyn Transcriber>;
+        let fan = FanOutTranscriber::new(vec![only]);
+        let result = fan.transcribe(&[0i16; 100]).unwrap();
+        assert_eq!(result.text, "solo");
+        assert_eq!(fan.model_name(), "only");
+    }
+
+    #[test]
+    fn test_all_empty_text_returns_error() {
+        let e1 = Arc::new(MockTranscriber::new("a").with_response("")) as Arc<dyn Transcriber>;
+        let e2 = Arc::new(MockTranscriber::new("b").with_response("")) as Arc<dyn Transcriber>;
+        let fan = FanOutTranscriber::new(vec![e1, e2]);
+        let result = fan.transcribe(&[0i16; 100]);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("empty text"),
+            "Expected empty text error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_confidence_with_language() {
+        let de = Arc::new(
+            MockTranscriber::new("ml")
+                .with_response("hallo")
+                .with_confidence(0.9)
+                .with_language("de"),
+        ) as Arc<dyn Transcriber>;
+        let en = Arc::new(
+            MockTranscriber::new("en")
+                .with_response("hello")
+                .with_confidence(0.7)
+                .with_language("en"),
+        ) as Arc<dyn Transcriber>;
+
+        let fan = FanOutTranscriber::new(vec![de, en]);
+        let result = fan.transcribe(&[0i16; 100]).unwrap();
+        assert_eq!(result.text, "hallo");
+        assert_eq!(result.language, "de");
+        assert_eq!(result.confidence, 0.9);
     }
 }

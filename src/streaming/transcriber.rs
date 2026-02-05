@@ -126,34 +126,7 @@ impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stt::transcriber::{Transcriber, TranscriptionResult as SttResult};
-
-    /// Mock transcriber for testing.
-    struct MockTranscriber {
-        response: String,
-    }
-
-    impl MockTranscriber {
-        fn new(response: &str) -> Self {
-            Self {
-                response: response.to_string(),
-            }
-        }
-    }
-
-    impl Transcriber for MockTranscriber {
-        fn transcribe(&self, _samples: &[i16]) -> Result<SttResult> {
-            Ok(SttResult::from_text(self.response.clone()))
-        }
-
-        fn model_name(&self) -> &str {
-            "mock-model"
-        }
-
-        fn is_ready(&self) -> bool {
-            true
-        }
-    }
+    use crate::stt::transcriber::{MockTranscriber, Transcriber, TranscriptionResult as SttResult};
 
     fn make_chunk(id: u64, is_final: bool) -> ChunkData {
         ChunkData {
@@ -168,13 +141,13 @@ mod tests {
 
     #[test]
     fn test_transcriber_station_creation() {
-        let mock = MockTranscriber::new("hello world");
+        let mock = MockTranscriber::new("mock-model").with_response("hello world");
         let _station = TranscriberStation::new(mock);
     }
 
     #[test]
     fn test_transcriber_station_transcribe_sync() {
-        let mock = MockTranscriber::new("test transcription");
+        let mock = MockTranscriber::new("mock-model").with_response("test transcription");
         let station = TranscriberStation::new(mock);
 
         let chunk = make_chunk(42, false);
@@ -187,7 +160,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transcriber_station_transcribe_async() {
-        let mock = MockTranscriber::new("async result");
+        let mock = MockTranscriber::new("mock-model").with_response("async result");
         let station = TranscriberStation::new(mock);
 
         let chunk = make_chunk(5, true);
@@ -200,7 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transcriber_station_run() {
-        let mock = MockTranscriber::new("chunk result");
+        let mock = MockTranscriber::new("mock-model").with_response("chunk result");
         let station = TranscriberStation::new(mock);
 
         let (input_tx, input_rx) = mpsc::channel(10);

@@ -128,7 +128,9 @@ pub fn default_model() -> &'static ModelInfo {
 /// - `"large"` → `Some("large")` (only multilingual exists)
 /// - `"unknown"` → `None`
 pub fn multilingual_variant(name: &str) -> Option<&'static str> {
-    let base = name.strip_suffix(".en").unwrap_or(name);
+    let base = name
+        .strip_suffix(crate::defaults::ENGLISH_ONLY_SUFFIX)
+        .unwrap_or(name);
     get_model(base).map(|m| m.name)
 }
 
@@ -139,9 +141,34 @@ pub fn multilingual_variant(name: &str) -> Option<&'static str> {
 /// - `"large"` → `None` (no .en variant exists)
 /// - `"unknown"` → `None`
 pub fn english_variant(name: &str) -> Option<&'static str> {
-    let base = name.strip_suffix(".en").unwrap_or(name);
-    let en_name = format!("{}.en", base);
+    let base = name
+        .strip_suffix(crate::defaults::ENGLISH_ONLY_SUFFIX)
+        .unwrap_or(name);
+    let en_name = format!("{}{}", base, crate::defaults::ENGLISH_ONLY_SUFFIX);
     get_model(&en_name).map(|m| m.name)
+}
+
+/// Resolve the model name based on the configured language.
+///
+/// Ensures a multilingual model is used when language is not English.
+pub fn resolve_model_for_language(model: &str, language: &str, quiet: bool) -> String {
+    let needs_multilingual =
+        language == crate::defaults::AUTO_LANGUAGE || (language != "en" && !language.is_empty());
+    let is_english_only = model.ends_with(crate::defaults::ENGLISH_ONLY_SUFFIX);
+
+    if needs_multilingual
+        && is_english_only
+        && let Some(ml) = multilingual_variant(model)
+    {
+        if !quiet {
+            eprintln!(
+                "Switching model '{}' → '{}' (language='{}' needs multilingual model).",
+                model, ml, language
+            );
+        }
+        return ml.to_string();
+    }
+    model.to_string()
 }
 
 #[cfg(test)]
@@ -270,5 +297,36 @@ mod tests {
         assert!(get_model("tiny.en").is_some());
         assert!(get_model("Tiny.en").is_none());
         assert!(get_model("TINY.EN").is_none());
+    }
+
+    #[test]
+    fn test_resolve_auto_with_english_model_switches_to_multilingual() {
+        let result = resolve_model_for_language("base.en", "auto", true);
+        assert_eq!(result, "base");
+    }
+
+    #[test]
+    fn test_resolve_non_english_with_english_model_switches() {
+        let result = resolve_model_for_language("base.en", "de", true);
+        assert_eq!(result, "base");
+    }
+
+    #[test]
+    fn test_resolve_english_with_english_model_keeps() {
+        let result = resolve_model_for_language("base.en", "en", true);
+        assert_eq!(result, "base.en");
+    }
+
+    #[test]
+    fn test_resolve_auto_with_multilingual_model_keeps() {
+        let result = resolve_model_for_language("base", "auto", true);
+        assert_eq!(result, "base");
+    }
+
+    #[test]
+    fn test_resolve_unknown_model_keeps_as_is() {
+        let result = resolve_model_for_language("custom-model.en", "auto", true);
+        // Unknown model, no catalog entry, keep as-is
+        assert_eq!(result, "custom-model.en");
     }
 }

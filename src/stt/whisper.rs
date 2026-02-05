@@ -220,7 +220,7 @@ impl Transcriber for WhisperTranscriber {
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
         // Set language
-        if self.config.language == "auto" {
+        if self.config.language == crate::defaults::AUTO_LANGUAGE {
             params.set_language(None);
         } else {
             params.set_language(Some(&self.config.language));
@@ -313,7 +313,7 @@ mod tests {
     fn test_whisper_config_default() {
         let config = WhisperConfig::default();
         assert_eq!(config.model_path, PathBuf::from("models/ggml-base.bin"));
-        assert_eq!(config.language, "auto");
+        assert_eq!(config.language, crate::defaults::AUTO_LANGUAGE);
         assert_eq!(config.threads, None);
     }
 
