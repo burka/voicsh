@@ -74,7 +74,7 @@ language = "en"              # ISO 639-1 language code
 
 [input]
 method = "clipboard"         # "clipboard" (reliable) or "direct" (faster)
-paste_key = "ctrl+v"         # Or "ctrl+shift+v" for terminals
+paste_key = "auto"           # Auto-detects terminal vs GUI; or "ctrl+v" / "ctrl+shift+v"
 
 [refinement]
 enabled = false              # Enable LLM post-processing

@@ -106,6 +106,7 @@ async fn run_continuous(
         auto_level: true,
         quiet,
         input_method: config.input.method.clone(),
+        paste_key: config.input.paste_key.clone(),
         sample_rate: 16000,
         ..Default::default()
     };
@@ -238,10 +239,13 @@ async fn create_transcriber(
 
 /// Inject transcribed text using configured input method.
 fn inject_text(config: &Config, text: &str, _verbose: bool) -> Result<()> {
+    use crate::input::focused_window::resolve_paste_key;
+
     let injector = TextInjector::system();
+    let paste_key = resolve_paste_key(&config.input.paste_key);
 
     match config.input.method {
-        InputMethod::Clipboard => injector.inject_via_clipboard(text),
+        InputMethod::Clipboard => injector.inject_via_clipboard(text, paste_key),
         InputMethod::Direct => injector.inject_direct(text),
     }
 }

@@ -32,6 +32,8 @@ pub struct ContinuousPipelineConfig {
     pub quiet: bool,
     /// Text injection method
     pub input_method: InputMethod,
+    /// Paste key: "auto" for auto-detection, or explicit like "ctrl+v"
+    pub paste_key: String,
     /// Sample rate
     pub sample_rate: u32,
     /// Channel buffer sizes
@@ -50,6 +52,7 @@ impl Default for ContinuousPipelineConfig {
             auto_level: true,
             quiet: false,
             input_method: InputMethod::Clipboard,
+            paste_key: "auto".to_string(),
             sample_rate: 16000,
             audio_buffer: 32,
             vad_buffer: 16,
@@ -142,7 +145,8 @@ impl ContinuousPipeline {
             TranscriberStation::new(transcriber).with_quiet(self.config.quiet);
 
         let injector_station =
-            InjectorStation::new(self.config.input_method).with_quiet(self.config.quiet);
+            InjectorStation::new(self.config.input_method, self.config.paste_key)
+                .with_quiet(self.config.quiet);
 
         // Spawn station runners
         let vad_runner =

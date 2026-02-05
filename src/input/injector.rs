@@ -81,8 +81,11 @@ impl<E: CommandExecutor> TextInjector<E> {
 
     /// Inject text via clipboard mechanism.
     ///
-    /// Uses wl-copy to set clipboard content, then simulates Ctrl+V.
+    /// Uses wl-copy to set clipboard content, then simulates the given paste key.
     /// Tries wtype first (no daemon needed), falls back to ydotool.
+    ///
+    /// The `paste_key` argument controls which key combo is simulated
+    /// (e.g. `"ctrl+v"` for GUI apps, `"ctrl+shift+v"` for terminals).
     ///
     /// # Requirements
     /// - wl-copy (from wl-clipboard package)
@@ -91,7 +94,9 @@ impl<E: CommandExecutor> TextInjector<E> {
     /// # Installation
     /// Ubuntu/Debian: `sudo apt install wl-clipboard wtype`
     /// Arch: `sudo pacman -S wl-clipboard wtype`
-    pub fn inject_via_clipboard(&self, text: &str) -> Result<()> {
+    pub fn inject_via_clipboard(&self, text: &str, paste_key: &str) -> Result<()> {
+        use crate::input::focused_window::paste_key_to_wtype_args;
+
         // Copy text to clipboard using wl-copy
         self.executor
             .execute("wl-copy", &[text])
@@ -110,18 +115,18 @@ impl<E: CommandExecutor> TextInjector<E> {
         // Delay to ensure clipboard is updated before paste
         std::thread::sleep(std::time::Duration::from_millis(100));
 
+        // Build wtype args from paste_key
+        let wtype_args = paste_key_to_wtype_args(paste_key);
+        let wtype_arg_refs: Vec<&str> = wtype_args.iter().map(String::as_str).collect();
+
         // Try wtype first (simpler, no daemon needed)
-        if self
-            .executor
-            .execute("wtype", &["-M", "ctrl", "-k", "v"])
-            .is_ok()
-        {
+        if self.executor.execute("wtype", &wtype_arg_refs).is_ok() {
             return Ok(());
         }
 
         // Fall back to ydotool (small delay for reliability)
         self.executor
-            .execute("ydotool", &["key", "--delay", "10", "ctrl+v"])
+            .execute("ydotool", &["key", "--delay", "10", paste_key])
             .map_err(|e| match &e {
                 VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
                     VoicshError::InjectionFailed {
@@ -366,7 +371,9 @@ mod tests {
         let mock = MockCommandExecutor::new();
         let injector = TextInjector::new(mock);
 
-        injector.inject_via_clipboard("Hello, World!").unwrap();
+        injector
+            .inject_via_clipboard("Hello, World!", "ctrl+v")
+            .unwrap();
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 2);
@@ -381,13 +388,29 @@ mod tests {
     }
 
     #[test]
+    fn test_inject_via_clipboard_terminal_paste_key() {
+        let mock = MockCommandExecutor::new();
+        let injector = TextInjector::new(mock);
+
+        injector
+            .inject_via_clipboard("Hello", "ctrl+shift+v")
+            .unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 2);
+
+        assert_eq!(calls[1].0, "wtype");
+        assert_eq!(calls[1].1, vec!["-M", "ctrl", "-M", "shift", "-k", "v"]);
+    }
+
+    #[test]
     fn test_inject_via_clipboard_handles_wl_copy_error() {
         let mock = MockCommandExecutor::new().with_error(VoicshError::InjectionToolNotFound {
             tool: "wl-copy".to_string(),
         });
         let injector = TextInjector::new(mock);
 
-        let result = injector.inject_via_clipboard("test");
+        let result = injector.inject_via_clipboard("test", "ctrl+v");
         assert!(result.is_err());
 
         match result {
@@ -410,7 +433,7 @@ mod tests {
             .with_success(); // ydotool succeeds
         let injector = TextInjector::new(mock);
 
-        let result = injector.inject_via_clipboard("test");
+        let result = injector.inject_via_clipboard("test", "ctrl+v");
         assert!(result.is_ok());
 
         // Should have called wl-copy, then wtype (failed), then ydotool
@@ -420,6 +443,26 @@ mod tests {
         assert_eq!(calls[1].0, "wtype");
         assert_eq!(calls[2].0, "ydotool");
         assert_eq!(calls[2].1, vec!["key", "--delay", "10", "ctrl+v"]);
+    }
+
+    #[test]
+    fn test_inject_via_clipboard_ydotool_terminal_paste_key() {
+        // wtype fails, ydotool should receive ctrl+shift+v
+        let mock = MockCommandExecutor::new()
+            .with_success() // wl-copy succeeds
+            .with_error(VoicshError::InjectionToolNotFound {
+                tool: "wtype".to_string(),
+            }) // wtype fails
+            .with_success(); // ydotool succeeds
+        let injector = TextInjector::new(mock);
+
+        injector
+            .inject_via_clipboard("test", "ctrl+shift+v")
+            .unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls[2].0, "ydotool");
+        assert_eq!(calls[2].1, vec!["key", "--delay", "10", "ctrl+shift+v"]);
     }
 
     #[test]
@@ -486,7 +529,9 @@ mod tests {
         let injector = TextInjector::new(recorder);
 
         let text_with_special = "Hello\nWorld\t!@#$%";
-        injector.inject_via_clipboard(text_with_special).unwrap();
+        injector
+            .inject_via_clipboard(text_with_special, "ctrl+v")
+            .unwrap();
 
         let calls = injector.executor.calls();
         assert_eq!(calls[0].1, vec![text_with_special]);
@@ -572,7 +617,7 @@ mod tests {
         let recorder = RecordingExecutor::new();
         let injector = TextInjector::new(recorder);
 
-        injector.inject_via_clipboard("").unwrap();
+        injector.inject_via_clipboard("", "ctrl+v").unwrap();
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 2);

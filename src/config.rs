@@ -69,7 +69,7 @@ impl Default for InputConfig {
     fn default() -> Self {
         Self {
             method: InputMethod::Clipboard,
-            paste_key: "ctrl+v".to_string(),
+            paste_key: "auto".to_string(),
         }
     }
 }
@@ -189,7 +189,7 @@ mod tests {
 
         // Input defaults
         assert_eq!(config.input.method, InputMethod::Clipboard);
-        assert_eq!(config.input.paste_key, "ctrl+v");
+        assert_eq!(config.input.paste_key, "auto");
     }
 
     #[test]
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(config.audio.silence_duration_ms, 1500);
         assert_eq!(config.stt.language, "en");
         assert_eq!(config.input.method, InputMethod::Clipboard);
-        assert_eq!(config.input.paste_key, "ctrl+v");
+        assert_eq!(config.input.paste_key, "auto");
     }
 
     #[test]

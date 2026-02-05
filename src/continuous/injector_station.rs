@@ -13,15 +13,22 @@ use crate::input::injector::TextInjector;
 pub struct InjectorStation {
     injector: TextInjector<crate::input::injector::SystemCommandExecutor>,
     method: InputMethod,
+    paste_key: String,
     quiet: bool,
 }
 
 impl InjectorStation {
-    /// Create a new injector station with the specified input method.
-    pub fn new(method: InputMethod) -> Self {
+    /// Create a new injector station with the specified input method and paste key.
+    ///
+    /// The `paste_key` controls how clipboard paste is triggered:
+    /// - `"auto"` → detects whether the focused window is a terminal at injection time
+    /// - `"ctrl+v"` → always uses Ctrl+V (GUI apps)
+    /// - `"ctrl+shift+v"` → always uses Ctrl+Shift+V (terminals)
+    pub fn new(method: InputMethod, paste_key: String) -> Self {
         Self {
             injector: TextInjector::system(),
             method,
+            paste_key,
             quiet: false,
         }
     }
@@ -44,6 +51,8 @@ impl Station for InjectorStation {
     }
 
     fn process(&mut self, text: TranscribedText) -> Result<Option<()>, StationError> {
+        use crate::input::focused_window::resolve_paste_key;
+
         // Skip empty text
         if text.text.is_empty() {
             return Ok(None);
@@ -55,8 +64,9 @@ impl Station for InjectorStation {
         }
 
         // Inject text via configured method
+        let paste_key = resolve_paste_key(&self.paste_key);
         let result = match self.method {
-            InputMethod::Clipboard => self.injector.inject_via_clipboard(&text.text),
+            InputMethod::Clipboard => self.injector.inject_via_clipboard(&text.text, paste_key),
             InputMethod::Direct => self.injector.inject_direct(&text.text),
         };
 
@@ -187,7 +197,7 @@ mod tests {
             }
 
             let result = match self.method {
-                InputMethod::Clipboard => self.injector.inject_via_clipboard(&text.text),
+                InputMethod::Clipboard => self.injector.inject_via_clipboard(&text.text, "ctrl+v"),
                 InputMethod::Direct => self.injector.inject_direct(&text.text),
             };
 
@@ -203,14 +213,15 @@ mod tests {
 
     #[test]
     fn test_injector_station_creation() {
-        let station = InjectorStation::new(InputMethod::Clipboard);
+        let station = InjectorStation::new(InputMethod::Clipboard, "auto".to_string());
         assert_eq!(station.name(), "injector");
         assert!(!station.quiet);
     }
 
     #[test]
     fn test_injector_station_with_quiet() {
-        let station = InjectorStation::new(InputMethod::Clipboard).with_quiet(true);
+        let station =
+            InjectorStation::new(InputMethod::Clipboard, "auto".to_string()).with_quiet(true);
         assert_eq!(station.name(), "injector");
         assert!(station.quiet);
     }
