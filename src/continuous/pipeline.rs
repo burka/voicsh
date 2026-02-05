@@ -139,14 +139,15 @@ impl ContinuousPipeline {
 
         let chunker_station = ChunkerStation::new(self.config.chunker)
             .with_sample_rate(self.config.sample_rate)
-            .with_quiet(self.config.quiet);
+            .with_verbose(self.config.show_levels);
 
         let transcriber_station =
-            TranscriberStation::new(transcriber).with_quiet(self.config.quiet);
+            TranscriberStation::new(transcriber).with_verbose(self.config.show_levels);
 
         let injector_station =
             InjectorStation::new(self.config.input_method, self.config.paste_key)
-                .with_quiet(self.config.quiet);
+                .with_quiet(self.config.quiet)
+                .with_verbose(self.config.show_levels);
 
         // Spawn station runners
         let vad_runner =

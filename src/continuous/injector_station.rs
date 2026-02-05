@@ -15,6 +15,7 @@ pub struct InjectorStation {
     method: InputMethod,
     paste_key: String,
     quiet: bool,
+    verbose: bool,
 }
 
 impl InjectorStation {
@@ -30,6 +31,7 @@ impl InjectorStation {
             method,
             paste_key,
             quiet: false,
+            verbose: false,
         }
     }
 
@@ -38,6 +40,12 @@ impl InjectorStation {
     /// When quiet is false (default), the transcribed text is printed to stderr.
     pub fn with_quiet(mut self, quiet: bool) -> Self {
         self.quiet = quiet;
+        self
+    }
+
+    /// Enable diagnostic output to stderr.
+    pub fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
         self
     }
 }
@@ -73,14 +81,16 @@ impl Station for InjectorStation {
         // Log injection result and convert errors to recoverable
         match result {
             Ok(()) => {
-                if !self.quiet {
+                if self.verbose && !self.quiet {
                     eprintln_clear("  [injected]");
                 }
                 Ok(Some(()))
             }
             Err(e) => {
                 // Log the error but return Recoverable so pipeline continues
-                eprintln_clear(&format!("  [injection failed: {}]", e));
+                if self.verbose && !self.quiet {
+                    eprintln_clear(&format!("  [injection failed: {}]", e));
+                }
                 // Return Ok(None) instead of error - injection failure shouldn't stop the pipeline
                 Ok(None)
             }
@@ -145,6 +155,7 @@ mod tests {
         executor_ref: MockCommandExecutor,
         method: InputMethod,
         quiet: bool,
+        verbose: bool,
     }
 
     impl MockInjectorStation {
@@ -155,11 +166,17 @@ mod tests {
                 executor_ref: executor,
                 method,
                 quiet: false,
+                verbose: false,
             }
         }
 
         fn with_quiet(mut self, quiet: bool) -> Self {
             self.quiet = quiet;
+            self
+        }
+
+        fn with_verbose(mut self, verbose: bool) -> Self {
+            self.verbose = verbose;
             self
         }
 
@@ -170,6 +187,7 @@ mod tests {
                 executor_ref: executor,
                 method,
                 quiet: false,
+                verbose: false,
             }
         }
 
@@ -216,6 +234,7 @@ mod tests {
         let station = InjectorStation::new(InputMethod::Clipboard, "auto".to_string());
         assert_eq!(station.name(), "injector");
         assert!(!station.quiet);
+        assert!(!station.verbose);
     }
 
     #[test]
@@ -338,5 +357,21 @@ mod tests {
         assert!(result.is_ok());
         let calls = station.calls();
         assert_eq!(calls[0].1, vec![unicode_text]);
+    }
+
+    #[test]
+    fn test_injector_station_with_verbose() {
+        let station =
+            InjectorStation::new(InputMethod::Clipboard, "auto".to_string()).with_verbose(true);
+        assert_eq!(station.name(), "injector");
+        assert!(station.verbose);
+        assert!(!station.quiet);
+    }
+
+    #[test]
+    fn test_mock_injector_station_with_verbose() {
+        let station = MockInjectorStation::new(InputMethod::Direct).with_verbose(true);
+        assert!(station.verbose);
+        assert!(!station.quiet);
     }
 }

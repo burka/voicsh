@@ -6,6 +6,37 @@ use crate::error::{Result, VoicshError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 
+/// Run a closure with stderr temporarily redirected to /dev/null.
+///
+/// This suppresses noisy ALSA/JACK/PipeWire messages that CPAL triggers
+/// when probing audio backends. The messages are harmless but confusing to users.
+///
+/// # Safety
+/// Uses `libc::dup`/`libc::dup2` to save and restore file descriptor 2 (stderr).
+/// Safe as long as no other thread is concurrently manipulating fd 2.
+fn with_suppressed_stderr<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    unsafe {
+        let saved_fd = libc::dup(2);
+        let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
+        if saved_fd >= 0 && devnull >= 0 {
+            libc::dup2(devnull, 2);
+            libc::close(devnull);
+        }
+
+        let result = f();
+
+        if saved_fd >= 0 {
+            libc::dup2(saved_fd, 2);
+            libc::close(saved_fd);
+        }
+
+        result
+    }
+}
+
 /// Suppress noisy JACK/ALSA error messages that occur during audio backend probing.
 /// These are harmless but confusing to users.
 ///
@@ -73,12 +104,15 @@ fn is_preferred_device(name: &str) -> bool {
 /// They occur because cpal tries multiple audio backends (ALSA, JACK, Pulse)
 /// to find available devices.
 pub fn list_devices() -> Result<Vec<String>> {
-    let host = cpal::default_host();
-    let devices = host
-        .input_devices()
-        .map_err(|e| VoicshError::AudioCapture {
-            message: format!("Failed to enumerate input devices: {}", e),
-        })?;
+    let (host, devices) = with_suppressed_stderr(|| {
+        let host = cpal::default_host();
+        let devices = host.input_devices();
+        (host, devices)
+    });
+    let _ = host; // keep host alive while iterating devices
+    let devices = devices.map_err(|e| VoicshError::AudioCapture {
+        message: format!("Failed to enumerate input devices: {}", e),
+    })?;
 
     let mut device_names = Vec::new();
     for device in devices {
@@ -115,24 +149,26 @@ pub fn list_devices() -> Result<Vec<String>> {
 /// # Errors
 /// Returns `VoicshError::AudioDeviceNotFound` if no input device is available.
 fn get_best_default_device() -> Result<cpal::Device> {
-    let host = cpal::default_host();
+    with_suppressed_stderr(|| {
+        let host = cpal::default_host();
 
-    // Try to find a preferred device
-    if let Ok(devices) = host.input_devices() {
-        for device in devices {
-            if let Ok(name) = device.name()
-                && is_preferred_device(&name)
-            {
-                return Ok(device);
+        // Try to find a preferred device
+        if let Ok(devices) = host.input_devices() {
+            for device in devices {
+                if let Ok(name) = device.name()
+                    && is_preferred_device(&name)
+                {
+                    return Ok(device);
+                }
             }
         }
-    }
 
-    // Fall back to system default
-    host.default_input_device()
-        .ok_or_else(|| VoicshError::AudioDeviceNotFound {
-            device: "default".to_string(),
-        })
+        // Fall back to system default
+        host.default_input_device()
+            .ok_or_else(|| VoicshError::AudioDeviceNotFound {
+                device: "default".to_string(),
+            })
+    })
 }
 
 /// Wrapper for cpal::Stream to make it Send.
@@ -172,33 +208,35 @@ impl CpalAudioSource {
     /// - Device configuration fails
     /// - Format is not supported
     pub fn new(device_name: Option<&str>) -> Result<Self> {
-        let host = cpal::default_host();
+        let device = with_suppressed_stderr(|| {
+            let host = cpal::default_host();
 
-        let device = if let Some(name) = device_name {
-            // Find device by name
-            let devices = host
-                .input_devices()
-                .map_err(|e| VoicshError::AudioCapture {
-                    message: format!("Failed to enumerate devices: {}", e),
-                })?;
+            if let Some(name) = device_name {
+                // Find device by name
+                let devices = host
+                    .input_devices()
+                    .map_err(|e| VoicshError::AudioCapture {
+                        message: format!("Failed to enumerate devices: {}", e),
+                    })?;
 
-            let mut found_device = None;
-            for dev in devices {
-                if let Ok(dev_name) = dev.name()
-                    && dev_name == name
-                {
-                    found_device = Some(dev);
-                    break;
+                let mut found_device = None;
+                for dev in devices {
+                    if let Ok(dev_name) = dev.name()
+                        && dev_name == name
+                    {
+                        found_device = Some(dev);
+                        break;
+                    }
                 }
-            }
 
-            found_device.ok_or_else(|| VoicshError::AudioDeviceNotFound {
-                device: name.to_string(),
-            })?
-        } else {
-            // Use smart default (prefers PipeWire/PulseAudio)
-            get_best_default_device()?
-        };
+                found_device.ok_or_else(|| VoicshError::AudioDeviceNotFound {
+                    device: name.to_string(),
+                })
+            } else {
+                // Use smart default (prefers PipeWire/PulseAudio)
+                get_best_default_device()
+            }
+        })?;
 
         Ok(Self {
             device,

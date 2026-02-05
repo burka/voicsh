@@ -31,7 +31,7 @@ fn clean_transcription(text: &str) -> String {
 /// Station that transcribes audio chunks using a Whisper transcriber.
 pub struct TranscriberStation<T: Transcriber> {
     transcriber: Arc<T>,
-    quiet: bool,
+    verbose: bool,
 }
 
 impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
@@ -39,15 +39,15 @@ impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
     pub fn new(transcriber: Arc<T>) -> Self {
         Self {
             transcriber,
-            quiet: false,
+            verbose: false,
         }
     }
 
-    /// Configure whether to suppress output to stderr.
+    /// Configure whether to enable diagnostic output to stderr.
     ///
-    /// When quiet is false (default), diagnostic info is logged during transcription.
-    pub fn with_quiet(mut self, quiet: bool) -> Self {
-        self.quiet = quiet;
+    /// When verbose is true, diagnostic info is logged during transcription.
+    pub fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
         self
     }
 }
@@ -61,8 +61,8 @@ impl<T: Transcriber + Send + Sync + 'static> Station for TranscriberStation<T> {
     }
 
     fn process(&mut self, chunk: AudioChunk) -> Result<Option<TranscribedText>, StationError> {
-        // Log transcription start if not quiet
-        if !self.quiet {
+        // Log transcription start if verbose
+        if self.verbose {
             eprintln_clear(&format!("  [transcribing {}ms...]", chunk.duration_ms));
         }
 
@@ -80,8 +80,8 @@ impl<T: Transcriber + Send + Sync + 'static> Station for TranscriberStation<T> {
             return Ok(None);
         }
 
-        // Log transcription completion if not quiet
-        if !self.quiet {
+        // Log transcription completion if verbose
+        if self.verbose {
             eprintln_clear(&format!("  [transcribed: {} chars]", cleaned_text.len()));
         }
 

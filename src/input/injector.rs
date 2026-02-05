@@ -7,7 +7,7 @@
 //! The `CommandExecutor` trait enables full testability without external dependencies.
 
 use crate::error::{Result, VoicshError};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Trait for executing system commands.
 ///
@@ -37,7 +37,11 @@ impl CommandExecutor for SystemCommandExecutor {
         // Programs like wl-copy detect pipes and stay in foreground,
         // causing wait() to block forever. status() inherits stdio,
         // allowing them to fork to daemon immediately.
-        let status = Command::new(command).args(args).status().map_err(|e| {
+        let status = Command::new(command)
+            .args(args)
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 VoicshError::InjectionToolNotFound {
                     tool: command.to_string(),

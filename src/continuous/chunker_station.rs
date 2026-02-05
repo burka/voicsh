@@ -18,7 +18,7 @@ pub struct ChunkerStation {
     sequence: u64,
     sample_rate: u32,
     silence_start: Option<Instant>,
-    quiet: bool,
+    verbose: bool,
 }
 
 impl ChunkerStation {
@@ -30,7 +30,7 @@ impl ChunkerStation {
             sequence: 0,
             sample_rate,
             silence_start: None,
-            quiet: false,
+            verbose: false,
         }
     }
 
@@ -40,11 +40,11 @@ impl ChunkerStation {
         self
     }
 
-    /// Configure whether to suppress output to stderr.
+    /// Enable diagnostic output to stderr.
     ///
-    /// When quiet is false (default), diagnostic info is logged when chunks are emitted.
-    pub fn with_quiet(mut self, quiet: bool) -> Self {
-        self.quiet = quiet;
+    /// When verbose is true, diagnostic info is logged when chunks are emitted.
+    pub fn with_verbose(mut self, verbose: bool) -> Self {
+        self.verbose = verbose;
         self
     }
 
@@ -64,8 +64,8 @@ impl ChunkerStation {
         self.sequence += 1;
         let chunk = AudioChunk::new(samples, duration_ms, seq);
 
-        // Log chunk emission if not quiet
-        if !self.quiet {
+        // Log chunk emission if verbose
+        if self.verbose {
             eprintln_clear(&format!(
                 "  [chunk: {}ms, seq {}]",
                 chunk.duration_ms, chunk.sequence
