@@ -198,18 +198,6 @@ pub fn find_any_installed_model() -> Option<String> {
         .map(|m| m.name.to_string())
 }
 
-/// Get the recommended default model name.
-///
-/// Returns "base.en" which provides a good balance between speed and accuracy
-/// for English-language transcription.
-///
-/// # Returns
-///
-/// The recommended model name as a static string.
-pub fn get_recommended_model() -> &'static str {
-    "base.en"
-}
-
 /// Format model information for display.
 ///
 /// # Arguments
@@ -316,11 +304,6 @@ mod tests {
                 model.name
             );
         }
-    }
-
-    #[test]
-    fn test_get_recommended_model_returns_base_en() {
-        assert_eq!(get_recommended_model(), "base.en");
     }
 
     #[test]
