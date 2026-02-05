@@ -182,21 +182,30 @@ fn detect_via_hyprctl() -> Option<String> {
 ///
 /// Uses `gdbus call` to invoke `org.gnome.Shell.Eval`. This may be disabled
 /// on modern GNOME (45+) for security, in which case it returns None.
+///
+/// Handles stale D-Bus sessions (e.g. long-lived tmux/byobu/screen) by
+/// reading the current GNOME Shell's D-Bus address from `/proc`.
 fn detect_via_gnome_dbus() -> Option<String> {
-    let output = Command::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--dest",
-            "org.gnome.Shell",
-            "--object-path",
-            "/org/gnome/Shell",
-            "--method",
-            "org.gnome.Shell.Eval",
-            "global.display.focus_window ? global.display.focus_window.get_wm_class() : ''",
-        ])
-        .output()
-        .ok()?;
+    let mut cmd = Command::new("gdbus");
+    cmd.args([
+        "call",
+        "--session",
+        "--dest",
+        "org.gnome.Shell",
+        "--object-path",
+        "/org/gnome/Shell",
+        "--method",
+        "org.gnome.Shell.Eval",
+        "global.display.focus_window ? global.display.focus_window.get_wm_class() : ''",
+    ]);
+
+    // If running inside a long-lived tmux/screen session, our DBUS_SESSION_BUS_ADDRESS
+    // may be stale (from a previous GNOME login). Refresh it from the running gnome-shell.
+    if let Some(fresh_addr) = fresh_gnome_dbus_address() {
+        cmd.env("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
+    }
+
+    let output = cmd.output().ok()?;
 
     if !output.status.success() {
         return None;
@@ -205,6 +214,44 @@ fn detect_via_gnome_dbus() -> Option<String> {
     // Output format: (true, '"ClassName"') on success, (false, '') when disabled
     let result = String::from_utf8_lossy(&output.stdout);
     extract_gnome_eval_result(&result)
+}
+
+/// Read the current DBUS_SESSION_BUS_ADDRESS from the running gnome-shell process.
+///
+/// This handles the case where the caller's environment has a stale D-Bus address
+/// (common in long-lived tmux/byobu/screen sessions that survive GNOME re-logins).
+fn fresh_gnome_dbus_address() -> Option<String> {
+    use std::fs;
+
+    // Find gnome-shell PID
+    let output = Command::new("pgrep")
+        .args(["-n", "gnome-shell"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if pid.is_empty() {
+        return None;
+    }
+
+    // Read its environment
+    let environ = fs::read(format!("/proc/{}/environ", pid)).ok()?;
+    let env_str = String::from_utf8_lossy(&environ);
+
+    // Find DBUS_SESSION_BUS_ADDRESS
+    for entry in env_str.split('\0') {
+        if let Some(addr) = entry.strip_prefix("DBUS_SESSION_BUS_ADDRESS=")
+            && !addr.is_empty()
+        {
+            return Some(addr.to_string());
+        }
+    }
+
+    None
 }
 
 /// Parse GNOME Shell Eval D-Bus response.
