@@ -72,7 +72,7 @@ impl Station for InjectorStation {
         }
 
         // Inject text via configured method
-        let paste_key = resolve_paste_key(&self.paste_key);
+        let paste_key = resolve_paste_key(&self.paste_key, self.verbose);
         let result = match self.method {
             InputMethod::Clipboard => self.injector.inject_via_clipboard(&text.text, paste_key),
             InputMethod::Direct => self.injector.inject_direct(&text.text),

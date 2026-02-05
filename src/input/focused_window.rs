@@ -5,7 +5,7 @@
 //! - Terminal emulators: `Ctrl+Shift+V`
 //! - GUI applications: `Ctrl+V`
 //!
-//! Supports Sway (swaymsg) and Hyprland (hyprctl) compositors.
+//! Supports Sway (swaymsg), Hyprland (hyprctl), and GNOME (gdbus) compositors.
 
 use std::process::Command;
 
@@ -33,6 +33,7 @@ const KNOWN_TERMINALS: &[&str] = &[
     "gnome-terminal-server",
     "org.gnome.terminal",
     "org.gnome.ptyxis",
+    "ptyxis",
     "konsole",
     "org.kde.konsole",
     "xterm",
@@ -58,32 +59,75 @@ const KNOWN_TERMINALS: &[&str] = &[
 ///
 /// - `"auto"` → detects the focused window and returns the right key
 /// - Any other value → returned as-is (user override)
-pub fn resolve_paste_key(configured: &str) -> &str {
-    if configured == "auto" {
-        match detect_window_kind() {
-            WindowKind::Terminal => "ctrl+shift+v",
-            WindowKind::GraphicalApp => "ctrl+v",
+///
+/// When `verbose` is true, logs the detection steps to stderr.
+pub fn resolve_paste_key(configured: &str, verbose: bool) -> &str {
+    if configured != "auto" {
+        if verbose {
+            eprintln!("  [paste] explicit: {}", configured);
         }
-    } else {
-        configured
+        return configured;
     }
+
+    let (kind, app_id, method) = detect_window_kind_verbose(verbose);
+    let key = match kind {
+        WindowKind::Terminal => "ctrl+shift+v",
+        WindowKind::GraphicalApp => "ctrl+v",
+    };
+
+    if verbose {
+        match &app_id {
+            Some(id) => eprintln!(
+                "  [paste] {} app_id=\"{}\" → {:?} → {}",
+                method, id, kind, key
+            ),
+            None => eprintln!(
+                "  [paste] {} → {:?} → {}\n  \
+                 Hint: Set paste_key in config if wrong: paste_key = \"ctrl+shift+v\"",
+                method, kind, key
+            ),
+        }
+    }
+
+    key
 }
 
 /// Detect the kind of the currently focused window.
 pub fn detect_window_kind() -> WindowKind {
-    match detect_focused_app_id() {
-        Some(app_id) => classify_app_id(&app_id),
-        None => WindowKind::GraphicalApp,
-    }
+    let (kind, _, _) = detect_window_kind_verbose(false);
+    kind
 }
 
-/// Detect the app_id of the currently focused Wayland window.
+/// Detect the focused window kind with details for verbose logging.
 ///
-/// Tries compositor-specific IPC in order:
-/// 1. `swaymsg -t get_tree` (Sway / i3-compatible)
-/// 2. `hyprctl activewindow -j` (Hyprland)
-fn detect_focused_app_id() -> Option<String> {
-    detect_via_swaymsg().or_else(detect_via_hyprctl)
+/// Returns (WindowKind, Option<app_id>, detection_method_name).
+fn detect_window_kind_verbose(verbose: bool) -> (WindowKind, Option<String>, &'static str) {
+    // Try swaymsg (Sway / i3-compatible)
+    if let Some(app_id) = detect_via_swaymsg() {
+        return (classify_app_id(&app_id), Some(app_id), "swaymsg");
+    }
+    if verbose {
+        eprintln!("  [paste] swaymsg: not available");
+    }
+
+    // Try hyprctl (Hyprland)
+    if let Some(app_id) = detect_via_hyprctl() {
+        return (classify_app_id(&app_id), Some(app_id), "hyprctl");
+    }
+    if verbose {
+        eprintln!("  [paste] hyprctl: not available");
+    }
+
+    // Try GNOME Shell D-Bus
+    if let Some(app_id) = detect_via_gnome_dbus() {
+        return (classify_app_id(&app_id), Some(app_id), "gnome-dbus");
+    }
+    if verbose {
+        eprintln!("  [paste] gnome-dbus: not available (GNOME may have disabled Shell.Eval)");
+    }
+
+    // All detection failed
+    (WindowKind::GraphicalApp, None, "fallback(no-compositor)")
 }
 
 /// Classify an app_id as Terminal or GraphicalApp.
@@ -132,6 +176,61 @@ fn detect_via_hyprctl() -> Option<String> {
 
     let json_str = String::from_utf8_lossy(&output.stdout);
     extract_class_hyprctl(&json_str)
+}
+
+/// Query GNOME Shell D-Bus for the focused window's WM class.
+///
+/// Uses `gdbus call` to invoke `org.gnome.Shell.Eval`. This may be disabled
+/// on modern GNOME (45+) for security, in which case it returns None.
+fn detect_via_gnome_dbus() -> Option<String> {
+    let output = Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.Shell",
+            "--object-path",
+            "/org/gnome/Shell",
+            "--method",
+            "org.gnome.Shell.Eval",
+            "global.display.focus_window ? global.display.focus_window.get_wm_class() : ''",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    // Output format: (true, '"ClassName"') on success, (false, '') when disabled
+    let result = String::from_utf8_lossy(&output.stdout);
+    extract_gnome_eval_result(&result)
+}
+
+/// Parse GNOME Shell Eval D-Bus response.
+///
+/// Expected format: `(true, '"ClassName"')` or `(false, '')`
+fn extract_gnome_eval_result(response: &str) -> Option<String> {
+    let trimmed = response.trim();
+
+    // Must start with (true,
+    if !trimmed.starts_with("(true,") {
+        return None;
+    }
+
+    // Extract the quoted string value between the single quotes
+    // Format: (true, '"value"')
+    let after_comma = trimmed.strip_prefix("(true,")?.trim();
+    let inner = after_comma.strip_prefix("'")?.strip_suffix("')")?.trim();
+
+    // Remove the inner double quotes: "value" → value
+    let class = inner.strip_prefix('"')?.strip_suffix('"')?;
+
+    if class.is_empty() {
+        return None;
+    }
+
+    Some(class.to_string())
 }
 
 /// Parse sway's get_tree JSON to find the focused node's app_id.
@@ -286,9 +385,9 @@ mod tests {
 
     #[test]
     fn test_resolve_explicit_key() {
-        assert_eq!(resolve_paste_key("ctrl+v"), "ctrl+v");
-        assert_eq!(resolve_paste_key("ctrl+shift+v"), "ctrl+shift+v");
-        assert_eq!(resolve_paste_key("super+v"), "super+v");
+        assert_eq!(resolve_paste_key("ctrl+v", false), "ctrl+v");
+        assert_eq!(resolve_paste_key("ctrl+shift+v", false), "ctrl+shift+v");
+        assert_eq!(resolve_paste_key("super+v", false), "super+v");
     }
 
     // Note: resolve_paste_key("auto") depends on the compositor, so we
@@ -458,5 +557,40 @@ mod tests {
         let json = r#"{"class": "kitty", "title": "~"}"#;
         let class = extract_class_hyprctl(json).unwrap();
         assert_eq!(classify_app_id(&class), WindowKind::Terminal);
+    }
+
+    // --- GNOME D-Bus eval parsing ---
+
+    #[test]
+    fn test_gnome_eval_success() {
+        assert_eq!(
+            extract_gnome_eval_result("(true, '\"org.gnome.Ptyxis\"')"),
+            Some("org.gnome.Ptyxis".to_string())
+        );
+    }
+
+    #[test]
+    fn test_gnome_eval_disabled() {
+        assert_eq!(extract_gnome_eval_result("(false, '')"), None);
+    }
+
+    #[test]
+    fn test_gnome_eval_empty_class() {
+        assert_eq!(extract_gnome_eval_result("(true, '\"\"')"), None);
+    }
+
+    #[test]
+    fn test_gnome_eval_malformed() {
+        assert_eq!(extract_gnome_eval_result("garbage"), None);
+        assert_eq!(extract_gnome_eval_result(""), None);
+    }
+
+    // --- Ptyxis classification ---
+
+    #[test]
+    fn test_classify_ptyxis() {
+        assert_eq!(classify_app_id("ptyxis"), WindowKind::Terminal);
+        assert_eq!(classify_app_id("org.gnome.Ptyxis"), WindowKind::Terminal);
+        assert_eq!(classify_app_id("Ptyxis"), WindowKind::Terminal);
     }
 }

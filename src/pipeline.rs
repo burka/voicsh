@@ -238,11 +238,11 @@ async fn create_transcriber(
 }
 
 /// Inject transcribed text using configured input method.
-fn inject_text(config: &Config, text: &str, _verbose: bool) -> Result<()> {
+fn inject_text(config: &Config, text: &str, verbose: bool) -> Result<()> {
     use crate::input::focused_window::resolve_paste_key;
 
     let injector = TextInjector::system();
-    let paste_key = resolve_paste_key(&config.input.paste_key);
+    let paste_key = resolve_paste_key(&config.input.paste_key, verbose);
 
     match config.input.method {
         InputMethod::Clipboard => injector.inject_via_clipboard(text, paste_key),
