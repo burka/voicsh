@@ -399,5 +399,161 @@ mod tests {
 
         let result = pipeline.run(source, transcriber).await;
         assert!(result.is_err());
+        match result {
+            Err(VoicshError::AudioCapture { .. }) => {}
+            other => panic!("Expected AudioCapture error, got: {other:?}"),
+        }
+    }
+
+    /// Build a pipeline config with low thresholds for fast, deterministic tests.
+    fn test_pipeline_config() -> StreamingPipelineConfig {
+        let mut config = StreamingPipelineConfig::default();
+        config.silence_detector.vad.speech_threshold = 0.02;
+        config.silence_detector.vad.silence_duration_ms = 200;
+        config.silence_detector.vad.min_speech_ms = 50;
+        config.silence_detector.flush_pause_ms = 200;
+        config.silence_detector.auto_level = false;
+        config
+    }
+
+    #[tokio::test]
+    async fn test_run_produces_transcription() {
+        use crate::audio::recorder::FramePhase;
+        use std::time::Duration;
+
+        let clock = Arc::new(MockClock::new());
+        let config = test_pipeline_config();
+        let pipeline = StreamingPipeline::with_config(config).with_clock(clock.clone());
+
+        // Many frames so ring buffer stays alive while clock advances.
+        // 200 frames at ~instant reads gives tokio tasks time to interleave with clock.
+        let loud_phase = FramePhase {
+            samples: vec![10000i16; 160],
+            count: 200,
+        };
+        let quiet_phase = FramePhase {
+            samples: vec![0i16; 160],
+            count: 200,
+        };
+        let source =
+            Box::new(MockAudioSource::new().with_frame_sequence(vec![loud_phase, quiet_phase]));
+        let transcriber = MockTranscriber::new("test").with_response("hello");
+
+        // Advance clock aggressively in background
+        let clock_bg = clock.clone();
+        tokio::spawn(async move {
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                clock_bg.advance(Duration::from_millis(200));
+            }
+        });
+
+        let result = pipeline.run(source, transcriber).await;
+        assert_eq!(result.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn test_run_with_callback_receives_chunks() {
+        use crate::audio::recorder::FramePhase;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let clock = Arc::new(MockClock::new());
+        let config = test_pipeline_config();
+        let pipeline = StreamingPipeline::with_config(config).with_clock(clock.clone());
+
+        let loud_phase = FramePhase {
+            samples: vec![10000i16; 160],
+            count: 200,
+        };
+        let quiet_phase = FramePhase {
+            samples: vec![0i16; 160],
+            count: 200,
+        };
+        let source =
+            Box::new(MockAudioSource::new().with_frame_sequence(vec![loud_phase, quiet_phase]));
+        let transcriber = MockTranscriber::new("test").with_response("hello");
+
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = callback_count.clone();
+
+        let clock_bg = clock.clone();
+        tokio::spawn(async move {
+            for _ in 0..20 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                clock_bg.advance(Duration::from_millis(200));
+            }
+        });
+
+        let result = pipeline
+            .run_with_callback(source, transcriber, move |_chunk| {
+                count_clone.fetch_add(1, Ordering::Relaxed);
+            })
+            .await;
+
+        assert_eq!(result.unwrap(), "hello");
+        assert!(
+            callback_count.load(Ordering::Relaxed) >= 1,
+            "Callback should be invoked at least once"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_empty_audio_returns_error() {
+        use crate::audio::recorder::FramePhase;
+        use std::time::Duration;
+
+        let clock = Arc::new(MockClock::new());
+        let config = test_pipeline_config();
+        let pipeline = StreamingPipeline::with_config(config).with_clock(clock.clone());
+
+        // Single empty-phase source: ring buffer terminates immediately
+        let source = Box::new(MockAudioSource::new().with_frame_sequence(vec![FramePhase {
+            samples: vec![0i16; 160],
+            count: 1,
+        }]));
+        let transcriber = MockTranscriber::new("test").with_response("should not appear");
+
+        let clock_bg = clock.clone();
+        tokio::spawn(async move {
+            for _ in 0..5 {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                clock_bg.advance(Duration::from_millis(200));
+            }
+        });
+
+        let result = pipeline.run(source, transcriber).await;
+        assert!(result.is_err());
+        match result {
+            Err(VoicshError::Transcription { message }) => {
+                assert!(
+                    message.contains("without producing output"),
+                    "Got: {message}"
+                );
+            }
+            other => panic!("Expected Transcription error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_streaming_handle_stop_and_is_running() {
+        use crate::audio::recorder::FramePhase;
+
+        let source = MockAudioSource::new().with_frame_sequence(vec![FramePhase {
+            samples: vec![100i16; 160],
+            count: 1000, // Many frames so it doesn't exhaust immediately
+        }]);
+        let ring_buffer = RingBuffer::new(source);
+        let (_rx, handle) = ring_buffer.start().unwrap();
+
+        let pipeline_handle = StreamingPipelineHandle {
+            ring_buffer_handle: handle,
+        };
+
+        assert!(pipeline_handle.is_running());
+        pipeline_handle.stop();
+        // Brief wait for thread to notice
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!pipeline_handle.is_running());
     }
 }
