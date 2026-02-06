@@ -2,26 +2,20 @@
 
 ## 0.0.1 — First release
 
-Default command, pipe mode, GPU, logging cleanup.
+Default command, pipe mode, GPU, daemon mode.
 
 - Default command: `voicsh` alone starts mic recording (no subcommand)
 - Pipe mode: `cat file.wav | voicsh` → transcribe → stdout
 - Auto-resample WAV to 16kHz mono (linear interpolation)
 - GPU feature gates: `--features cuda`, `vulkan`, `hipblas`
 - Logging cleanup: all output respects -v/-vv levels consistently
-- Remove unimplemented daemon stubs (start/stop/toggle/status)
 - Honest README matching actual features
-
-## 0.1.0 — Daemon mode
-
-Keep model loaded, instant response via hotkey.
-
 - Unix socket IPC: `voicsh start` / `voicsh stop` / `voicsh toggle`
 - Model stays in memory (~300MB for base.en)
 - Systemd user service: `voicsh install-service`
 - `voicsh status` shows daemon health
 
-## 0.2.0 — Voice commands
+## 0.1.0 — Voice commands
 
 Spoken punctuation and formatting.
 
@@ -30,7 +24,7 @@ Spoken punctuation and formatting.
 - Configurable vocabulary in config.toml
 - Rule-based (no LLM needed)
 
-## 0.3.0 — Text refinement
+## 0.2.0 — Text refinement
 
 LLM post-processing for polished output.
 

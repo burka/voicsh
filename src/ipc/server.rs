@@ -222,14 +222,23 @@ mod tests {
 
     #[test]
     fn test_default_socket_path_returns_valid_path() {
-        // Test that default_socket_path returns a valid path ending in voicsh.sock
-        // We don't test exact paths to avoid env var race conditions
         let path = IpcServer::default_socket_path();
-        assert!(
-            path.to_string_lossy().ends_with("voicsh.sock"),
-            "Expected path ending with voicsh.sock, got: {:?}",
-            path
-        );
+        let path_str = path.to_string_lossy();
+        if std::env::var("XDG_RUNTIME_DIR").is_ok() {
+            assert!(
+                path_str.ends_with("voicsh.sock"),
+                "With XDG_RUNTIME_DIR, expected path ending with voicsh.sock, got: {:?}",
+                path
+            );
+        } else {
+            // Fallback format: /tmp/voicsh-{uid}.sock
+            let uid = unsafe { libc::getuid() };
+            let expected = format!("/tmp/voicsh-{}.sock", uid);
+            assert_eq!(
+                path_str, expected,
+                "Without XDG_RUNTIME_DIR, expected fallback path"
+            );
+        }
     }
 
     #[test]

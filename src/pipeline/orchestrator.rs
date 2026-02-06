@@ -930,6 +930,7 @@ mod tests {
     }
 
     /// Model candidates ordered by preference for English tests.
+    #[cfg(feature = "whisper")]
     const MODEL_CANDIDATES: &[&str] = &[
         "base.en",
         "small.en",
@@ -942,6 +943,7 @@ mod tests {
         "large",
     ];
 
+    #[cfg(feature = "whisper")]
     fn find_any_model() -> Option<std::path::PathBuf> {
         for name in MODEL_CANDIDATES {
             let filename = format!("ggml-{}.bin", name);

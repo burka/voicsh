@@ -77,7 +77,7 @@ Text injection needs **one of**:
 - `wtype` for wlroots compositors (Sway, Hyprland)
 - `ydotool` + `ydotoold` as fallback
 
-Plus `wl-clipboard` (`wl-copy`) for clipboard access.
+`wl-clipboard` (`wl-copy`) is required for clipboard access.
 
 ```bash
 voicsh check    # verify what's available
@@ -111,7 +111,7 @@ model = "base"
 language = "auto"
 
 [input]
-method = "clipboard"
+method = "Clipboard"
 paste_key = "auto"          # auto-detects terminal vs GUI
 ```
 
