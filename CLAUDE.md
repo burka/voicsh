@@ -21,6 +21,7 @@ cargo test --lib --no-default-features
 ## Documentation Rules
 - Each .md file has **one purpose** — don't duplicate content, reference other files
 - Document **current state** or **desired state** — no history, changelogs, or progress reports
+- No status data in docs: no test counts, no build stats, no "X passed" — these go stale instantly
 - Keep docs concise; prefer code references over prose
 
 ## References

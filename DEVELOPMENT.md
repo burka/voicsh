@@ -6,14 +6,14 @@
 
 ```bash
 # Fast (no whisper-rs compilation):
-cargo test --lib --no-default-features --features portal   # 326 tests
-cargo test --lib --no-default-features                      # 318 tests (no portal)
+cargo test --lib --no-default-features --features portal
+cargo test --lib --no-default-features
 
 # Full (slow, compiles whisper-rs):
 cargo test --lib
 ```
 
-The `--lib` flag is required — 2 integration tests need a real model file.
+The `--lib` flag is required — integration tests need a real model file.
 
 ### Mocking Pattern
 
