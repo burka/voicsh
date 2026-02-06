@@ -375,4 +375,136 @@ mod tests {
         // 100ms at 16kHz = 1600 samples
         assert_eq!(source.chunk_size, 1600);
     }
+
+    // Malformed input tests
+    #[test]
+    fn test_malformed_wav_missing_riff_header() {
+        // WAV file without "RIFF" magic bytes
+        let bad_data = b"XXXX\x00\x00\x00\x00WAVEfmt ";
+        let result = WavAudioSource::from_reader(Box::new(Cursor::new(bad_data.to_vec())));
+
+        assert!(result.is_err(), "Should reject WAV without RIFF header");
+        match result {
+            Err(VoicshError::AudioCapture { message }) => {
+                assert!(
+                    message.contains("Failed to parse WAV"),
+                    "Error should mention WAV parsing: {}",
+                    message
+                );
+            }
+            _ => panic!("Expected AudioCapture error"),
+        }
+    }
+
+    #[test]
+    fn test_malformed_wav_truncated_header() {
+        // Truncated WAV header (only first 8 bytes)
+        let truncated = b"RIFF\x00\x00";
+        let result = WavAudioSource::from_reader(Box::new(Cursor::new(truncated.to_vec())));
+
+        assert!(result.is_err(), "Should reject truncated WAV header");
+    }
+
+    #[test]
+    fn test_malformed_wav_wrong_format() {
+        // RIFF file but not WAVE format
+        let wrong_format = b"RIFF\x24\x00\x00\x00XXXX\x00\x00\x00\x00";
+        let result = WavAudioSource::from_reader(Box::new(Cursor::new(wrong_format.to_vec())));
+
+        assert!(result.is_err(), "Should reject non-WAVE RIFF files");
+    }
+
+    #[test]
+    fn test_malformed_wav_missing_fmt_chunk() {
+        // RIFF/WAVE but missing fmt chunk
+        let no_fmt = b"RIFF\x24\x00\x00\x00WAVEdata\x10\x00\x00\x00\x00\x00\x00\x00";
+        let result = WavAudioSource::from_reader(Box::new(Cursor::new(no_fmt.to_vec())));
+
+        assert!(result.is_err(), "Should reject WAV without fmt chunk");
+    }
+
+    #[test]
+    fn test_malformed_wav_invalid_channel_count() {
+        // Create WAV with 0 channels (invalid)
+        let mut wav_data = make_wav_data(16000, 1, &vec![0i16; 10]);
+
+        // Find and corrupt the channel count (should be at offset 22)
+        // WAV format: RIFF(4) + size(4) + WAVE(4) + fmt(4) + chunksize(4) + format(2) + channels(2)
+        // Offset 22 is where channels field starts
+        if wav_data.len() > 23 {
+            wav_data[22] = 0; // Set channels to 0
+            wav_data[23] = 0;
+
+            let result = WavAudioSource::from_reader(Box::new(Cursor::new(wav_data)));
+            // Depending on the library, this might be rejected or not
+            // Just verify it doesn't panic
+            let _ = result;
+        }
+    }
+
+    #[test]
+    fn test_malformed_wav_corrupted_data_chunk() {
+        let mut wav_data = make_wav_data(16000, 1, &vec![100i16; 100]);
+
+        // Corrupt the data chunk size to be larger than actual data
+        // This should cause issues when trying to read
+        if wav_data.len() > 50 {
+            // Find "data" chunk and corrupt its size field
+            for i in 0..wav_data.len() - 4 {
+                if &wav_data[i..i + 4] == b"data" {
+                    // Corrupt size to be very large
+                    wav_data[i + 4] = 0xFF;
+                    wav_data[i + 5] = 0xFF;
+                    wav_data[i + 6] = 0xFF;
+                    wav_data[i + 7] = 0x7F; // Max i32
+                    break;
+                }
+            }
+
+            let result = WavAudioSource::from_reader(Box::new(Cursor::new(wav_data)));
+            // Should either fail to parse or handle gracefully
+            if let Ok(mut source) = result {
+                // Try to read - should handle gracefully
+                let read_result = source.read_samples();
+                // Just verify it doesn't panic; might succeed or fail gracefully
+                let _ = read_result;
+            }
+        }
+    }
+
+    #[test]
+    fn test_malformed_wav_all_zeros() {
+        // File is all zeros (clearly not a valid WAV)
+        let zeros = vec![0u8; 1000];
+        let result = WavAudioSource::from_reader(Box::new(Cursor::new(zeros)));
+
+        assert!(result.is_err(), "Should reject all-zero data");
+    }
+
+    #[test]
+    fn test_malformed_wav_random_garbage() {
+        // Random garbage data (deterministic for reproducibility)
+        let mut garbage = Vec::new();
+        for i in 0..500 {
+            garbage.push(((i * 17 + 42) % 256) as u8); // Pseudo-random but deterministic
+        }
+
+        let result = WavAudioSource::from_reader(Box::new(Cursor::new(garbage)));
+
+        assert!(result.is_err(), "Should reject random garbage as WAV");
+    }
+
+    #[test]
+    fn test_malformed_wav_partial_samples() {
+        let mut wav_data = make_wav_data(16000, 1, &vec![100i16; 10]);
+
+        // Truncate the data section to have partial sample (odd number of bytes)
+        if wav_data.len() > 20 {
+            wav_data.truncate(wav_data.len() - 1); // Remove last byte, creating partial sample
+
+            let result = WavAudioSource::from_reader(Box::new(Cursor::new(wav_data)));
+            // Should handle gracefully - either reject or read what's available
+            let _ = result;
+        }
+    }
 }

@@ -276,7 +276,16 @@ mod tests {
         let silence = make_silence(1000);
         let frame = AudioFrame::new(silence, Instant::now(), 100);
         let result = station.process(frame).unwrap();
-        assert!(result.is_some());
+        assert!(
+            result.is_some(),
+            "VAD station should process frames even after auto-level adjustment"
+        );
+        let vad_frame = result.unwrap();
+        assert!(
+            !vad_frame.is_speech,
+            "Silence should not be detected as speech"
+        );
+        assert_eq!(vad_frame.level, 0.0, "Silence level should be 0.0");
     }
 
     #[test]

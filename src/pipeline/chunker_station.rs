@@ -315,17 +315,34 @@ mod tests {
         // Speech frame - silence tracking should be None
         let speech_frame = make_speech_frame(samples.clone());
         station.process(speech_frame).unwrap();
-        assert!(station.silence_start.is_none());
+        assert!(
+            station.silence_start.is_none(),
+            "Silence tracking should not start during speech"
+        );
 
         // Silence frame - silence tracking should start
+        let before = Instant::now();
         let silence_frame = make_silence_frame(samples.clone());
         station.process(silence_frame).unwrap();
-        assert!(station.silence_start.is_some());
+        let after = Instant::now();
+
+        assert!(
+            station.silence_start.is_some(),
+            "Silence tracking should start"
+        );
+        let silence_timestamp = station.silence_start.unwrap();
+        assert!(
+            silence_timestamp >= before && silence_timestamp <= after,
+            "Silence timestamp should be between before and after processing"
+        );
 
         // Another speech frame - silence tracking should reset
         let speech_frame = make_speech_frame(samples.clone());
         station.process(speech_frame).unwrap();
-        assert!(station.silence_start.is_none());
+        assert!(
+            station.silence_start.is_none(),
+            "Silence tracking should reset on speech"
+        );
     }
 
     #[test]

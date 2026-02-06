@@ -664,4 +664,157 @@ mod tests {
         assert_eq!(calls[0].0, "wtype");
         assert_eq!(calls[0].1, vec![""]);
     }
+
+    // Unicode and international text tests
+    #[test]
+    fn test_inject_via_clipboard_unicode_emoji() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder);
+
+        let emoji_text = "Hello 👋 World 🌍 Test 🚀";
+        injector.inject_via_clipboard(emoji_text, "ctrl+v").unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(calls[0].0, "wl-copy", "First call should be wl-copy");
+        assert_eq!(
+            calls[0].1,
+            vec![emoji_text],
+            "Emoji text should be passed to wl-copy"
+        );
+    }
+
+    #[test]
+    fn test_inject_via_clipboard_unicode_chinese() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder);
+
+        let chinese_text = "你好世界 测试文本";
+        injector
+            .inject_via_clipboard(chinese_text, "ctrl+v")
+            .unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(
+            calls[0].1,
+            vec![chinese_text],
+            "Chinese text should be passed correctly"
+        );
+    }
+
+    #[test]
+    fn test_inject_via_clipboard_unicode_arabic() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder);
+
+        let arabic_text = "مرحبا بالعالم اختبار النص";
+        injector
+            .inject_via_clipboard(arabic_text, "ctrl+v")
+            .unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(
+            calls[0].1,
+            vec![arabic_text],
+            "Arabic text should be passed correctly"
+        );
+    }
+
+    #[test]
+    fn test_inject_via_clipboard_unicode_cyrillic() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder);
+
+        let cyrillic_text = "Привет мир тестовый текст";
+        injector
+            .inject_via_clipboard(cyrillic_text, "ctrl+v")
+            .unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(
+            calls[0].1,
+            vec![cyrillic_text],
+            "Cyrillic text should be passed correctly"
+        );
+    }
+
+    #[test]
+    fn test_inject_via_clipboard_unicode_mixed() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder);
+
+        // Mixed languages and special characters
+        let mixed_text = "Hello 你好 مرحبا Привет 🌍 Special chars: © ® ™ € £ ¥";
+        injector.inject_via_clipboard(mixed_text, "ctrl+v").unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(
+            calls[0].1,
+            vec![mixed_text],
+            "Mixed text should be passed correctly"
+        );
+    }
+
+    #[test]
+    fn test_inject_via_clipboard_unicode_accents() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder);
+
+        // European languages with accents and diacritics
+        let accented_text = "Café résumé naïve Zürich español français português";
+        injector
+            .inject_via_clipboard(accented_text, "ctrl+v")
+            .unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(
+            calls[0].1,
+            vec![accented_text],
+            "Accented text should be passed correctly"
+        );
+    }
+
+    #[test]
+    fn test_inject_via_clipboard_unicode_newlines() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder);
+
+        let multiline_text =
+            "Line 1 with emoji 🚀\nLine 2 with Chinese 你好\nLine 3 with Arabic مرحبا";
+        injector
+            .inject_via_clipboard(multiline_text, "ctrl+v")
+            .unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(
+            calls[0].1,
+            vec![multiline_text],
+            "Multiline Unicode text should be passed correctly"
+        );
+    }
+
+    #[test]
+    fn test_inject_direct_unicode() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder);
+
+        // Direct injection with Unicode (wtype/ydotool must handle UTF-8)
+        let unicode_text = "Test 你好 🚀";
+        injector.inject_direct(unicode_text).unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 1, "Should call wtype once");
+        assert_eq!(calls[0].0, "wtype", "Should try wtype first");
+        assert_eq!(
+            calls[0].1,
+            vec![unicode_text],
+            "Unicode text should be passed to wtype"
+        );
+    }
 }

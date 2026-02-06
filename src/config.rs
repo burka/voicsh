@@ -366,4 +366,190 @@ mod tests {
         // Should panic on invalid TOML, not return defaults
         Config::load_or_default(temp_file.path());
     }
+
+    // Malformed config tests
+    #[test]
+    fn test_malformed_config_invalid_toml_syntax() {
+        let invalid_toml = r#"
+            this is not valid TOML at all
+            just some random text
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(invalid_toml.as_bytes()).unwrap();
+
+        let result = Config::load(temp_file.path());
+        assert!(result.is_err(), "Should reject invalid TOML syntax");
+    }
+
+    #[test]
+    fn test_malformed_config_wrong_data_types() {
+        let wrong_types = r#"
+            [audio]
+            sample_rate = "not a number"
+            vad_threshold = [1, 2, 3]
+            silence_duration_ms = true
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(wrong_types.as_bytes()).unwrap();
+
+        let result = Config::load(temp_file.path());
+        assert!(result.is_err(), "Should reject wrong data types");
+    }
+
+    #[test]
+    fn test_malformed_config_negative_values() {
+        let negative_values = r#"
+            [audio]
+            sample_rate = -16000
+            vad_threshold = -0.5
+            silence_duration_ms = -1000
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(negative_values.as_bytes()).unwrap();
+
+        // TOML parsing might succeed but values would be nonsensical
+        let result = Config::load(temp_file.path());
+        if let Ok(config) = result {
+            // If it loads, the values should have been converted to unsigned
+            // or the parsing library might reject them
+            assert!(
+                config.audio.sample_rate >= 0,
+                "Sample rate should not be negative"
+            );
+        }
+    }
+
+    #[test]
+    fn test_malformed_config_unknown_sections() {
+        let unknown_sections = r#"
+            [unknown_section]
+            unknown_field = "value"
+
+            [another_bad_section]
+            bad_field = 123
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(unknown_sections.as_bytes()).unwrap();
+
+        // TOML with unknown sections might parse but be ignored
+        let result = Config::load(temp_file.path());
+        // Depending on serde settings, this might succeed or fail
+        // Just verify it doesn't panic
+        let _ = result;
+    }
+
+    #[test]
+    fn test_malformed_config_empty_file() {
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"").unwrap();
+
+        let result = Config::load(temp_file.path());
+        // Empty TOML is valid and should return all defaults
+        assert!(result.is_ok(), "Empty config should be valid");
+        if let Ok(config) = result {
+            assert_eq!(
+                config,
+                Config::default(),
+                "Empty config should equal defaults"
+            );
+        }
+    }
+
+    #[test]
+    fn test_malformed_config_only_whitespace() {
+        let whitespace = "   \n\t\n   \n\t\t\n   ";
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(whitespace.as_bytes()).unwrap();
+
+        let result = Config::load(temp_file.path());
+        assert!(result.is_ok(), "Whitespace-only config should be valid");
+    }
+
+    #[test]
+    fn test_malformed_config_mixed_valid_invalid() {
+        let mixed = r#"
+            [audio]
+            sample_rate = 44100
+
+            this line is invalid TOML
+
+            [stt]
+            model = "base"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(mixed.as_bytes()).unwrap();
+
+        let result = Config::load(temp_file.path());
+        assert!(result.is_err(), "Should reject mixed valid/invalid TOML");
+    }
+
+    #[test]
+    fn test_malformed_config_duplicate_keys() {
+        let duplicates = r#"
+            [audio]
+            device = "first"
+            device = "second"
+            device = "third"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(duplicates.as_bytes()).unwrap();
+
+        // TOML behavior with duplicate keys varies by parser
+        let result = Config::load(temp_file.path());
+        if let Ok(config) = result {
+            // Last value typically wins
+            assert!(
+                config.audio.device.is_some(),
+                "Duplicate keys should resolve to some value"
+            );
+        }
+    }
+
+    #[test]
+    fn test_malformed_config_extremely_large_values() {
+        let huge_values = r#"
+            [audio]
+            sample_rate = 999999999999
+            silence_duration_ms = 999999999999
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(huge_values.as_bytes()).unwrap();
+
+        let result = Config::load(temp_file.path());
+        // Might succeed or fail depending on integer overflow handling
+        let _ = result;
+    }
+
+    #[test]
+    fn test_malformed_config_unicode_in_values() {
+        let unicode_config = r#"
+            [stt]
+            model = "模型"
+            language = "中文"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(unicode_config.as_bytes()).unwrap();
+
+        let result = Config::load(temp_file.path());
+        assert!(result.is_ok(), "Unicode in TOML values should be valid");
+        if let Ok(config) = result {
+            assert_eq!(
+                config.stt.model, "模型",
+                "Unicode model name should be preserved"
+            );
+            assert_eq!(
+                config.stt.language, "中文",
+                "Unicode language should be preserved"
+            );
+        }
+    }
 }
