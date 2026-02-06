@@ -69,6 +69,44 @@ pub enum Commands {
 
     /// Check system dependencies
     Check,
+
+    /// Start the daemon (foreground process for systemd)
+    Daemon {
+        /// Path to Unix socket (default: $XDG_RUNTIME_DIR/voicsh.sock)
+        #[arg(long, value_name = "PATH")]
+        socket: Option<PathBuf>,
+    },
+
+    /// Start recording via IPC
+    Start {
+        /// Path to Unix socket (default: $XDG_RUNTIME_DIR/voicsh.sock)
+        #[arg(long, value_name = "PATH")]
+        socket: Option<PathBuf>,
+    },
+
+    /// Stop recording and inject transcription via IPC
+    Stop {
+        /// Path to Unix socket (default: $XDG_RUNTIME_DIR/voicsh.sock)
+        #[arg(long, value_name = "PATH")]
+        socket: Option<PathBuf>,
+    },
+
+    /// Toggle recording on/off via IPC
+    Toggle {
+        /// Path to Unix socket (default: $XDG_RUNTIME_DIR/voicsh.sock)
+        #[arg(long, value_name = "PATH")]
+        socket: Option<PathBuf>,
+    },
+
+    /// Get daemon status via IPC
+    Status {
+        /// Path to Unix socket (default: $XDG_RUNTIME_DIR/voicsh.sock)
+        #[arg(long, value_name = "PATH")]
+        socket: Option<PathBuf>,
+    },
+
+    /// Install systemd user service
+    InstallService,
 }
 
 /// Model management actions
@@ -323,5 +361,113 @@ mod tests {
     fn test_chunk_size_short() {
         let cli = Cli::try_parse_from(["voicsh", "-c", "2"]).unwrap();
         assert_eq!(cli.chunk_size, 2);
+    }
+
+    #[test]
+    fn test_parse_daemon() {
+        let cli = Cli::try_parse_from(["voicsh", "daemon"]).unwrap();
+        match cli.command {
+            Some(Commands::Daemon { socket }) => {
+                assert!(socket.is_none());
+            }
+            _ => panic!("Expected Daemon command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_daemon_with_socket() {
+        let cli = Cli::try_parse_from(["voicsh", "daemon", "--socket", "/tmp/test.sock"]).unwrap();
+        match cli.command {
+            Some(Commands::Daemon { socket }) => {
+                assert_eq!(socket, Some(PathBuf::from("/tmp/test.sock")));
+            }
+            _ => panic!("Expected Daemon command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_start() {
+        let cli = Cli::try_parse_from(["voicsh", "start"]).unwrap();
+        match cli.command {
+            Some(Commands::Start { socket }) => {
+                assert!(socket.is_none());
+            }
+            _ => panic!("Expected Start command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stop() {
+        let cli = Cli::try_parse_from(["voicsh", "stop"]).unwrap();
+        match cli.command {
+            Some(Commands::Stop { socket }) => {
+                assert!(socket.is_none());
+            }
+            _ => panic!("Expected Stop command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_toggle() {
+        let cli = Cli::try_parse_from(["voicsh", "toggle"]).unwrap();
+        match cli.command {
+            Some(Commands::Toggle { socket }) => {
+                assert!(socket.is_none());
+            }
+            _ => panic!("Expected Toggle command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_status() {
+        let cli = Cli::try_parse_from(["voicsh", "status"]).unwrap();
+        match cli.command {
+            Some(Commands::Status { socket }) => {
+                assert!(socket.is_none());
+            }
+            _ => panic!("Expected Status command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_install_service() {
+        let cli = Cli::try_parse_from(["voicsh", "install-service"]).unwrap();
+        match cli.command {
+            Some(Commands::InstallService) => {}
+            _ => panic!("Expected InstallService command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_start_with_socket() {
+        let cli = Cli::try_parse_from(["voicsh", "start", "--socket", "/tmp/test.sock"]).unwrap();
+        match cli.command {
+            Some(Commands::Start { socket }) => {
+                assert_eq!(socket, Some(PathBuf::from("/tmp/test.sock")));
+            }
+            _ => panic!("Expected Start command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_toggle_with_socket() {
+        let cli = Cli::try_parse_from(["voicsh", "toggle", "--socket", "/tmp/test.sock"]).unwrap();
+        match cli.command {
+            Some(Commands::Toggle { socket }) => {
+                assert_eq!(socket, Some(PathBuf::from("/tmp/test.sock")));
+            }
+            _ => panic!("Expected Toggle command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_status_with_socket() {
+        let cli = Cli::try_parse_from(["voicsh", "status", "--socket", "/tmp/test.sock"]).unwrap();
+        match cli.command {
+            Some(Commands::Status { socket }) => {
+                assert_eq!(socket, Some(PathBuf::from("/tmp/test.sock")));
+            }
+            _ => panic!("Expected Status command"),
+        }
     }
 }
