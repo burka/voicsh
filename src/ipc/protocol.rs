@@ -236,4 +236,212 @@ mod tests {
         let deserialized = Response::from_json(&json).expect("should deserialize");
         assert_eq!(resp, deserialized);
     }
+
+    // Malformed IPC protocol tests
+    #[test]
+    fn test_malformed_command_empty_json() {
+        let empty = "{}";
+        let result = Command::from_json(empty);
+        assert!(result.is_err(), "Empty JSON should be rejected");
+    }
+
+    #[test]
+    fn test_malformed_command_null() {
+        let null_json = "null";
+        let result = Command::from_json(null_json);
+        assert!(result.is_err(), "Null JSON should be rejected");
+    }
+
+    #[test]
+    fn test_malformed_command_array() {
+        let array = r#"["toggle", "start"]"#;
+        let result = Command::from_json(array);
+        assert!(result.is_err(), "Array should be rejected");
+    }
+
+    #[test]
+    fn test_malformed_command_nested_objects() {
+        let nested = r#"{"type": {"nested": "toggle"}}"#;
+        let result = Command::from_json(nested);
+        assert!(
+            result.is_err(),
+            "Nested object in type field should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_malformed_command_extra_fields() {
+        let extra = r#"{"type": "toggle", "extra": "field", "another": 123}"#;
+        let result = Command::from_json(extra);
+        // Extra fields might be ignored or cause error - just verify no panic
+        let _ = result;
+    }
+
+    #[test]
+    fn test_malformed_command_wrong_case() {
+        let wrong_case = r#"{"type": "Toggle"}"#; // Capital T
+        let result = Command::from_json(wrong_case);
+        assert!(result.is_err(), "Wrong case should be rejected");
+
+        let all_caps = r#"{"type": "TOGGLE"}"#;
+        let result = Command::from_json(all_caps);
+        assert!(result.is_err(), "All caps should be rejected");
+    }
+
+    #[test]
+    fn test_malformed_command_numeric_type() {
+        let numeric = r#"{"type": 123}"#;
+        let result = Command::from_json(numeric);
+        assert!(result.is_err(), "Numeric type should be rejected");
+    }
+
+    #[test]
+    fn test_malformed_command_boolean_type() {
+        let boolean = r#"{"type": true}"#;
+        let result = Command::from_json(boolean);
+        assert!(result.is_err(), "Boolean type should be rejected");
+    }
+
+    #[test]
+    fn test_malformed_command_empty_string_type() {
+        let empty_str = r#"{"type": ""}"#;
+        let result = Command::from_json(empty_str);
+        assert!(result.is_err(), "Empty string type should be rejected");
+    }
+
+    #[test]
+    fn test_malformed_command_whitespace_type() {
+        let whitespace = r#"{"type": "   "}"#;
+        let result = Command::from_json(whitespace);
+        assert!(result.is_err(), "Whitespace-only type should be rejected");
+    }
+
+    #[test]
+    fn test_malformed_command_unicode_in_type() {
+        let unicode = r#"{"type": "启动"}"#; // Chinese for "start"
+        let result = Command::from_json(unicode);
+        assert!(result.is_err(), "Unicode type should be rejected");
+    }
+
+    #[test]
+    fn test_malformed_response_empty_json() {
+        let empty = "{}";
+        let result = Response::from_json(empty);
+        assert!(result.is_err(), "Empty JSON response should be rejected");
+    }
+
+    #[test]
+    fn test_malformed_response_missing_required_fields() {
+        let missing_message = r#"{"type": "error"}"#;
+        let result = Response::from_json(missing_message);
+        assert!(
+            result.is_err(),
+            "Error response without message should be rejected"
+        );
+
+        let missing_text = r#"{"type": "transcription"}"#;
+        let result = Response::from_json(missing_text);
+        assert!(
+            result.is_err(),
+            "Transcription response without text should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_malformed_response_wrong_field_types() {
+        let wrong_type = r#"{"type": "error", "message": 123}"#;
+        let result = Response::from_json(wrong_type);
+        assert!(result.is_err(), "Numeric message should be rejected");
+
+        let bool_field = r#"{"type": "status", "recording": "yes"}"#;
+        let result = Response::from_json(bool_field);
+        // Might fail or succeed depending on serde configuration
+        let _ = result;
+    }
+
+    #[test]
+    fn test_malformed_json_syntax() {
+        let invalid_cases = vec![
+            r#"{"type": "toggle""#,              // Missing closing brace
+            r#"{"type" "toggle"}"#,              // Missing colon
+            r#"{type: "toggle"}"#,               // Unquoted key
+            r#"{'type': 'toggle'}"#,             // Single quotes
+            r#"{"type": "toggle",}"#,            // Trailing comma
+            r#"{"type": "toggle"; "extra": 1}"#, // Semicolon instead of comma
+        ];
+
+        for (i, invalid) in invalid_cases.iter().enumerate() {
+            let result = Command::from_json(invalid);
+            assert!(
+                result.is_err(),
+                "Case {} should be rejected: {}",
+                i,
+                invalid
+            );
+        }
+    }
+
+    #[test]
+    fn test_malformed_response_with_unicode() {
+        // Unicode in message fields should be valid
+        let unicode_error = Response::Error {
+            message: "错误：连接失败".to_string(), // Chinese error message
+        };
+        let json = unicode_error.to_json().expect("Unicode should serialize");
+        let deserialized = Response::from_json(&json).expect("Unicode should deserialize");
+        assert_eq!(
+            unicode_error, deserialized,
+            "Unicode should round-trip correctly"
+        );
+
+        let emoji_transcription = Response::Transcription {
+            text: "Hello 👋 World 🌍".to_string(),
+        };
+        let json = emoji_transcription
+            .to_json()
+            .expect("Emoji should serialize");
+        let deserialized = Response::from_json(&json).expect("Emoji should deserialize");
+        assert_eq!(
+            emoji_transcription, deserialized,
+            "Emoji should round-trip correctly"
+        );
+    }
+
+    #[test]
+    fn test_malformed_extremely_long_strings() {
+        // Very long message (10,000 characters)
+        let long_message = "x".repeat(10_000);
+        let response = Response::Error {
+            message: long_message.clone(),
+        };
+        let json = response.to_json().expect("Long message should serialize");
+        let deserialized = Response::from_json(&json).expect("Long message should deserialize");
+        match deserialized {
+            Response::Error { message } => {
+                assert_eq!(message.len(), 10_000, "Message length should be preserved");
+                assert_eq!(message, long_message, "Message content should be preserved");
+            }
+            _ => panic!("Expected Error response"),
+        }
+    }
+
+    #[test]
+    fn test_malformed_control_characters_in_strings() {
+        // Test control characters and special chars in strings
+        let special_chars = "Test\nwith\nnewlines\tand\ttabs\rand\rcarriage\0returns";
+        let response = Response::Transcription {
+            text: special_chars.to_string(),
+        };
+        let json = response.to_json().expect("Control chars should serialize");
+        let deserialized = Response::from_json(&json).expect("Control chars should deserialize");
+        match deserialized {
+            Response::Transcription { text } => {
+                assert_eq!(
+                    text, special_chars,
+                    "Control characters should be preserved"
+                );
+            }
+            _ => panic!("Expected Transcription response"),
+        }
+    }
 }

@@ -243,7 +243,11 @@ mod tests {
             } => {
                 assert!(!recording, "Should not be recording initially");
                 assert!(model_loaded, "Model should be loaded");
-                assert!(model_name.is_some(), "Model name should be present");
+                assert_eq!(
+                    model_name,
+                    Some("ggml-base".to_string()),
+                    "Model name should be ggml-base from default config"
+                );
             }
             _ => panic!("Expected Status response"),
         }
@@ -296,7 +300,11 @@ mod tests {
             } => {
                 assert!(!recording);
                 assert!(model_loaded);
-                assert!(model_name.is_some());
+                assert_eq!(
+                    model_name,
+                    Some("ggml-base".to_string()),
+                    "Model name should be ggml-base from default config"
+                );
             }
             _ => panic!("Expected Status response"),
         }
@@ -326,12 +334,65 @@ mod tests {
     async fn test_handler_implements_command_handler_trait() {
         let handler = create_test_handler();
 
-        // Verify all command variants can be handled
-        let _ = handler.handle(Command::Status).await;
-        let _ = handler.handle(Command::Start).await;
-        let _ = handler.handle(Command::Stop).await;
-        let _ = handler.handle(Command::Cancel).await;
-        let _ = handler.handle(Command::Toggle).await;
-        let _ = handler.handle(Command::Shutdown).await;
+        // Test Status command
+        let response = handler.handle(Command::Status).await;
+        match response {
+            Response::Status {
+                recording,
+                model_loaded,
+                model_name,
+            } => {
+                assert!(!recording, "Should not be recording initially");
+                assert!(model_loaded, "Model should be loaded");
+                assert!(model_name.is_some(), "Model name should be present");
+            }
+            _ => panic!("Expected Status response, got: {:?}", response),
+        }
+
+        // Test Start command (should succeed since not recording)
+        let response = handler.handle(Command::Start).await;
+        assert_eq!(
+            response,
+            Response::Ok,
+            "Start should succeed when not recording"
+        );
+
+        // Test Stop command (should fail since we didn't actually start - audio source creation would fail in test)
+        let response = handler.handle(Command::Stop).await;
+        match response {
+            Response::Error { message } => {
+                assert_eq!(
+                    message, "Not recording",
+                    "Stop should return error when not recording"
+                );
+            }
+            _ => {} // May succeed if audio source was created
+        }
+
+        // Test Cancel command (should fail since not recording)
+        let response = handler.handle(Command::Cancel).await;
+        match response {
+            Response::Error { message } => {
+                assert_eq!(
+                    message, "Not recording",
+                    "Cancel should return error when not recording"
+                );
+            }
+            _ => {} // May succeed if recording was started
+        }
+
+        // Test Toggle command (should try to stop since might be recording)
+        let response = handler.handle(Command::Toggle).await;
+        assert!(
+            matches!(
+                response,
+                Response::Ok | Response::Error { .. } | Response::Transcription { .. }
+            ),
+            "Toggle should return Ok, Error, or Transcription"
+        );
+
+        // Test Shutdown command
+        let response = handler.handle(Command::Shutdown).await;
+        assert_eq!(response, Response::Ok, "Shutdown should return Ok");
     }
 }

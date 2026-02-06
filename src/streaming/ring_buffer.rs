@@ -156,7 +156,13 @@ mod tests {
             .await
             .ok()
             .flatten();
-        assert!(frame.is_some());
+        assert!(frame.is_some(), "Should receive at least one frame");
+        let frame = frame.unwrap();
+        assert_eq!(frame.samples.len(), 160, "Frame should have 160 samples");
+        assert_eq!(
+            frame.sequence, 0,
+            "First frame should have sequence number 0 (0-indexed)"
+        );
 
         // Stop and verify
         handle.stop();

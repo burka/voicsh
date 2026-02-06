@@ -401,7 +401,19 @@ mod tests {
         }
 
         // Should have auto-level active
-        assert!(detector.auto_level.is_some());
+        assert!(
+            detector.auto_level.is_some(),
+            "Auto-level should be enabled"
+        );
+        let auto_level = detector.auto_level.as_ref().unwrap();
+        assert_eq!(
+            auto_level.min_threshold, 0.01,
+            "Min threshold should match config"
+        );
+        assert_eq!(
+            auto_level.threshold_multiplier, 2.5,
+            "Threshold multiplier should match default (2.5)"
+        );
     }
 
     #[tokio::test]

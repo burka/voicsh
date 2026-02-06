@@ -294,9 +294,17 @@ mod tests {
 
     #[test]
     fn test_get_model_case_sensitive() {
-        assert!(get_model("tiny.en").is_some());
-        assert!(get_model("Tiny.en").is_none());
-        assert!(get_model("TINY.EN").is_none());
+        let model = get_model("tiny.en");
+        assert!(model.is_some(), "tiny.en should exist");
+        let model = model.unwrap();
+        assert_eq!(model.name, "tiny.en", "Model name should match");
+        assert_eq!(model.size_mb, 75, "Model size should be 75MB");
+
+        assert!(
+            get_model("Tiny.en").is_none(),
+            "Uppercase T should not match"
+        );
+        assert!(get_model("TINY.EN").is_none(), "All caps should not match");
     }
 
     #[test]

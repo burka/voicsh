@@ -455,4 +455,134 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), vec![1i16, 2, 3]);
     }
+
+    // Resource exhaustion tests (simulated)
+    #[test]
+    fn test_mock_audio_source_extremely_large_buffer() {
+        // Simulate 10 minutes of audio at 16kHz (9.6 million samples)
+        const TEN_MINUTES_AT_16KHZ: usize = 10 * 60 * 16000;
+        let large_samples = vec![100i16; TEN_MINUTES_AT_16KHZ];
+        let mut source = MockAudioSource::new().with_samples(large_samples.clone());
+
+        let result = source.read_samples();
+        assert!(result.is_ok(), "Should handle large buffers");
+        let returned_samples = result.unwrap();
+        assert_eq!(
+            returned_samples.len(),
+            TEN_MINUTES_AT_16KHZ,
+            "Should return all samples"
+        );
+        assert_eq!(returned_samples[0], 100, "First sample should be correct");
+        assert_eq!(
+            returned_samples[TEN_MINUTES_AT_16KHZ - 1],
+            100,
+            "Last sample should be correct"
+        );
+    }
+
+    #[test]
+    fn test_mock_audio_source_rapid_read_cycles() {
+        // Simulate 1000 rapid read cycles
+        let samples = vec![42i16; 16000]; // 1 second of audio
+        let mut source = MockAudioSource::new().with_samples(samples.clone());
+
+        // Perform 1000 reads rapidly
+        for i in 0..1000 {
+            let result = source.read_samples();
+            assert!(result.is_ok(), "Read {} should succeed", i);
+            let data = result.unwrap();
+            assert_eq!(data.len(), 16000, "Read {} should return correct length", i);
+        }
+    }
+
+    #[test]
+    fn test_mock_audio_source_maximum_sample_values() {
+        // Test with extreme sample values (min/max i16)
+        let extreme_samples = vec![
+            i16::MIN,
+            i16::MIN + 1,
+            -1000,
+            0,
+            1000,
+            i16::MAX - 1,
+            i16::MAX,
+        ];
+        let mut source = MockAudioSource::new().with_samples(extreme_samples.clone());
+
+        let result = source.read_samples();
+        assert!(result.is_ok(), "Should handle extreme sample values");
+        let returned = result.unwrap();
+        assert_eq!(
+            returned, extreme_samples,
+            "Extreme values should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_mock_audio_source_empty_then_large() {
+        // Start with empty, then switch to large buffer
+        let mut source = MockAudioSource::new().with_samples(vec![]);
+
+        let result1 = source.read_samples();
+        assert!(result1.is_ok(), "Empty read should succeed");
+        assert_eq!(result1.unwrap().len(), 0, "Should return empty");
+
+        // Now configure with large buffer
+        let large_buffer = vec![99i16; 1_000_000]; // 1 million samples
+        source = source.with_samples(large_buffer.clone());
+
+        let result2 = source.read_samples();
+        assert!(result2.is_ok(), "Large read should succeed");
+        assert_eq!(
+            result2.unwrap().len(),
+            1_000_000,
+            "Should return all million samples"
+        );
+    }
+
+    #[test]
+    fn test_mock_audio_source_start_stop_stress() {
+        // Stress test start/stop cycles
+        let mut source = MockAudioSource::new();
+
+        for i in 0..100 {
+            let start_result = source.start();
+            assert!(start_result.is_ok(), "Start {} should succeed", i);
+            assert!(
+                source.is_started(),
+                "Should be started after iteration {}",
+                i
+            );
+
+            let stop_result = source.stop();
+            assert!(stop_result.is_ok(), "Stop {} should succeed", i);
+            assert!(
+                !source.is_started(),
+                "Should be stopped after iteration {}",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_mock_audio_source_read_during_rapid_start_stop() {
+        // Read while rapidly starting and stopping
+        let samples = vec![77i16; 1000];
+        let mut source = MockAudioSource::new().with_samples(samples.clone());
+
+        for i in 0..50 {
+            source.start().unwrap();
+            let result = source.read_samples();
+            assert!(result.is_ok(), "Read during cycle {} should succeed", i);
+            source.stop().unwrap();
+
+            // Also read while stopped
+            let result2 = source.read_samples();
+            assert!(
+                result2.is_ok(),
+                "Read while stopped in cycle {} should succeed",
+                i
+            );
+        }
+    }
 }
