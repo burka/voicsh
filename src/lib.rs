@@ -6,6 +6,8 @@ pub mod audio;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod config;
+#[cfg(all(feature = "cpal-audio", feature = "model-download"))]
+pub mod daemon;
 pub mod defaults;
 #[cfg(feature = "cli")]
 pub mod diagnostics;

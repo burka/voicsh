@@ -1,0 +1,331 @@
+//! Daemon mode for voicsh - manages recording state and IPC server.
+
+pub mod handler;
+
+use crate::audio::capture::suppress_audio_warnings;
+use crate::config::Config;
+use crate::error::{Result, VoicshError};
+use crate::ipc::server::IpcServer;
+use crate::pipeline::orchestrator::PipelineHandle;
+use crate::stt::transcriber::Transcriber;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+#[cfg(feature = "portal")]
+use crate::input::portal::PortalSession;
+
+/// Daemon state: model loaded, recording state, IPC server.
+pub struct DaemonState {
+    /// Configuration
+    pub config: Arc<Mutex<Config>>,
+    /// Loaded transcriber (model stays in memory)
+    pub transcriber: Arc<dyn Transcriber>,
+    /// Current pipeline handle (Some = recording, None = idle)
+    pub pipeline: Arc<Mutex<Option<PipelineHandle>>>,
+    /// Portal session for input injection (if available)
+    #[cfg(feature = "portal")]
+    pub portal: Option<Arc<PortalSession>>,
+}
+
+impl DaemonState {
+    /// Creates a new daemon state with loaded model.
+    ///
+    /// # Arguments
+    /// * `config` - Configuration
+    /// * `transcriber` - Loaded transcriber (model)
+    /// * `portal` - Optional portal session (feature gated)
+    pub fn new(
+        config: Config,
+        transcriber: Arc<dyn Transcriber>,
+        #[cfg(feature = "portal")] portal: Option<Arc<PortalSession>>,
+    ) -> Self {
+        Self {
+            config: Arc::new(Mutex::new(config)),
+            transcriber,
+            pipeline: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "portal")]
+            portal,
+        }
+    }
+
+    /// Returns true if currently recording.
+    pub async fn is_recording(&self) -> bool {
+        self.pipeline.lock().await.is_some()
+    }
+
+    /// Returns model name from config.
+    pub async fn model_name(&self) -> String {
+        self.config.lock().await.stt.model.clone()
+    }
+}
+
+/// Run the daemon: load model, start IPC server, wait for shutdown.
+///
+/// # Arguments
+/// * `config` - Configuration
+/// * `socket_path` - Path to Unix socket for IPC
+/// * `quiet` - Suppress status messages
+/// * `verbosity` - Verbosity level
+/// * `no_download` - Prevent automatic model download
+///
+/// # Returns
+/// Ok(()) on graceful shutdown, error otherwise
+pub async fn run_daemon(
+    config: Config,
+    socket_path: Option<PathBuf>,
+    quiet: bool,
+    verbosity: u8,
+    no_download: bool,
+) -> Result<()> {
+    // Suppress noisy JACK/ALSA warnings
+    suppress_audio_warnings();
+
+    // Load model once (this is slow but happens only at daemon startup)
+    if !quiet {
+        eprintln!("Loading model '{}'...", config.stt.model);
+    }
+
+    let transcriber = create_transcriber(&config, quiet, verbosity, no_download).await?;
+
+    if !quiet {
+        eprintln!("Model loaded successfully.");
+    }
+
+    // Try to establish portal session
+    #[cfg(feature = "portal")]
+    let portal = match PortalSession::try_new().await {
+        Ok(session) => {
+            if verbosity >= 1 {
+                eprintln!("Portal keyboard access granted.");
+            }
+            Some(Arc::new(session))
+        }
+        Err(e) => {
+            if verbosity >= 2 {
+                eprintln!("Portal unavailable ({}), using wtype/ydotool fallback.", e);
+            }
+            None
+        }
+    };
+
+    // Create daemon state
+    let state = DaemonState::new(
+        config,
+        transcriber,
+        #[cfg(feature = "portal")]
+        portal,
+    );
+
+    // Determine socket path
+    let socket_path = socket_path.unwrap_or_else(IpcServer::default_socket_path);
+
+    // Create IPC server
+    let server = IpcServer::new(socket_path.clone())?;
+
+    if !quiet {
+        eprintln!("IPC server listening at: {}", socket_path.display());
+        eprintln!("Daemon ready.");
+    }
+
+    // Create command handler
+    let handler = handler::DaemonCommandHandler::new(state, quiet, verbosity);
+
+    // Start IPC server
+    let server_handle = {
+        let server_clone = IpcServer::new(socket_path)?;
+        tokio::spawn(async move { server_clone.start(handler).await })
+    };
+
+    // Wait for SIGTERM or SIGINT
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            if !quiet {
+                eprintln!("\nReceived SIGINT, shutting down...");
+            }
+        }
+        _ = wait_for_sigterm() => {
+            if !quiet {
+                eprintln!("\nReceived SIGTERM, shutting down...");
+            }
+        }
+    }
+
+    // Stop IPC server
+    server.stop().await?;
+
+    // Wait for server task to finish
+    let _ = server_handle.await;
+
+    if !quiet {
+        eprintln!("Daemon stopped.");
+    }
+
+    Ok(())
+}
+
+/// Wait for SIGTERM signal (used by systemd).
+#[cfg(unix)]
+async fn wait_for_sigterm() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+    sigterm.recv().await;
+}
+
+#[cfg(not(unix))]
+async fn wait_for_sigterm() {
+    // On non-Unix, just wait forever (Ctrl+C will still work)
+    std::future::pending::<()>().await;
+}
+
+/// Create transcriber from config.
+async fn create_transcriber(
+    config: &Config,
+    quiet: bool,
+    verbosity: u8,
+    no_download: bool,
+) -> Result<Arc<dyn Transcriber>> {
+    use crate::models::catalog::{english_variant, get_model, resolve_model_for_language};
+    use crate::models::download::{
+        download_model, find_any_installed_model, is_model_installed, model_path,
+    };
+    use crate::stt::fan_out::FanOutTranscriber;
+    use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
+
+    let model_name = &config.stt.model;
+    let language = &config.stt.language;
+
+    // Resolve model name
+    let resolved_model = resolve_model_for_language(model_name, language);
+
+    // Check if model is installed
+    if !is_model_installed(&resolved_model) {
+        if no_download {
+            // Try fallback to any installed model
+            if let Some(fallback) = find_any_installed_model() {
+                if !quiet {
+                    eprintln!(
+                        "Model '{}' not installed, using '{}'",
+                        resolved_model, fallback
+                    );
+                }
+            } else {
+                return Err(VoicshError::TranscriptionModelNotFound {
+                    path: resolved_model,
+                });
+            }
+        } else {
+            // Download model
+            if !quiet {
+                eprintln!("Downloading model '{}'...", resolved_model);
+            }
+            download_model(&resolved_model, true).await?;
+        }
+    }
+
+    // Get model path
+    let path = model_path(&resolved_model);
+
+    // Create transcriber
+    if config.stt.fan_out {
+        // Fan-out mode: run English + multilingual in parallel
+        let en_model = english_variant(&resolved_model);
+        let en_path = model_path(&en_model);
+
+        if !is_model_installed(&en_model) && !no_download {
+            if !quiet {
+                eprintln!("Downloading English model '{}'...", en_model);
+            }
+            download_model(&en_model, true).await?;
+        }
+
+        let en_transcriber = WhisperTranscriber::new(WhisperConfig {
+            model_path: en_path,
+            language: Some("en".to_string()),
+        })?;
+
+        let multilingual_transcriber = WhisperTranscriber::new(WhisperConfig {
+            model_path: path,
+            language: Some(language.clone()),
+        })?;
+
+        Ok(Arc::new(FanOutTranscriber::new(
+            Arc::new(en_transcriber),
+            Arc::new(multilingual_transcriber),
+            verbosity,
+        )))
+    } else {
+        // Single model mode
+        let transcriber = WhisperTranscriber::new(WhisperConfig {
+            model_path: path,
+            language: Some(language.clone()),
+        })?;
+
+        Ok(Arc::new(transcriber))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_daemon_state_new() {
+        use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
+
+        let config = Config::default();
+
+        // Mock transcriber (won't actually work without model file)
+        let transcriber: Arc<dyn Transcriber> =
+            Arc::new(WhisperTranscriber::new(WhisperConfig::default()).unwrap());
+
+        #[cfg(feature = "portal")]
+        let state = DaemonState::new(config, transcriber, None);
+
+        #[cfg(not(feature = "portal"))]
+        let state = DaemonState::new(config, transcriber);
+
+        assert!(!state.is_recording().await);
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_is_recording() {
+        use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
+
+        let config = Config::default();
+        let transcriber: Arc<dyn Transcriber> =
+            Arc::new(WhisperTranscriber::new(WhisperConfig::default()).unwrap());
+
+        #[cfg(feature = "portal")]
+        let state = DaemonState::new(config, transcriber, None);
+
+        #[cfg(not(feature = "portal"))]
+        let state = DaemonState::new(config, transcriber);
+
+        // Initially not recording
+        assert!(!state.is_recording().await);
+
+        // Simulate setting pipeline (would be done by handler)
+        // Note: We can't easily test PipelineHandle creation without full setup
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_model_name() {
+        use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
+
+        let mut config = Config::default();
+        config.stt.model = "test-model".to_string();
+
+        let transcriber: Arc<dyn Transcriber> =
+            Arc::new(WhisperTranscriber::new(WhisperConfig::default()).unwrap());
+
+        #[cfg(feature = "portal")]
+        let state = DaemonState::new(config, transcriber, None);
+
+        #[cfg(not(feature = "portal"))]
+        let state = DaemonState::new(config, transcriber);
+
+        let model_name = state.model_name().await;
+        assert_eq!(model_name, "test-model");
+    }
+}
