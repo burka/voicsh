@@ -121,21 +121,22 @@ pub async fn run_daemon(
     let socket_path = socket_path.unwrap_or_else(IpcServer::default_socket_path);
 
     // Create IPC server
-    let server = IpcServer::new(socket_path.clone())?;
+    let server = Arc::new(IpcServer::new(socket_path)?);
 
     if !quiet {
-        eprintln!("IPC server listening at: {}", socket_path.display());
+        eprintln!(
+            "IPC server listening at: {}",
+            server.socket_path().display()
+        );
         eprintln!("Daemon ready.");
     }
 
     // Create command handler
     let handler = handler::DaemonCommandHandler::new(state, quiet, verbosity);
 
-    // Start IPC server
-    let server_handle = {
-        let server_clone = IpcServer::new(socket_path)?;
-        tokio::spawn(async move { server_clone.start(handler).await })
-    };
+    // Start IPC server in background task
+    let server_clone = Arc::clone(&server);
+    let server_handle = tokio::spawn(async move { server_clone.start(handler).await });
 
     // Wait for SIGTERM or SIGINT
     tokio::select! {
@@ -144,7 +145,10 @@ pub async fn run_daemon(
                 eprintln!("\nReceived SIGINT, shutting down...");
             }
         }
-        _ = wait_for_sigterm() => {
+        res = wait_for_sigterm() => {
+            if let Err(e) = res {
+                eprintln!("Error setting up signal handler: {}", e);
+            }
             if !quiet {
                 eprintln!("\nReceived SIGTERM, shutting down...");
             }
@@ -166,16 +170,18 @@ pub async fn run_daemon(
 
 /// Wait for SIGTERM signal (used by systemd).
 #[cfg(unix)]
-async fn wait_for_sigterm() {
+async fn wait_for_sigterm() -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
-    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+    let mut sigterm = signal(SignalKind::terminate())
+        .map_err(|e| VoicshError::Other(format!("Failed to register SIGTERM handler: {}", e)))?;
     sigterm.recv().await;
+    Ok(())
 }
 
 #[cfg(not(unix))]
-async fn wait_for_sigterm() {
+async fn wait_for_sigterm() -> Result<()> {
     // On non-Unix, just wait forever (Ctrl+C will still work)
-    std::future::pending::<()>().await;
+    std::future::pending::<()>().await
 }
 
 /// Create transcriber from config.

@@ -34,8 +34,11 @@ impl DaemonCommandHandler {
 
     /// Start recording.
     async fn start_recording(&self) -> Response {
+        // Lock pipeline for entire operation to prevent race conditions
+        let mut pipeline_guard = self.state.pipeline.lock().await;
+
         // Check if already recording
-        if self.state.is_recording().await {
+        if pipeline_guard.is_some() {
             return Response::Error {
                 message: "Already recording".to_string(),
             };
@@ -45,18 +48,55 @@ impl DaemonCommandHandler {
         let config = self.state.config.lock().await.clone();
 
         // Create audio source
-        let device_name = config.audio.device.as_deref();
-        let audio_source: Box<dyn AudioSource> = match CpalAudioSource::new(device_name) {
-            Ok(source) => Box::new(source),
-            Err(e) => {
-                return Response::Error {
-                    message: format!("Failed to create audio source: {}", e),
-                };
-            }
+        let audio_source = match self.create_audio_source(&config) {
+            Ok(source) => source,
+            Err(e) => return e,
         };
 
-        // Create pipeline config
-        let pipeline_config = PipelineConfig {
+        // Build pipeline configuration
+        let pipeline_config = self.build_pipeline_config(&config);
+
+        // Create sink
+        let sink = self.create_sink(&config);
+
+        // Start pipeline
+        let transcriber = Arc::clone(&self.state.transcriber);
+        let pipeline = Pipeline::new(pipeline_config);
+
+        match pipeline.start(audio_source, transcriber, Box::new(sink)) {
+            Ok(handle) => {
+                *pipeline_guard = Some(handle);
+                Response::Ok
+            }
+            Err(e) => Response::Error {
+                message: format!("Failed to start pipeline: {}", e),
+            },
+        }
+    }
+
+    /// Create audio source from config.
+    fn create_audio_source(&self, config: &Config) -> Result<Box<dyn AudioSource>, Response> {
+        let device_name = config.audio.device.as_deref();
+        match CpalAudioSource::new(device_name) {
+            Ok(source) => Ok(Box::new(source)),
+            Err(e) => {
+                let device_info = device_name.unwrap_or("default");
+                Err(Response::Error {
+                    message: format!(
+                        "Failed to create audio source for device '{}': {}",
+                        device_info, e
+                    ),
+                })
+            }
+        }
+    }
+
+    /// Build pipeline configuration from config.
+    fn build_pipeline_config(&self, config: &Config) -> PipelineConfig {
+        // Whisper models require 16kHz sample rate
+        const WHISPER_SAMPLE_RATE: u32 = 16000;
+
+        PipelineConfig {
             vad: VadConfig {
                 speech_threshold: config.audio.vad_threshold,
                 silence_duration_ms: config.audio.silence_duration_ms,
@@ -66,38 +106,30 @@ impl DaemonCommandHandler {
             verbosity: self.verbosity,
             auto_level: true,
             quiet: self.quiet,
-            sample_rate: 16000,
+            sample_rate: WHISPER_SAMPLE_RATE,
             ..Default::default()
-        };
+        }
+    }
 
-        // Create sink with portal support
+    /// Create sink with portal support based on config.
+    fn create_sink(&self, config: &Config) -> Box<dyn crate::pipeline::sink::TextSink> {
         #[cfg(feature = "portal")]
-        let sink = InjectorSink::with_portal(
-            config.input.method.clone(),
-            config.input.paste_key.clone(),
-            self.verbosity,
-            self.state.portal.clone(),
-        );
+        {
+            Box::new(InjectorSink::with_portal(
+                config.input.method.clone(),
+                config.input.paste_key.clone(),
+                self.verbosity,
+                self.state.portal.clone(),
+            ))
+        }
 
         #[cfg(not(feature = "portal"))]
-        let sink = InjectorSink::system(
-            config.input.method.clone(),
-            config.input.paste_key.clone(),
-            self.verbosity,
-        );
-
-        // Start pipeline
-        let transcriber = Arc::clone(&self.state.transcriber);
-        let pipeline = Pipeline::new(pipeline_config);
-
-        match pipeline.start(audio_source, transcriber, Box::new(sink)) {
-            Ok(handle) => {
-                *self.state.pipeline.lock().await = Some(handle);
-                Response::Ok
-            }
-            Err(e) => Response::Error {
-                message: format!("Failed to start pipeline: {}", e),
-            },
+        {
+            Box::new(InjectorSink::system(
+                config.input.method.clone(),
+                config.input.paste_key.clone(),
+                self.verbosity,
+            ))
         }
     }
 

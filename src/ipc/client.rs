@@ -6,7 +6,10 @@ use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
-/// Send a command to the daemon via Unix socket.
+/// Timeout for IPC operations (5 seconds)
+const IPC_TIMEOUT_SECS: u64 = 5;
+
+/// Send a command to the daemon via Unix socket with timeout.
 ///
 /// # Arguments
 /// * `socket_path` - Path to the Unix socket
@@ -16,16 +19,31 @@ use tokio::net::UnixStream;
 /// Response from daemon or error
 ///
 /// # Errors
-/// Returns `VoicshError::IpcConnection` if connection fails
+/// Returns `VoicshError::IpcConnection` if connection fails or times out
 /// Returns `VoicshError::IpcProtocol` if serialization/deserialization fails
 pub async fn send_command(socket_path: &Path, command: Command) -> Result<Response> {
+    let timeout = tokio::time::Duration::from_secs(IPC_TIMEOUT_SECS);
+
+    tokio::time::timeout(timeout, send_command_inner(socket_path, command))
+        .await
+        .map_err(|_| VoicshError::IpcConnection {
+            message: format!("Command timed out after {} seconds", IPC_TIMEOUT_SECS),
+        })?
+}
+
+/// Helper to convert IO errors to IPC connection errors with context.
+fn ipc_io_error(context: &str, e: std::io::Error) -> VoicshError {
+    VoicshError::IpcConnection {
+        message: format!("{}: {}", context, e),
+    }
+}
+
+/// Internal implementation of send_command without timeout wrapper.
+async fn send_command_inner(socket_path: &Path, command: Command) -> Result<Response> {
     // Connect to daemon socket
-    let stream =
-        UnixStream::connect(socket_path)
-            .await
-            .map_err(|e| VoicshError::IpcConnection {
-                message: format!("Failed to connect to daemon: {}", e),
-            })?;
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .map_err(|e| ipc_io_error("Failed to connect to daemon", e))?;
 
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -38,32 +56,24 @@ pub async fn send_command(socket_path: &Path, command: Command) -> Result<Respon
     writer
         .write_all(command_json.as_bytes())
         .await
-        .map_err(|e| VoicshError::IpcConnection {
-            message: format!("Failed to write command: {}", e),
-        })?;
+        .map_err(|e| ipc_io_error("Failed to write command", e))?;
 
     writer
         .write_all(b"\n")
         .await
-        .map_err(|e| VoicshError::IpcConnection {
-            message: format!("Failed to write newline: {}", e),
-        })?;
+        .map_err(|e| ipc_io_error("Failed to write newline", e))?;
 
     writer
         .flush()
         .await
-        .map_err(|e| VoicshError::IpcConnection {
-            message: format!("Failed to flush writer: {}", e),
-        })?;
+        .map_err(|e| ipc_io_error("Failed to flush writer", e))?;
 
     // Read response
     let mut response_line = String::new();
     reader
         .read_line(&mut response_line)
         .await
-        .map_err(|e| VoicshError::IpcConnection {
-            message: format!("Failed to read response: {}", e),
-        })?;
+        .map_err(|e| ipc_io_error("Failed to read response", e))?;
 
     // Deserialize response
     let response =
