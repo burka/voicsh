@@ -288,62 +288,49 @@ async fn create_transcriber(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stt::transcriber::MockTranscriber;
+
+    fn mock_transcriber() -> Arc<dyn Transcriber> {
+        Arc::new(MockTranscriber::new("mock-daemon-model"))
+    }
 
     #[tokio::test]
     async fn test_daemon_state_new() {
-        use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
-
         let config = Config::default();
 
-        // Mock transcriber (won't actually work without model file)
-        let transcriber: Arc<dyn Transcriber> =
-            Arc::new(WhisperTranscriber::new(WhisperConfig::default()).unwrap());
-
         #[cfg(feature = "portal")]
-        let state = DaemonState::new(config, transcriber, None);
+        let state = DaemonState::new(config, mock_transcriber(), None);
 
         #[cfg(not(feature = "portal"))]
-        let state = DaemonState::new(config, transcriber);
+        let state = DaemonState::new(config, mock_transcriber());
 
         assert!(!state.is_recording().await);
     }
 
     #[tokio::test]
     async fn test_daemon_state_is_recording() {
-        use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
-
         let config = Config::default();
-        let transcriber: Arc<dyn Transcriber> =
-            Arc::new(WhisperTranscriber::new(WhisperConfig::default()).unwrap());
 
         #[cfg(feature = "portal")]
-        let state = DaemonState::new(config, transcriber, None);
+        let state = DaemonState::new(config, mock_transcriber(), None);
 
         #[cfg(not(feature = "portal"))]
-        let state = DaemonState::new(config, transcriber);
+        let state = DaemonState::new(config, mock_transcriber());
 
         // Initially not recording
         assert!(!state.is_recording().await);
-
-        // Simulate setting pipeline (would be done by handler)
-        // Note: We can't easily test PipelineHandle creation without full setup
     }
 
     #[tokio::test]
     async fn test_daemon_state_model_name() {
-        use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
-
         let mut config = Config::default();
         config.stt.model = "test-model".to_string();
 
-        let transcriber: Arc<dyn Transcriber> =
-            Arc::new(WhisperTranscriber::new(WhisperConfig::default()).unwrap());
-
         #[cfg(feature = "portal")]
-        let state = DaemonState::new(config, transcriber, None);
+        let state = DaemonState::new(config, mock_transcriber(), None);
 
         #[cfg(not(feature = "portal"))]
-        let state = DaemonState::new(config, transcriber);
+        let state = DaemonState::new(config, mock_transcriber());
 
         let model_name = state.model_name().await;
         assert_eq!(model_name, "test-model");

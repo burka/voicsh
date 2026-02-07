@@ -211,12 +211,12 @@ impl CommandHandler for DaemonCommandHandler {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
+    use crate::stt::transcriber::MockTranscriber;
 
     fn create_test_handler() -> DaemonCommandHandler {
         let config = Config::default();
         let transcriber: Arc<dyn crate::stt::transcriber::Transcriber> =
-            Arc::new(WhisperTranscriber::new(WhisperConfig::default()).unwrap());
+            Arc::new(MockTranscriber::new("mock-test-model"));
 
         #[cfg(feature = "portal")]
         let state = DaemonState::new(config, transcriber, None);
@@ -242,8 +242,8 @@ mod tests {
                 assert!(model_loaded, "Model should be loaded");
                 assert_eq!(
                     model_name,
-                    Some("ggml-base".to_string()),
-                    "Model name should be ggml-base from default config"
+                    Some("base".to_string()),
+                    "Model name should be 'base' from default config"
                 );
             }
             _ => panic!("Expected Status response"),
@@ -299,8 +299,8 @@ mod tests {
                 assert!(model_loaded);
                 assert_eq!(
                     model_name,
-                    Some("ggml-base".to_string()),
-                    "Model name should be ggml-base from default config"
+                    Some("base".to_string()),
+                    "Model name should be 'base' from default config"
                 );
             }
             _ => panic!("Expected Status response"),
