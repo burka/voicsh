@@ -770,6 +770,122 @@ mod tests {
     }
 
     #[test]
+    fn test_station_name() {
+        let station = PostProcessorStation::new(vec![]);
+        assert_eq!(station.name(), "post-processor");
+    }
+
+    #[test]
+    fn test_station_whitespace_only_filtered() {
+        let mut station = PostProcessorStation::new(vec![]);
+        let input = TranscribedText::new("   \n\t  ".to_string(), Instant::now());
+        let result = station.process(input).unwrap();
+        assert!(
+            result.is_none(),
+            "Whitespace-only text should be filtered out"
+        );
+    }
+
+    #[test]
+    fn test_only_command_input() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("period"), ".");
+    }
+
+    #[test]
+    fn test_only_caps_toggle_returns_empty() {
+        // "all caps end caps" with nothing between produces empty string
+        let mut p = en_processor();
+        assert_eq!(p.apply("all caps end caps"), "");
+    }
+
+    #[test]
+    fn test_multiple_spaces_between_words() {
+        let mut p = en_processor();
+        // Multiple spaces: only the first space before "period" gets popped
+        assert_eq!(p.apply("hello  period"), "hello .");
+    }
+
+    #[test]
+    fn test_caps_with_punctuation() {
+        let mut p = en_processor();
+        assert_eq!(
+            p.apply("all caps hello end caps comma world"),
+            "HELLO, world"
+        );
+    }
+
+    #[test]
+    fn test_russian_commands() {
+        let mut p = VoiceCommandProcessor::new("ru", &HashMap::new());
+        assert_eq!(p.apply("привет точка"), "привет.");
+        assert_eq!(p.apply("привет запятая мир"), "привет, мир");
+    }
+
+    #[test]
+    fn test_japanese_commands() {
+        let mut p = VoiceCommandProcessor::new("ja", &HashMap::new());
+        assert_eq!(p.apply("こんにちは 句点"), "こんにちは。");
+    }
+
+    #[test]
+    fn test_chinese_commands() {
+        let mut p = VoiceCommandProcessor::new("zh", &HashMap::new());
+        assert_eq!(p.apply("你好 句号"), "你好。");
+        // Chinese comma attaches left (no space before) but keeps space after
+        assert_eq!(p.apply("你好 逗号 世界"), "你好， 世界");
+    }
+
+    #[test]
+    fn test_korean_commands() {
+        let mut p = VoiceCommandProcessor::new("ko", &HashMap::new());
+        assert_eq!(p.apply("안녕 마침표"), "안녕.");
+    }
+
+    #[test]
+    fn test_portuguese_commands() {
+        let mut p = VoiceCommandProcessor::new("pt", &HashMap::new());
+        assert_eq!(p.apply("olá ponto"), "olá.");
+        assert_eq!(p.apply("olá vírgula mundo"), "olá, mundo");
+    }
+
+    #[test]
+    fn test_italian_commands() {
+        let mut p = VoiceCommandProcessor::new("it", &HashMap::new());
+        assert_eq!(p.apply("ciao punto"), "ciao.");
+        assert_eq!(p.apply("ciao virgola mondo"), "ciao, mondo");
+    }
+
+    #[test]
+    fn test_dutch_commands() {
+        let mut p = VoiceCommandProcessor::new("nl", &HashMap::new());
+        assert_eq!(p.apply("hallo punt"), "hallo.");
+        assert_eq!(p.apply("hallo komma wereld"), "hallo, wereld");
+    }
+
+    #[test]
+    fn test_polish_commands() {
+        let mut p = VoiceCommandProcessor::new("pl", &HashMap::new());
+        assert_eq!(p.apply("cześć kropka"), "cześć.");
+    }
+
+    #[test]
+    fn test_german_newline_and_caps() {
+        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        assert_eq!(p.apply("hallo neue zeile welt"), "hallo\nwelt");
+        assert_eq!(
+            p.apply("großbuchstaben hallo ende großbuchstaben welt"),
+            "HALLO welt"
+        );
+    }
+
+    #[test]
+    fn test_processor_trait_name() {
+        let p = en_processor();
+        assert_eq!(PostProcessor::name(&p), "voice-commands");
+    }
+
+    #[test]
     fn test_unknown_language_falls_back_to_english() {
         let mut p = VoiceCommandProcessor::new("xx", &HashMap::new());
         // Should still recognize English commands as fallback

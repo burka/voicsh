@@ -211,7 +211,9 @@ impl Pipeline {
                 self.error_reporter.clone(),
             );
             extra_threads.push(thread::spawn(move || {
-                let _ = post_runner.join();
+                if let Err(msg) = post_runner.join() {
+                    eprintln!("voicsh: {msg}");
+                }
             }));
             post_rx
         };
@@ -928,6 +930,130 @@ mod tests {
                 "Verbosity {verbosity} should produce transcription"
             );
         }
+    }
+
+    // ── Post-processor pipeline integration tests ─────────────────────────
+
+    #[test]
+    fn test_pipeline_with_post_processor() {
+        // Verify the post-processor station is wired correctly in the pipeline.
+        // Transcriber outputs "hello comma world period", post-processor should
+        // transform it to "hello, world."
+        use crate::pipeline::post_processor::VoiceCommandProcessor;
+        use std::collections::HashMap;
+
+        let mock_clock = Arc::new(MockClock::new());
+
+        let config = PipelineConfig {
+            vad: VadConfig {
+                speech_threshold: 0.02,
+                silence_duration_ms: 200,
+                min_speech_ms: 50,
+                ..Default::default()
+            },
+            quiet: true,
+            verbosity: 0,
+            ..Default::default()
+        };
+
+        let pipeline = Pipeline::new(config).with_clock(mock_clock.clone());
+
+        let loud_phase = FramePhase {
+            samples: vec![10000i16; 160],
+            count: 15,
+        };
+        let quiet_phase = FramePhase {
+            samples: vec![0i16; 160],
+            count: 15,
+        };
+
+        let audio_source =
+            Box::new(MockAudioSource::new().with_frame_sequence(vec![loud_phase, quiet_phase]));
+
+        let transcriber =
+            Arc::new(MockTranscriber::new("test-model").with_response("hello comma world period"));
+        let sink = Box::new(CollectorSink::new());
+
+        let post_processors: Vec<Box<dyn crate::pipeline::post_processor::PostProcessor>> =
+            vec![Box::new(VoiceCommandProcessor::new("en", &HashMap::new()))];
+
+        let handle = pipeline
+            .start_with_post_processors(audio_source, transcriber, sink, post_processors)
+            .unwrap();
+        assert!(handle.is_running());
+
+        for _ in 0..4 {
+            thread::sleep(Duration::from_millis(200));
+            mock_clock.advance(Duration::from_millis(400));
+        }
+
+        let result = handle.stop();
+        assert_eq!(
+            result,
+            Some("hello, world.".to_string()),
+            "Post-processor should transform voice commands in pipeline output"
+        );
+    }
+
+    #[test]
+    fn test_pipeline_with_empty_post_processors() {
+        // Verify that an empty post-processor list works the same as start().
+        let mock_clock = Arc::new(MockClock::new());
+
+        let config = PipelineConfig {
+            vad: VadConfig {
+                speech_threshold: 0.02,
+                silence_duration_ms: 200,
+                min_speech_ms: 50,
+                ..Default::default()
+            },
+            quiet: true,
+            verbosity: 0,
+            ..Default::default()
+        };
+
+        let pipeline = Pipeline::new(config).with_clock(mock_clock.clone());
+
+        let loud_phase = FramePhase {
+            samples: vec![10000i16; 160],
+            count: 15,
+        };
+        let quiet_phase = FramePhase {
+            samples: vec![0i16; 160],
+            count: 15,
+        };
+
+        let audio_source =
+            Box::new(MockAudioSource::new().with_frame_sequence(vec![loud_phase, quiet_phase]));
+
+        let transcriber = Arc::new(MockTranscriber::new("test-model").with_response("hello world"));
+        let sink = Box::new(CollectorSink::new());
+
+        let handle = pipeline
+            .start_with_post_processors(audio_source, transcriber, sink, vec![])
+            .unwrap();
+        assert!(handle.is_running());
+
+        for _ in 0..4 {
+            thread::sleep(Duration::from_millis(200));
+            mock_clock.advance(Duration::from_millis(400));
+        }
+
+        let result = handle.stop();
+        assert_eq!(
+            result,
+            Some("hello world".to_string()),
+            "Empty post-processor list should pass text through unchanged"
+        );
+    }
+
+    #[test]
+    fn test_pipeline_config_default_includes_post_process_buffer() {
+        let config = PipelineConfig::default();
+        assert_eq!(
+            config.post_process_buffer, 4,
+            "Default post_process_buffer should be 4"
+        );
     }
 
     // ── End-to-end pipeline tests with WAV fixture ───────────────────────

@@ -576,4 +576,110 @@ mod tests {
             );
         }
     }
+
+    // ── Voice commands config tests ──────────────────────────────────────
+
+    #[test]
+    fn test_default_voice_commands_enabled() {
+        let config = Config::default();
+        assert!(
+            config.voice_commands.enabled,
+            "Voice commands should be enabled by default"
+        );
+        assert!(
+            config.voice_commands.commands.is_empty(),
+            "No user overrides by default"
+        );
+    }
+
+    #[test]
+    fn test_voice_commands_from_toml() {
+        let toml_content = r#"
+            [voice_commands]
+            enabled = true
+
+            [voice_commands.commands]
+            "smiley" = ":)"
+            "at sign" = "@"
+            "shrug" = '¯\_(ツ)_/¯'
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert!(config.voice_commands.enabled);
+        assert_eq!(config.voice_commands.commands.len(), 3);
+        assert_eq!(
+            config.voice_commands.commands.get("smiley"),
+            Some(&":)".to_string())
+        );
+        assert_eq!(
+            config.voice_commands.commands.get("at sign"),
+            Some(&"@".to_string())
+        );
+        assert_eq!(
+            config.voice_commands.commands.get("shrug"),
+            Some(&"¯\\_(ツ)_/¯".to_string())
+        );
+    }
+
+    #[test]
+    fn test_voice_commands_disabled() {
+        let toml_content = r#"
+            [voice_commands]
+            enabled = false
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert!(
+            !config.voice_commands.enabled,
+            "Voice commands should be disabled"
+        );
+    }
+
+    #[test]
+    fn test_voice_commands_omitted_uses_defaults() {
+        // Config with no [voice_commands] section at all
+        let toml_content = r#"
+            [stt]
+            model = "small.en"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert!(
+            config.voice_commands.enabled,
+            "Voice commands should default to enabled when section omitted"
+        );
+        assert!(
+            config.voice_commands.commands.is_empty(),
+            "No user overrides when section omitted"
+        );
+    }
+
+    #[test]
+    fn test_voice_commands_empty_commands_table() {
+        let toml_content = r#"
+            [voice_commands]
+            enabled = true
+
+            [voice_commands.commands]
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert!(config.voice_commands.enabled);
+        assert!(
+            config.voice_commands.commands.is_empty(),
+            "Empty commands table should produce empty map"
+        );
+    }
 }
