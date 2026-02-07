@@ -17,6 +17,7 @@ use crate::models::download::{
 };
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
+use crate::pipeline::post_processor::{PostProcessor, VoiceCommandProcessor};
 use crate::pipeline::sink::{CollectorSink, InjectorSink, StdoutSink};
 use crate::stt::fan_out::FanOutTranscriber;
 use crate::stt::transcriber::Transcriber;
@@ -224,9 +225,15 @@ async fn run_continuous(
     };
 
     let sink = make_sink(config);
+    let post_processors = build_post_processors(config);
 
     let pipeline = Pipeline::new(pipeline_config);
-    let handle = pipeline.start(audio_source, transcriber, Box::new(sink))?;
+    let handle = pipeline.start_with_post_processors(
+        audio_source,
+        transcriber,
+        Box::new(sink),
+        post_processors,
+    )?;
 
     // Wait for Ctrl+C
     tokio::signal::ctrl_c()
@@ -269,8 +276,14 @@ async fn run_single_session(
     };
 
     let sink = CollectorSink::new();
+    let post_processors = build_post_processors(config);
     let pipeline = Pipeline::new(pipeline_config);
-    let handle = pipeline.start(audio_source, transcriber, Box::new(sink))?;
+    let handle = pipeline.start_with_post_processors(
+        audio_source,
+        transcriber,
+        Box::new(sink),
+        post_processors,
+    )?;
 
     // Wait for Ctrl+C
     tokio::signal::ctrl_c()
@@ -300,6 +313,20 @@ async fn run_single_session(
     }
 
     Ok(())
+}
+
+/// Build post-processors from configuration.
+fn build_post_processors(config: &Config) -> Vec<Box<dyn PostProcessor>> {
+    let mut processors: Vec<Box<dyn PostProcessor>> = Vec::new();
+
+    if config.voice_commands.enabled {
+        processors.push(Box::new(VoiceCommandProcessor::new(
+            &config.stt.language,
+            &config.voice_commands.commands,
+        )));
+    }
+
+    processors
 }
 
 /// Create the transcriber, handling model download and fan-out if needed.

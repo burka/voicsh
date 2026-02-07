@@ -1,0 +1,815 @@
+//! Post-processing stage for transforming transcribed text before output.
+//!
+//! Sits between TranscriberStation and SinkStation in the pipeline.
+//! The primary use case is voice commands: spoken punctuation and formatting.
+
+use crate::pipeline::error::StationError;
+use crate::pipeline::station::Station;
+use crate::pipeline::types::TranscribedText;
+use std::collections::HashMap;
+
+/// Trait for text post-processing. Implementations transform transcribed text
+/// before it reaches the sink.
+pub trait PostProcessor: Send + 'static {
+    /// Transform transcribed text. Returns the processed string.
+    fn process(&mut self, text: &str) -> String;
+
+    /// Name for logging/diagnostics.
+    fn name(&self) -> &'static str;
+}
+
+/// Pipeline station that applies a chain of post-processors to transcribed text.
+pub struct PostProcessorStation {
+    processors: Vec<Box<dyn PostProcessor>>,
+}
+
+impl PostProcessorStation {
+    pub fn new(processors: Vec<Box<dyn PostProcessor>>) -> Self {
+        Self { processors }
+    }
+}
+
+impl Station for PostProcessorStation {
+    type Input = TranscribedText;
+    type Output = TranscribedText;
+
+    fn process(&mut self, input: TranscribedText) -> Result<Option<TranscribedText>, StationError> {
+        let mut text = input.text;
+
+        for processor in &mut self.processors {
+            text = processor.process(&text);
+        }
+
+        // Filter out empty results after processing
+        if text.trim().is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(TranscribedText::new(text, input.timestamp)))
+    }
+
+    fn name(&self) -> &'static str {
+        "post-processor"
+    }
+}
+
+/// Rule-based voice command processor.
+///
+/// Scans transcribed text for spoken command phrases and replaces them with
+/// their corresponding output. Supports punctuation, formatting toggles,
+/// and user-configurable overrides.
+pub struct VoiceCommandProcessor {
+    /// Sorted by descending key length so longer phrases match first.
+    commands: Vec<(String, CommandAction)>,
+    /// Current caps-lock state toggled by "all caps" / "end caps".
+    caps_active: bool,
+}
+
+/// What a voice command does when matched.
+#[derive(Debug, Clone, PartialEq)]
+enum CommandAction {
+    /// Replace the spoken phrase with literal text.
+    /// `attach_left`: remove space before replacement (e.g., period, comma)
+    /// `attach_right`: remove space after replacement (e.g., open paren, hyphen)
+    Insert {
+        text: String,
+        attach_left: bool,
+        attach_right: bool,
+    },
+    /// Toggle caps mode on.
+    CapsOn,
+    /// Toggle caps mode off.
+    CapsOff,
+}
+
+impl CommandAction {
+    /// Punctuation that attaches to the left word (period, comma, etc.)
+    fn punct(text: &str) -> Self {
+        Self::Insert {
+            text: text.into(),
+            attach_left: true,
+            attach_right: false,
+        }
+    }
+
+    /// Text that attaches to the right word (open paren, open quote)
+    fn open(text: &str) -> Self {
+        Self::Insert {
+            text: text.into(),
+            attach_left: false,
+            attach_right: true,
+        }
+    }
+
+    /// Closing delimiter that attaches to the left (close paren, close quote)
+    fn close(text: &str) -> Self {
+        Self::Insert {
+            text: text.into(),
+            attach_left: true,
+            attach_right: false,
+        }
+    }
+
+    /// Text that attaches to both sides (hyphen)
+    fn tight(text: &str) -> Self {
+        Self::Insert {
+            text: text.into(),
+            attach_left: true,
+            attach_right: true,
+        }
+    }
+
+    /// Whitespace replacement (newline, tab) — eats surrounding spaces
+    fn whitespace(text: &str) -> Self {
+        Self::Insert {
+            text: text.into(),
+            attach_left: true,
+            attach_right: true,
+        }
+    }
+
+    /// Free-standing text (em-dash with its own spacing)
+    fn free(text: &str) -> Self {
+        Self::Insert {
+            text: text.into(),
+            attach_left: false,
+            attach_right: false,
+        }
+    }
+}
+
+impl VoiceCommandProcessor {
+    /// Build a processor from a language tag and optional user overrides.
+    ///
+    /// `language` should be an ISO 639-1 code ("en", "de", "es", …) or "auto".
+    /// When "auto", English defaults are used.
+    ///
+    /// `overrides` are extra mappings from the `[voice_commands]` config section.
+    /// They take precedence over built-in defaults.
+    pub fn new(language: &str, overrides: &HashMap<String, String>) -> Self {
+        let mut map: HashMap<String, CommandAction> = HashMap::new();
+
+        // Load built-in commands for the language
+        let builtins = builtin_commands(language);
+        for (phrase, action) in builtins {
+            map.insert(phrase, action);
+        }
+
+        // Apply user overrides (these always win) — free-standing by default
+        for (phrase, replacement) in overrides {
+            let lower = phrase.to_lowercase();
+            map.insert(lower, CommandAction::free(replacement));
+        }
+
+        // Sort by descending key length so "new paragraph" matches before "new"
+        let mut commands: Vec<(String, CommandAction)> = map.into_iter().collect();
+        commands.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
+        Self {
+            commands,
+            caps_active: false,
+        }
+    }
+
+    /// Apply voice command replacements to a single text segment.
+    fn apply(&mut self, text: &str) -> String {
+        // Work on a mutable copy; scan case-insensitively.
+        let mut result = String::with_capacity(text.len());
+        let lower = text.to_lowercase();
+        let chars: Vec<char> = text.chars().collect();
+        let lower_chars: Vec<char> = lower.chars().collect();
+        let len = chars.len();
+        let mut i = 0;
+
+        while i < len {
+            let mut matched = false;
+
+            for (phrase, action) in &self.commands {
+                let phrase_chars: Vec<char> = phrase.chars().collect();
+                let plen = phrase_chars.len();
+
+                if i + plen > len {
+                    continue;
+                }
+
+                // Check if the phrase matches at position i (case-insensitive)
+                let slice: String = lower_chars[i..i + plen].iter().collect();
+                if slice != *phrase {
+                    continue;
+                }
+
+                // Ensure word boundaries: the character before must be start-of-string
+                // or whitespace, and the character after must be end-of-string or whitespace.
+                let before_ok = i == 0 || lower_chars[i - 1].is_whitespace();
+                let after_ok = i + plen == len || lower_chars[i + plen].is_whitespace();
+
+                if !before_ok || !after_ok {
+                    continue;
+                }
+
+                let eat_trailing = match action {
+                    CommandAction::Insert {
+                        text: replacement,
+                        attach_left,
+                        attach_right,
+                    } => {
+                        if *attach_left && result.ends_with(' ') {
+                            result.pop();
+                        }
+                        result.push_str(replacement);
+                        *attach_right
+                    }
+                    CommandAction::CapsOn => {
+                        self.caps_active = true;
+                        true
+                    }
+                    CommandAction::CapsOff => {
+                        self.caps_active = false;
+                        true
+                    }
+                };
+
+                // Skip past the matched phrase.
+                i += plen;
+                if eat_trailing && i < len && lower_chars[i].is_whitespace() {
+                    i += 1;
+                }
+                matched = true;
+                break;
+            }
+
+            if !matched {
+                let ch = chars[i];
+                if self.caps_active {
+                    for upper in ch.to_uppercase() {
+                        result.push(upper);
+                    }
+                } else {
+                    result.push(ch);
+                }
+                i += 1;
+            }
+        }
+
+        result
+    }
+}
+
+impl PostProcessor for VoiceCommandProcessor {
+    fn process(&mut self, text: &str) -> String {
+        self.apply(text)
+    }
+
+    fn name(&self) -> &'static str {
+        "voice-commands"
+    }
+}
+
+/// Built-in voice command mappings for a given language.
+fn builtin_commands(language: &str) -> Vec<(String, CommandAction)> {
+    match language {
+        "en" | "auto" => english_commands(),
+        "de" => german_commands(),
+        "es" => spanish_commands(),
+        "fr" => french_commands(),
+        "pt" => portuguese_commands(),
+        "it" => italian_commands(),
+        "nl" => dutch_commands(),
+        "pl" => polish_commands(),
+        "ru" => russian_commands(),
+        "ja" => japanese_commands(),
+        "zh" => chinese_commands(),
+        "ko" => korean_commands(),
+        // Fallback: English commands work as a reasonable default since
+        // Whisper tends to output English command phrases even for other languages.
+        _ => english_commands(),
+    }
+}
+
+// ── English ──────────────────────────────────────────────────────────────
+
+fn english_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        // Punctuation (attach left: no space before)
+        ("period".into(), CommandAction::punct(".")),
+        ("full stop".into(), CommandAction::punct(".")),
+        ("comma".into(), CommandAction::punct(",")),
+        ("question mark".into(), CommandAction::punct("?")),
+        ("exclamation mark".into(), CommandAction::punct("!")),
+        ("exclamation point".into(), CommandAction::punct("!")),
+        ("colon".into(), CommandAction::punct(":")),
+        ("semicolon".into(), CommandAction::punct(";")),
+        ("ellipsis".into(), CommandAction::punct("...")),
+        // Dash has its own spacing (eats surrounding); hyphen is tight
+        ("dash".into(), CommandAction::tight(" — ")),
+        ("hyphen".into(), CommandAction::tight("-")),
+        // Quotes and brackets
+        ("open quote".into(), CommandAction::open("\"")),
+        ("close quote".into(), CommandAction::close("\"")),
+        ("open parenthesis".into(), CommandAction::open("(")),
+        ("close parenthesis".into(), CommandAction::close(")")),
+        // Whitespace / formatting
+        ("new line".into(), CommandAction::whitespace("\n")),
+        ("new paragraph".into(), CommandAction::whitespace("\n\n")),
+        ("tab".into(), CommandAction::whitespace("\t")),
+        // Caps toggle
+        ("all caps".into(), CommandAction::CapsOn),
+        ("end caps".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── German ───────────────────────────────────────────────────────────────
+
+fn german_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("punkt".into(), CommandAction::punct(".")),
+        ("komma".into(), CommandAction::punct(",")),
+        ("fragezeichen".into(), CommandAction::punct("?")),
+        ("ausrufezeichen".into(), CommandAction::punct("!")),
+        ("doppelpunkt".into(), CommandAction::punct(":")),
+        ("semikolon".into(), CommandAction::punct(";")),
+        ("neue zeile".into(), CommandAction::whitespace("\n")),
+        ("neuer absatz".into(), CommandAction::whitespace("\n\n")),
+        ("großbuchstaben".into(), CommandAction::CapsOn),
+        ("ende großbuchstaben".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── Spanish ──────────────────────────────────────────────────────────────
+
+fn spanish_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("punto".into(), CommandAction::punct(".")),
+        ("coma".into(), CommandAction::punct(",")),
+        ("signo de interrogación".into(), CommandAction::punct("?")),
+        ("signo de exclamación".into(), CommandAction::punct("!")),
+        ("dos puntos".into(), CommandAction::punct(":")),
+        ("punto y coma".into(), CommandAction::punct(";")),
+        ("nueva línea".into(), CommandAction::whitespace("\n")),
+        ("nuevo párrafo".into(), CommandAction::whitespace("\n\n")),
+        ("mayúsculas".into(), CommandAction::CapsOn),
+        ("fin mayúsculas".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── French ───────────────────────────────────────────────────────────────
+
+fn french_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("point".into(), CommandAction::punct(".")),
+        ("virgule".into(), CommandAction::punct(",")),
+        ("point d'interrogation".into(), CommandAction::punct("?")),
+        ("point d'exclamation".into(), CommandAction::punct("!")),
+        ("deux points".into(), CommandAction::punct(":")),
+        ("point-virgule".into(), CommandAction::punct(";")),
+        ("nouvelle ligne".into(), CommandAction::whitespace("\n")),
+        (
+            "nouveau paragraphe".into(),
+            CommandAction::whitespace("\n\n"),
+        ),
+        ("majuscules".into(), CommandAction::CapsOn),
+        ("fin majuscules".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── Portuguese ───────────────────────────────────────────────────────────
+
+fn portuguese_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("ponto".into(), CommandAction::punct(".")),
+        ("vírgula".into(), CommandAction::punct(",")),
+        ("ponto de interrogação".into(), CommandAction::punct("?")),
+        ("ponto de exclamação".into(), CommandAction::punct("!")),
+        ("dois pontos".into(), CommandAction::punct(":")),
+        ("ponto e vírgula".into(), CommandAction::punct(";")),
+        ("nova linha".into(), CommandAction::whitespace("\n")),
+        ("novo parágrafo".into(), CommandAction::whitespace("\n\n")),
+        ("maiúsculas".into(), CommandAction::CapsOn),
+        ("fim maiúsculas".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── Italian ──────────────────────────────────────────────────────────────
+
+fn italian_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("punto".into(), CommandAction::punct(".")),
+        ("virgola".into(), CommandAction::punct(",")),
+        ("punto interrogativo".into(), CommandAction::punct("?")),
+        ("punto esclamativo".into(), CommandAction::punct("!")),
+        ("due punti".into(), CommandAction::punct(":")),
+        ("punto e virgola".into(), CommandAction::punct(";")),
+        ("nuova riga".into(), CommandAction::whitespace("\n")),
+        ("nuovo paragrafo".into(), CommandAction::whitespace("\n\n")),
+        ("maiuscole".into(), CommandAction::CapsOn),
+        ("fine maiuscole".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── Dutch ────────────────────────────────────────────────────────────────
+
+fn dutch_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("punt".into(), CommandAction::punct(".")),
+        ("komma".into(), CommandAction::punct(",")),
+        ("vraagteken".into(), CommandAction::punct("?")),
+        ("uitroepteken".into(), CommandAction::punct("!")),
+        ("dubbele punt".into(), CommandAction::punct(":")),
+        ("puntkomma".into(), CommandAction::punct(";")),
+        ("nieuwe regel".into(), CommandAction::whitespace("\n")),
+        ("nieuwe alinea".into(), CommandAction::whitespace("\n\n")),
+        ("hoofdletters".into(), CommandAction::CapsOn),
+        ("einde hoofdletters".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── Polish ───────────────────────────────────────────────────────────────
+
+fn polish_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("kropka".into(), CommandAction::punct(".")),
+        ("przecinek".into(), CommandAction::punct(",")),
+        ("znak zapytania".into(), CommandAction::punct("?")),
+        ("wykrzyknik".into(), CommandAction::punct("!")),
+        ("dwukropek".into(), CommandAction::punct(":")),
+        ("średnik".into(), CommandAction::punct(";")),
+        ("nowa linia".into(), CommandAction::whitespace("\n")),
+        ("nowy akapit".into(), CommandAction::whitespace("\n\n")),
+        ("wielkie litery".into(), CommandAction::CapsOn),
+        ("koniec wielkich liter".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── Russian ──────────────────────────────────────────────────────────────
+
+fn russian_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("точка".into(), CommandAction::punct(".")),
+        ("запятая".into(), CommandAction::punct(",")),
+        ("вопросительный знак".into(), CommandAction::punct("?")),
+        ("восклицательный знак".into(), CommandAction::punct("!")),
+        ("двоеточие".into(), CommandAction::punct(":")),
+        ("точка с запятой".into(), CommandAction::punct(";")),
+        ("новая строка".into(), CommandAction::whitespace("\n")),
+        ("новый абзац".into(), CommandAction::whitespace("\n\n")),
+        ("заглавные".into(), CommandAction::CapsOn),
+        ("конец заглавных".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── Japanese ─────────────────────────────────────────────────────────────
+
+fn japanese_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("句点".into(), CommandAction::punct("。")),
+        ("読点".into(), CommandAction::punct("、")),
+        ("疑問符".into(), CommandAction::punct("？")),
+        ("感嘆符".into(), CommandAction::punct("！")),
+        ("改行".into(), CommandAction::whitespace("\n")),
+        ("新段落".into(), CommandAction::whitespace("\n\n")),
+        ("大文字".into(), CommandAction::CapsOn),
+        ("大文字終了".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── Chinese ──────────────────────────────────────────────────────────────
+
+fn chinese_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("句号".into(), CommandAction::punct("。")),
+        ("逗号".into(), CommandAction::punct("，")),
+        ("问号".into(), CommandAction::punct("？")),
+        ("感叹号".into(), CommandAction::punct("！")),
+        ("冒号".into(), CommandAction::punct("：")),
+        ("分号".into(), CommandAction::punct("；")),
+        ("换行".into(), CommandAction::whitespace("\n")),
+        ("新段落".into(), CommandAction::whitespace("\n\n")),
+        ("大写".into(), CommandAction::CapsOn),
+        ("结束大写".into(), CommandAction::CapsOff),
+    ]
+}
+
+// ── Korean ───────────────────────────────────────────────────────────────
+
+fn korean_commands() -> Vec<(String, CommandAction)> {
+    vec![
+        ("마침표".into(), CommandAction::punct(".")),
+        ("쉼표".into(), CommandAction::punct(",")),
+        ("물음표".into(), CommandAction::punct("?")),
+        ("느낌표".into(), CommandAction::punct("!")),
+        ("줄바꿈".into(), CommandAction::whitespace("\n")),
+        ("새 단락".into(), CommandAction::whitespace("\n\n")),
+        ("대문자".into(), CommandAction::CapsOn),
+        ("대문자 끝".into(), CommandAction::CapsOff),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    // ── VoiceCommandProcessor unit tests ─────────────────────────────────
+
+    fn en_processor() -> VoiceCommandProcessor {
+        VoiceCommandProcessor::new("en", &HashMap::new())
+    }
+
+    #[test]
+    fn test_period_replacement() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello world period"), "hello world.");
+    }
+
+    #[test]
+    fn test_comma_replacement() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello comma world"), "hello, world");
+    }
+
+    #[test]
+    fn test_question_mark() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("how are you question mark"), "how are you?");
+    }
+
+    #[test]
+    fn test_exclamation_mark() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("wow exclamation mark"), "wow!");
+    }
+
+    #[test]
+    fn test_new_line() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("first new line second"), "first\nsecond");
+    }
+
+    #[test]
+    fn test_new_paragraph() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("first new paragraph second"), "first\n\nsecond");
+    }
+
+    #[test]
+    fn test_multiple_commands() {
+        let mut p = en_processor();
+        assert_eq!(
+            p.apply("hello comma world period how are you question mark"),
+            "hello, world. how are you?"
+        );
+    }
+
+    #[test]
+    fn test_case_insensitive() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello Period"), "hello.");
+    }
+
+    #[test]
+    fn test_no_commands_passthrough() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("just regular text"), "just regular text");
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let mut p = en_processor();
+        assert_eq!(p.apply(""), "");
+    }
+
+    #[test]
+    fn test_all_caps_toggle() {
+        let mut p = en_processor();
+        assert_eq!(
+            p.apply("hello all caps world end caps foo"),
+            "hello WORLD foo"
+        );
+    }
+
+    #[test]
+    fn test_caps_persists_across_words() {
+        let mut p = en_processor();
+        assert_eq!(
+            p.apply("all caps hello world end caps done"),
+            "HELLO WORLD done"
+        );
+    }
+
+    #[test]
+    fn test_user_overrides() {
+        let mut overrides = HashMap::new();
+        overrides.insert("smiley".to_string(), ":)".to_string());
+        overrides.insert("at sign".to_string(), "@".to_string());
+
+        let mut p = VoiceCommandProcessor::new("en", &overrides);
+        assert_eq!(p.apply("hello smiley"), "hello :)");
+        assert_eq!(p.apply("user at sign example"), "user @ example");
+    }
+
+    #[test]
+    fn test_override_replaces_builtin() {
+        let mut overrides = HashMap::new();
+        // Override "period" to produce "!!!" instead of "."
+        overrides.insert("period".to_string(), "!!!".to_string());
+
+        let mut p = VoiceCommandProcessor::new("en", &overrides);
+        assert_eq!(p.apply("hello period"), "hello !!!");
+    }
+
+    #[test]
+    fn test_word_boundary_no_partial_match() {
+        let mut p = en_processor();
+        // "periodic" should not trigger "period" replacement
+        assert_eq!(p.apply("periodic table"), "periodic table");
+    }
+
+    #[test]
+    fn test_colon_and_semicolon() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("note colon important"), "note: important");
+        assert_eq!(p.apply("done semicolon next"), "done; next");
+    }
+
+    #[test]
+    fn test_ellipsis() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("and then ellipsis"), "and then...");
+    }
+
+    #[test]
+    fn test_quotes() {
+        let mut p = en_processor();
+        assert_eq!(
+            p.apply("he said open quote hello close quote"),
+            "he said \"hello\""
+        );
+    }
+
+    #[test]
+    fn test_parentheses() {
+        let mut p = en_processor();
+        assert_eq!(
+            p.apply("note open parenthesis important close parenthesis"),
+            "note (important)"
+        );
+    }
+
+    #[test]
+    fn test_tab() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("indent tab code"), "indent\tcode");
+    }
+
+    #[test]
+    fn test_dash_and_hyphen() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("well dash that is it"), "well — that is it");
+        assert_eq!(p.apply("self hyphen aware"), "self-aware");
+    }
+
+    // ── German language tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_german_commands() {
+        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        assert_eq!(p.apply("hallo punkt"), "hallo.");
+        assert_eq!(p.apply("hallo komma welt"), "hallo, welt");
+        assert_eq!(p.apply("was fragezeichen"), "was?");
+    }
+
+    // ── Spanish language tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_spanish_commands() {
+        let mut p = VoiceCommandProcessor::new("es", &HashMap::new());
+        assert_eq!(p.apply("hola punto"), "hola.");
+        assert_eq!(p.apply("hola coma mundo"), "hola, mundo");
+    }
+
+    // ── French language tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_french_commands() {
+        let mut p = VoiceCommandProcessor::new("fr", &HashMap::new());
+        assert_eq!(p.apply("bonjour point"), "bonjour.");
+        assert_eq!(p.apply("bonjour virgule monde"), "bonjour, monde");
+    }
+
+    // ── PostProcessorStation tests ───────────────────────────────────────
+
+    #[test]
+    fn test_station_passthrough_no_processors() {
+        let mut station = PostProcessorStation::new(vec![]);
+        let input = TranscribedText::new("hello world".to_string(), Instant::now());
+        let result = station.process(input).unwrap().unwrap();
+        assert_eq!(result.text, "hello world");
+    }
+
+    #[test]
+    fn test_station_with_voice_commands() {
+        let processor = Box::new(VoiceCommandProcessor::new("en", &HashMap::new()));
+        let mut station = PostProcessorStation::new(vec![processor]);
+        let input = TranscribedText::new("hello comma world period".to_string(), Instant::now());
+        let result = station.process(input).unwrap().unwrap();
+        assert_eq!(result.text, "hello, world.");
+    }
+
+    #[test]
+    fn test_station_filters_empty_result() {
+        // A processor that returns empty string
+        struct EmptyProcessor;
+        impl PostProcessor for EmptyProcessor {
+            fn process(&mut self, _text: &str) -> String {
+                String::new()
+            }
+            fn name(&self) -> &'static str {
+                "empty"
+            }
+        }
+
+        let mut station = PostProcessorStation::new(vec![Box::new(EmptyProcessor)]);
+        let input = TranscribedText::new("hello".to_string(), Instant::now());
+        let result = station.process(input).unwrap();
+        assert!(
+            result.is_none(),
+            "Empty post-processed text should be filtered"
+        );
+    }
+
+    #[test]
+    fn test_station_preserves_timestamp() {
+        let processor = Box::new(VoiceCommandProcessor::new("en", &HashMap::new()));
+        let mut station = PostProcessorStation::new(vec![processor]);
+        let ts = Instant::now();
+        let input = TranscribedText::new("hello period".to_string(), ts);
+        let result = station.process(input).unwrap().unwrap();
+        assert_eq!(result.text, "hello.");
+        assert_eq!(result.timestamp, ts);
+    }
+
+    #[test]
+    fn test_station_chains_multiple_processors() {
+        // First processor: voice commands
+        let voice = Box::new(VoiceCommandProcessor::new("en", &HashMap::new()));
+        // Second processor: uppercase everything
+        struct UpperProcessor;
+        impl PostProcessor for UpperProcessor {
+            fn process(&mut self, text: &str) -> String {
+                text.to_uppercase()
+            }
+            fn name(&self) -> &'static str {
+                "upper"
+            }
+        }
+
+        let mut station = PostProcessorStation::new(vec![voice, Box::new(UpperProcessor)]);
+        let input = TranscribedText::new("hello period".to_string(), Instant::now());
+        let result = station.process(input).unwrap().unwrap();
+        assert_eq!(result.text, "HELLO.");
+    }
+
+    #[test]
+    fn test_unknown_language_falls_back_to_english() {
+        let mut p = VoiceCommandProcessor::new("xx", &HashMap::new());
+        // Should still recognize English commands as fallback
+        assert_eq!(p.apply("hello period"), "hello.");
+    }
+
+    #[test]
+    fn test_auto_language_uses_english() {
+        let mut p = VoiceCommandProcessor::new("auto", &HashMap::new());
+        assert_eq!(p.apply("hello period"), "hello.");
+    }
+
+    #[test]
+    fn test_full_stop_alias() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello full stop"), "hello.");
+    }
+
+    #[test]
+    fn test_exclamation_point_alias() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("wow exclamation point"), "wow!");
+    }
+
+    #[test]
+    fn test_longer_phrase_matches_first() {
+        // "new paragraph" should match before "new line"
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello new paragraph world"), "hello\n\nworld");
+    }
+
+    #[test]
+    fn test_command_at_start() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("period hello"), ". hello");
+    }
+
+    #[test]
+    fn test_consecutive_commands() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello period period period"), "hello...");
+    }
+}

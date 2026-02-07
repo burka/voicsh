@@ -15,6 +15,13 @@ voicsh devices                  # list audio input devices
 voicsh models list              # available models
 voicsh models install base.en   # download a model
 voicsh check                    # verify system dependencies
+
+# Daemon mode
+voicsh start                    # start background daemon (model stays in memory)
+voicsh stop                     # stop the daemon
+voicsh toggle                   # toggle recording on/off
+voicsh status                   # show daemon health
+voicsh install-service          # install systemd user service
 ```
 
 ### Verbosity
@@ -26,9 +33,9 @@ voicsh check                    # verify system dependencies
 ## How it works
 
 ```
-Mic/WAV → VAD → Chunker → Whisper → Text injection
-                                      ↓
-                              portal / wtype / ydotool
+Mic/WAV → VAD → Chunker → Whisper → Post-processor → Text injection
+                                                        ↓
+                                                portal / wtype / ydotool
 ```
 
 1. Audio captured via cpal (mic) or hound (WAV file)
@@ -113,9 +120,45 @@ language = "auto"
 [input]
 method = "Clipboard"
 paste_key = "auto"          # auto-detects terminal vs GUI
+
+[voice_commands]
+enabled = true              # enable spoken punctuation/formatting (default: true)
+
+[voice_commands.commands]   # add or override voice commands
+"smiley" = ":)"
+"at sign" = "@"
 ```
 
 Environment overrides: `VOICSH_MODEL=small.en voicsh`
+
+## Voice commands
+
+Spoken punctuation and formatting are processed automatically. Say "period" and get `.`, say "new line" and get a line break.
+
+Built-in commands (English):
+
+| Spoken phrase | Output |
+|---------------|--------|
+| period / full stop | `.` |
+| comma | `,` |
+| question mark | `?` |
+| exclamation mark | `!` |
+| colon | `:` |
+| semicolon | `;` |
+| new line | `\n` |
+| new paragraph | `\n\n` |
+| all caps | toggle uppercase on |
+| end caps | toggle uppercase off |
+| open quote / close quote | `"` |
+| open parenthesis / close parenthesis | `(` `)` |
+| dash | ` — ` |
+| hyphen | `-` |
+| ellipsis | `...` |
+| tab | `\t` |
+
+Built-in commands are also available for German, Spanish, French, Portuguese, Italian, Dutch, Polish, Russian, Japanese, Chinese, and Korean. The language is selected from `stt.language` in config.
+
+Add custom commands in `[voice_commands.commands]` — they take precedence over built-ins. Set `voice_commands.enabled = false` to disable.
 
 ## Wayland compatibility
 

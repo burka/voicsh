@@ -5,6 +5,7 @@ use crate::audio::vad::{Clock, SystemClock, VadConfig};
 use crate::error::Result;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::error::{ErrorReporter, LogReporter};
+use crate::pipeline::post_processor::{PostProcessor, PostProcessorStation};
 use crate::pipeline::sink::{SinkStation, TextSink};
 use crate::pipeline::station::StationRunner;
 use crate::pipeline::types::AudioFrame;
@@ -36,6 +37,7 @@ pub struct PipelineConfig {
     pub vad_buffer: usize,
     pub chunk_buffer: usize,
     pub transcribe_buffer: usize,
+    pub post_process_buffer: usize,
 }
 
 impl Default for PipelineConfig {
@@ -51,6 +53,7 @@ impl Default for PipelineConfig {
             vad_buffer: 16,
             chunk_buffer: 4,
             transcribe_buffer: 4,
+            post_process_buffer: 4,
         }
     }
 }
@@ -133,9 +136,20 @@ impl Pipeline {
     /// Handle to control and stop the pipeline
     pub fn start(
         self,
+        audio_source: Box<dyn AudioSource>,
+        transcriber: Arc<dyn Transcriber>,
+        sink: Box<dyn TextSink>,
+    ) -> Result<PipelineHandle> {
+        self.start_with_post_processors(audio_source, transcriber, sink, vec![])
+    }
+
+    /// Starts the pipeline with optional post-processors between transcriber and sink.
+    pub fn start_with_post_processors(
+        self,
         mut audio_source: Box<dyn AudioSource>,
         transcriber: Arc<dyn Transcriber>,
         sink: Box<dyn TextSink>,
+        post_processors: Vec<Box<dyn PostProcessor>>,
     ) -> Result<PipelineHandle> {
         let running = Arc::new(AtomicBool::new(true));
         let sequence = Arc::new(AtomicU64::new(0));
@@ -183,12 +197,31 @@ impl Pipeline {
             self.error_reporter.clone(),
         );
 
+        // Wire post-processor between transcriber and sink (if any processors provided)
+        let mut extra_threads: Vec<JoinHandle<()>> = Vec::new();
+        let sink_input_rx = if post_processors.is_empty() {
+            transcribe_rx
+        } else {
+            let (post_tx, post_rx) = bounded(self.config.post_process_buffer);
+            let post_station = PostProcessorStation::new(post_processors);
+            let post_runner = StationRunner::spawn(
+                post_station,
+                transcribe_rx,
+                post_tx,
+                self.error_reporter.clone(),
+            );
+            extra_threads.push(thread::spawn(move || {
+                let _ = post_runner.join();
+            }));
+            post_rx
+        };
+
         // For the terminal station, create a dummy output channel
         let (sink_out_tx, sink_out_rx) = bounded::<()>(self.config.transcribe_buffer);
 
         let sink_runner = StationRunner::spawn(
             sink_station,
-            transcribe_rx,
+            sink_input_rx,
             sink_out_tx,
             self.error_reporter.clone(),
         );
@@ -292,6 +325,7 @@ impl Pipeline {
 
         // Collect all thread handles
         let mut threads = vec![audio_handle, drain_handle];
+        threads.extend(extra_threads);
 
         // Wrap runner join handles
         threads.push(thread::spawn(move || {

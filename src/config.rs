@@ -12,6 +12,7 @@ pub struct Config {
     pub audio: AudioConfig,
     pub stt: SttConfig,
     pub input: InputConfig,
+    pub voice_commands: VoiceCommandConfig,
 }
 
 /// Audio capture configuration
@@ -39,6 +40,25 @@ pub struct SttConfig {
 pub struct InputConfig {
     pub method: InputMethod,
     pub paste_key: String,
+}
+
+/// Voice command configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VoiceCommandConfig {
+    /// Enable voice command processing (default: true)
+    pub enabled: bool,
+    /// User-defined command overrides: spoken phrase → replacement text
+    pub commands: std::collections::HashMap<String, String>,
+}
+
+impl Default for VoiceCommandConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            commands: std::collections::HashMap::new(),
+        }
+    }
 }
 
 /// Input method enumeration
