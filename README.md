@@ -15,6 +15,13 @@ voicsh devices                  # list audio input devices
 voicsh models list              # available models
 voicsh models install base.en   # download a model
 voicsh check                    # verify system dependencies
+
+voicsh daemon                   # start long-running daemon (model stays in memory)
+voicsh start                    # tell daemon to start recording
+voicsh stop                     # tell daemon to stop recording
+voicsh toggle                   # toggle recording on/off
+voicsh status                   # show daemon health (recording state, model info)
+voicsh install-service          # install systemd user service
 ```
 
 ### Verbosity
@@ -37,6 +44,25 @@ Mic/WAV → VAD → Chunker → Whisper → Text injection
 4. Text injected via xdg-desktop-portal (GNOME/KDE), wtype, or ydotool
 
 Pipe mode (`cat file.wav | voicsh`) skips injection and writes to stdout.
+
+### Daemon mode
+
+For lower latency, run voicsh as a daemon. The Whisper model stays loaded in memory (~300 MB for base.en), so subsequent recordings start instantly.
+
+```bash
+voicsh daemon                   # start daemon (foreground)
+voicsh install-service          # install as systemd user service
+systemctl --user enable --now voicsh
+```
+
+Control via IPC (Unix socket):
+
+```bash
+voicsh start                    # start recording
+voicsh stop                     # stop and inject transcription
+voicsh toggle                   # toggle recording on/off
+voicsh status                   # check daemon health
+```
 
 ## Install
 
