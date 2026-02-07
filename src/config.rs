@@ -440,8 +440,8 @@ mod tests {
             // If it loads, the values should have been converted to unsigned
             // or the parsing library might reject them
             assert!(
-                config.audio.sample_rate >= 0,
-                "Sample rate should not be negative"
+                config.audio.sample_rate > 0,
+                "Sample rate should be positive"
             );
         }
     }
