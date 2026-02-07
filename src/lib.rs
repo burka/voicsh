@@ -2,6 +2,11 @@
 //!
 //! Offline-first voice-to-text with optional LLM refinement.
 
+// Enforce error handling discipline — see CLAUDE.md "Error Handling Rules"
+#![warn(clippy::unwrap_used)]
+#![warn(clippy::expect_used)]
+#![warn(clippy::let_underscore_must_use)]
+
 pub mod audio;
 #[cfg(feature = "cli")]
 pub mod cli;

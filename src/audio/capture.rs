@@ -247,54 +247,57 @@ impl CpalAudioSource {
     }
 
     /// Build the audio stream with the configured format.
+    ///
+    /// Tries i16/16kHz/mono first (preferred). If the device doesn't support
+    /// that natively, falls back to f32 capture with software conversion.
+    /// PipeWire/PulseAudio backends often handle format conversion transparently,
+    /// so the i16 path usually succeeds even for devices that only report f32.
     fn build_stream(&self) -> Result<cpal::Stream> {
-        // Get supported configurations
-        let mut supported_configs =
-            self.device
-                .supported_input_configs()
-                .map_err(|e| VoicshError::AudioCapture {
-                    message: format!("Failed to query supported configs: {}", e),
-                })?;
-
-        // Find a config that supports our requirements
-        let _config = supported_configs
-            .find(|c| {
-                c.channels() == 1
-                    && c.sample_format() == cpal::SampleFormat::I16
-                    && c.min_sample_rate().0 <= self.sample_rate
-                    && c.max_sample_rate().0 >= self.sample_rate
-            })
-            .ok_or_else(|| VoicshError::AudioFormatMismatch {
-                expected: "16kHz mono i16".to_string(),
-                actual: "no matching format found".to_string(),
-            })?;
-
         let stream_config = cpal::StreamConfig {
             channels: 1,
             sample_rate: cpal::SampleRate(self.sample_rate),
             buffer_size: cpal::BufferSize::Default,
         };
 
-        let buffer = Arc::clone(&self.buffer);
         let err_callback = |err| {
             eprintln!("Audio stream error: {}", err);
         };
 
+        // Try i16 directly — works with PipeWire/PulseAudio which convert transparently
+        let buffer = Arc::clone(&self.buffer);
+        if let Ok(stream) = self.device.build_input_stream(
+            &stream_config,
+            move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                if let Ok(mut buf) = buffer.lock() {
+                    buf.extend_from_slice(data);
+                }
+            },
+            err_callback,
+            None,
+        ) {
+            return Ok(stream);
+        }
+
+        // Fallback: capture as f32 and convert to i16 in software.
+        // This handles Bluetooth/ALSA devices that only expose float formats.
+        let buffer = Arc::clone(&self.buffer);
         let stream = self
             .device
             .build_input_stream(
                 &stream_config,
-                move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    // Accumulate samples in the buffer
+                move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     if let Ok(mut buf) = buffer.lock() {
-                        buf.extend_from_slice(data);
+                        buf.extend(
+                            data.iter()
+                                .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16),
+                        );
                     }
                 },
                 err_callback,
                 None,
             )
             .map_err(|e| VoicshError::AudioCapture {
-                message: format!("Failed to build input stream: {}", e),
+                message: format!("Failed to build input stream (tried i16 and f32): {}", e),
             })?;
 
         Ok(stream)

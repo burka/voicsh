@@ -203,14 +203,14 @@ impl SilenceDetectorStation {
         };
 
         eprint!("\r[{}] {:12}{} ", bar, status, ambient_info);
-        let _ = io::stderr().flush();
+        let _flush = io::stderr().flush();
     }
 
     /// Clear the level display line.
     fn clear_level_display(&self) {
         if self.config.show_levels {
             eprint!("\r{:60}\r", "");
-            let _ = io::stderr().flush();
+            let _flush = io::stderr().flush();
         }
     }
 

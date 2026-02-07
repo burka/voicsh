@@ -196,8 +196,10 @@ impl StitcherStation {
 
             // If we've received final and have all results, combine and output
             if final_received {
-                if let Some(combined) = self.get_combined() {
-                    let _ = output.send(combined).await;
+                if let Some(combined) = self.get_combined()
+                    && output.send(combined).await.is_err()
+                {
+                    eprintln!("voicsh: stitcher output receiver dropped");
                 }
                 break;
             }
@@ -213,8 +215,8 @@ impl StitcherStation {
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
                 .join(" ");
-            if !combined.is_empty() {
-                let _ = output.send(combined).await;
+            if !combined.is_empty() && output.send(combined).await.is_err() {
+                eprintln!("voicsh: stitcher output receiver dropped");
             }
         }
     }

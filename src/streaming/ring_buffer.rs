@@ -94,7 +94,9 @@ impl<A: AudioSource + 'static> RingBuffer<A> {
             }
 
             // Clean up
-            let _ = self.audio_source.stop();
+            if let Err(e) = self.audio_source.stop() {
+                eprintln!("voicsh: failed to stop audio source: {e}");
+            }
         });
 
         let handle = RingBufferHandle {

@@ -79,7 +79,8 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
 
     // Check if already installed
     if is_model_installed(name) {
-        let path = model_path(name).expect("path should exist for installed model");
+        let path = model_path(name)
+            .ok_or_else(|| VoicshError::Other(format!("Model '{}' not found in catalog", name)))?;
         if !progress {
             eprintln!(
                 "Model '{}' is already installed at {}",
@@ -96,7 +97,8 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
         .map_err(|e| VoicshError::Other(format!("Failed to create models directory: {}", e)))?;
 
     // Determine output path
-    let output_path = model_path(name).expect("path should exist for valid model");
+    let output_path = model_path(name)
+        .ok_or_else(|| VoicshError::Other(format!("Model '{}' not found in catalog", name)))?;
 
     if progress {
         eprintln!(
@@ -126,9 +128,11 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
     let pb = if progress {
         let pb = ProgressBar::new(total_size);
         pb.set_style(
+            // SAFETY: hardcoded template string — always valid
+            #[allow(clippy::expect_used)]
             ProgressStyle::default_bar()
                 .template("{spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-                .unwrap()
+                .expect("hardcoded progress bar template")
                 .progress_chars("#>-"),
         );
         Some(pb)
@@ -165,7 +169,9 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
         let calculated_hash = format!("{:x}", hasher.finalize());
         if calculated_hash != model_info.sha1 {
             // Remove corrupted file
-            let _ = fs::remove_file(&output_path);
+            if let Err(e) = fs::remove_file(&output_path) {
+                eprintln!("voicsh: failed to remove corrupted download: {e}");
+            }
             return Err(VoicshError::Other(format!(
                 "SHA-1 checksum mismatch. Expected: {}, got: {}",
                 model_info.sha1, calculated_hash

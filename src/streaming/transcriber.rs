@@ -100,7 +100,9 @@ impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
                             text: transcription.text,
                             is_final,
                         };
-                        let _ = output.send(frame).await;
+                        if output.send(frame).await.is_err() {
+                            eprintln!("voicsh: transcriber output receiver dropped");
+                        }
                     }
                     Ok(Err(e)) => {
                         eprintln!("Transcription error for chunk {}: {}", chunk_id, e);
@@ -119,7 +121,8 @@ impl<T: Transcriber + Send + Sync + 'static> TranscriberStation<T> {
 
         // Wait for all pending transcriptions by acquiring all permits
         // This ensures we don't exit before all work is done
-        let _ = semaphore.acquire_many(max_concurrent as u32).await;
+        // Wait for all in-flight transcriptions to complete before exiting
+        let _permits = semaphore.acquire_many(max_concurrent as u32).await;
     }
 }
 

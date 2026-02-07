@@ -36,6 +36,7 @@ pub struct MockClock {
     current: Arc<Mutex<Instant>>,
 }
 
+#[allow(clippy::unwrap_used)] // Mutex poisoning in test mock = test already panicked
 impl MockClock {
     /// Creates a new mock clock starting at the current instant.
     pub fn new() -> Self {
@@ -57,6 +58,7 @@ impl Default for MockClock {
     }
 }
 
+#[allow(clippy::unwrap_used)] // Mutex poisoning in test mock = test already panicked
 impl Clock for MockClock {
     fn now(&self) -> Instant {
         *self.current.lock().unwrap()

@@ -118,7 +118,9 @@ pub fn list_models() -> &'static [ModelInfo] {
 ///
 /// The default model info.
 pub fn default_model() -> &'static ModelInfo {
-    get_model("base").expect("base model should always be present in catalog")
+    // SAFETY: "base" is hardcoded in MODELS constant — always present.
+    #[allow(clippy::expect_used)]
+    get_model("base").expect("base model must be present in MODELS catalog")
 }
 
 /// Return the multilingual variant for a model name.

@@ -146,7 +146,11 @@ impl Config {
     #[cfg(feature = "cli")]
     pub fn default_path() -> PathBuf {
         dirs::config_dir()
-            .expect("Could not determine config directory")
+            .unwrap_or_else(|| {
+                eprintln!("voicsh: could not determine config directory, using ~/.config");
+                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+                    .join(".config")
+            })
             .join("voicsh")
             .join("config.toml")
     }

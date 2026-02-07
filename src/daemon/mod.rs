@@ -159,7 +159,9 @@ pub async fn run_daemon(
     server.stop().await?;
 
     // Wait for server task to finish
-    let _ = server_handle.await;
+    if let Err(e) = server_handle.await {
+        eprintln!("voicsh: daemon server task failed: {e}");
+    }
 
     if !quiet {
         eprintln!("Daemon stopped.");

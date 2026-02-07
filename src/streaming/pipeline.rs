@@ -184,7 +184,7 @@ impl StreamingPipeline {
         ring_buffer_handle.stop();
 
         // Wait for all tasks to complete
-        let _ = tokio::join!(detector_task, chunker_task, transcriber_task, stitcher_task);
+        let _results = tokio::join!(detector_task, chunker_task, transcriber_task, stitcher_task);
 
         result.ok_or_else(|| VoicshError::Transcription {
             message: "Pipeline completed without producing output".to_string(),
