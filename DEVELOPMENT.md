@@ -1,5 +1,9 @@
 # voicsh Development Guide
 
+## Build Prerequisites
+
+Requires Rust (via rustup), cmake, pkg-config, and ALSA development headers. On Debian/Ubuntu: `sudo apt install cmake pkg-config libasound2-dev`. On Fedora: `sudo dnf install cmake pkg-config alsa-lib-devel`. For runtime text injection, install `wl-clipboard` plus either `wtype` (wlroots) or `ydotool` (fallback).
+
 ## Testing
 
 ### Commands
