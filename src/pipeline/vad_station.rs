@@ -7,6 +7,12 @@ use crate::pipeline::types::{AudioFrame, VadFrame};
 use std::io::{self, Write};
 use std::sync::Arc;
 
+/// Number of frames to wait before warning about no audio (~3 seconds at 60Hz polling).
+const NO_AUDIO_WARNING_FRAMES: u64 = 180;
+
+/// Threshold below which audio is considered "no signal" (essentially zero).
+const NO_AUDIO_THRESHOLD: f32 = 0.0001;
+
 /// VAD station that processes audio frames and annotates them with speech detection.
 pub struct VadStation {
     vad: Vad<Arc<dyn Clock>>,
@@ -15,6 +21,12 @@ pub struct VadStation {
     level_history: Vec<f32>,
     level_history_max: usize,
     sample_rate: u32,
+    /// Count of frames processed.
+    frames_processed: u64,
+    /// Whether we've shown the no-audio warning.
+    no_audio_warning_shown: bool,
+    /// Count of consecutive frames with near-zero audio.
+    zero_audio_frames: u64,
 }
 
 impl VadStation {
@@ -32,6 +44,9 @@ impl VadStation {
             level_history: Vec::new(),
             level_history_max: 100,
             sample_rate: 16000,
+            frames_processed: 0,
+            no_audio_warning_shown: false,
+            zero_audio_frames: 0,
         }
     }
 
@@ -69,6 +84,27 @@ impl VadStation {
         // Set threshold to noise_floor * 2.0, clamped to reasonable bounds
         let new_threshold = (noise_floor * 2.0).clamp(0.002, 0.2);
         self.vad.set_threshold(new_threshold);
+    }
+
+    /// Displays a visual level meter to stderr.
+    /// Check for no-audio condition and warn user.
+    fn check_no_audio(&mut self, level: f32) {
+        if level < NO_AUDIO_THRESHOLD {
+            self.zero_audio_frames += 1;
+        } else {
+            self.zero_audio_frames = 0;
+        }
+
+        // Show warning after sustained period of no audio
+        if !self.no_audio_warning_shown && self.zero_audio_frames >= NO_AUDIO_WARNING_FRAMES {
+            self.no_audio_warning_shown = true;
+            eprintln!();
+            eprintln!("Warning: No audio detected for 3+ seconds.");
+            eprintln!("  - Check that your microphone is connected and selected");
+            eprintln!("  - Run: pactl list sources short");
+            eprintln!("  - Run: voicsh devices");
+            eprintln!();
+        }
     }
 
     /// Displays a visual level meter to stderr.
@@ -125,8 +161,15 @@ impl Station for VadStation {
             return Ok(None);
         }
 
+        self.frames_processed += 1;
+
         // Process VAD
         let result = self.vad.process_with_info(&frame.samples, self.sample_rate);
+
+        // Check for no-audio condition (only when showing levels, i.e., verbosity >= 1)
+        if self.show_levels {
+            self.check_no_audio(result.level);
+        }
 
         // Update level history for auto-leveling
         if self.auto_level {
@@ -328,5 +371,87 @@ mod tests {
         assert!(station.show_levels);
         assert!(station.auto_level);
         assert_eq!(station.sample_rate, 48000);
+    }
+
+    #[test]
+    fn test_no_audio_detection_counts_zero_frames() {
+        let config = VadConfig::default();
+        let mut station = VadStation::new(config).with_show_levels(true);
+
+        // Send silence frames
+        for i in 0..50 {
+            let silence = make_silence(1000);
+            let frame = AudioFrame::new(silence, Instant::now(), i);
+            station.process(frame).unwrap();
+        }
+
+        // Should have counted zero-audio frames
+        assert_eq!(station.zero_audio_frames, 50);
+        // Warning not shown yet (need 180 frames)
+        assert!(!station.no_audio_warning_shown);
+    }
+
+    #[test]
+    fn test_no_audio_detection_resets_on_audio() {
+        let config = VadConfig::default();
+        let mut station = VadStation::new(config).with_show_levels(true);
+
+        // Send silence frames
+        for i in 0..50 {
+            let silence = make_silence(1000);
+            let frame = AudioFrame::new(silence, Instant::now(), i);
+            station.process(frame).unwrap();
+        }
+        assert_eq!(station.zero_audio_frames, 50);
+
+        // Send audio frame - should reset counter
+        let speech = make_speech(1000, 3000);
+        let frame = AudioFrame::new(speech, Instant::now(), 51);
+        station.process(frame).unwrap();
+
+        assert_eq!(station.zero_audio_frames, 0);
+    }
+
+    #[test]
+    fn test_no_audio_warning_triggers_after_threshold() {
+        let config = VadConfig::default();
+        let mut station = VadStation::new(config).with_show_levels(true);
+
+        // Send enough silence frames to trigger warning
+        for i in 0..200 {
+            let silence = make_silence(1000);
+            let frame = AudioFrame::new(silence, Instant::now(), i);
+            station.process(frame).unwrap();
+        }
+
+        // Warning should have been shown
+        assert!(station.no_audio_warning_shown);
+    }
+
+    #[test]
+    fn test_no_audio_warning_only_shown_once() {
+        let config = VadConfig::default();
+        let mut station = VadStation::new(config).with_show_levels(true);
+
+        // Trigger warning
+        for i in 0..200 {
+            let silence = make_silence(1000);
+            let frame = AudioFrame::new(silence, Instant::now(), i);
+            station.process(frame).unwrap();
+        }
+        assert!(station.no_audio_warning_shown);
+
+        // Reset counter with audio
+        let speech = make_speech(1000, 3000);
+        let frame = AudioFrame::new(speech, Instant::now(), 200);
+        station.process(frame).unwrap();
+
+        // Send more silence - warning flag should stay true (won't show again)
+        for i in 201..400 {
+            let silence = make_silence(1000);
+            let frame = AudioFrame::new(silence, Instant::now(), i);
+            station.process(frame).unwrap();
+        }
+        assert!(station.no_audio_warning_shown);
     }
 }
