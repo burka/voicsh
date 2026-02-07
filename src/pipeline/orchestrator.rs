@@ -212,6 +212,9 @@ impl Pipeline {
         // Start audio capture
         audio_source.start()?;
 
+        // Capture source type before moving into thread
+        let source_is_finite = audio_source.is_finite();
+
         // Spawn audio polling thread
         let audio_running = running.clone();
         let audio_sequence = sequence.clone();
@@ -221,6 +224,7 @@ impl Pipeline {
 
             let mut consecutive_errors: u32 = 0;
             const MAX_CONSECUTIVE_ERRORS: u32 = 10;
+            let mut frames_sent: u64 = 0;
 
             while audio_running.load(Ordering::SeqCst) {
                 // Read samples from audio source
@@ -243,9 +247,15 @@ impl Pipeline {
                     }
                 };
 
-                // Source exhausted — exit polling loop.
                 if samples.is_empty() {
-                    break;
+                    if source_is_finite {
+                        // File/pipe source exhausted — exit polling loop.
+                        break;
+                    }
+                    // Live source (microphone): empty read is normal at startup
+                    // while the audio device initializes. Keep polling.
+                    thread::sleep(poll_interval);
+                    continue;
                 }
 
                 // Create audio frame
@@ -261,9 +271,17 @@ impl Pipeline {
                     if !audio_running.load(Ordering::SeqCst) {
                         break;
                     }
+                } else {
+                    frames_sent += 1;
                 }
 
                 thread::sleep(poll_interval);
+            }
+
+            if frames_sent == 0 && !source_is_finite {
+                eprintln!("voicsh: no audio frames captured from microphone");
+                eprintln!("  - Check that your microphone is connected and selected");
+                eprintln!("  - Run: voicsh devices");
             }
 
             // Stop audio capture
@@ -348,6 +366,10 @@ mod tests {
             Ok(())
         }
 
+        fn is_finite(&self) -> bool {
+            true
+        }
+
         fn read_samples(&mut self) -> Result<Vec<i16>> {
             let count = self.read_count.fetch_add(1, Ordering::Relaxed);
             if count >= self.max_reads {
@@ -381,6 +403,10 @@ mod tests {
 
         fn stop(&mut self) -> Result<()> {
             Ok(())
+        }
+
+        fn is_finite(&self) -> bool {
+            true
         }
 
         fn read_samples(&mut self) -> Result<Vec<i16>> {

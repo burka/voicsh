@@ -95,6 +95,10 @@ impl AudioSource for WavAudioSource {
         Ok(())
     }
 
+    fn is_finite(&self) -> bool {
+        true
+    }
+
     fn read_samples(&mut self) -> Result<Vec<i16>> {
         if self.position >= self.samples.len() {
             return Ok(Vec::new());

@@ -22,6 +22,13 @@ pub trait AudioSource: Send + Sync {
     /// # Returns
     /// Vector of 16-bit PCM audio samples, or an error
     fn read_samples(&mut self) -> Result<Vec<i16>>;
+
+    /// Returns true if this source will eventually stop producing samples (file, pipe).
+    /// Returns false for live sources (microphone) where empty reads are normal.
+    /// The audio polling loop uses this to distinguish "no data yet" from "source exhausted".
+    fn is_finite(&self) -> bool {
+        false
+    }
 }
 
 /// Blanket implementation for `Box<dyn AudioSource>` to enable trait object usage
@@ -37,6 +44,10 @@ impl AudioSource for Box<dyn AudioSource> {
 
     fn read_samples(&mut self) -> Result<Vec<i16>> {
         (**self).read_samples()
+    }
+
+    fn is_finite(&self) -> bool {
+        (**self).is_finite()
     }
 }
 
@@ -169,6 +180,10 @@ impl AudioSource for MockAudioSource {
             self.is_started = false;
             Ok(())
         }
+    }
+
+    fn is_finite(&self) -> bool {
+        self.frame_sequence.is_some()
     }
 
     fn read_samples(&mut self) -> Result<Vec<i16>> {
@@ -331,6 +346,46 @@ mod tests {
             }
             _ => panic!("Expected AudioCapture error"),
         }
+    }
+
+    #[test]
+    fn test_mock_audio_source_is_not_finite_by_default() {
+        let source = MockAudioSource::new();
+        assert!(
+            !source.is_finite(),
+            "Mock without frame sequence should be live (not finite)"
+        );
+    }
+
+    #[test]
+    fn test_mock_audio_source_is_finite_with_frame_sequence() {
+        let source = MockAudioSource::new().with_frame_sequence(vec![FramePhase {
+            samples: vec![0i16; 160],
+            count: 5,
+        }]);
+        assert!(
+            source.is_finite(),
+            "Mock with frame sequence should be finite"
+        );
+    }
+
+    #[test]
+    fn test_is_finite_through_trait_object() {
+        let live: Box<dyn AudioSource> = Box::new(MockAudioSource::new());
+        assert!(
+            !live.is_finite(),
+            "Live source through trait object should be not finite"
+        );
+
+        let finite: Box<dyn AudioSource> =
+            Box::new(MockAudioSource::new().with_frame_sequence(vec![FramePhase {
+                samples: vec![0i16; 160],
+                count: 1,
+            }]));
+        assert!(
+            finite.is_finite(),
+            "Finite source through trait object should be finite"
+        );
     }
 
     #[test]
