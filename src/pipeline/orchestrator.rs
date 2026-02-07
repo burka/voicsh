@@ -73,7 +73,14 @@ impl PipelineHandle {
 
         // Wait for all threads to complete
         for handle in self.threads.drain(..) {
-            let _ = handle.join();
+            if let Err(panic_info) = handle.join() {
+                let msg = panic_info
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                    .unwrap_or("unknown panic");
+                eprintln!("voicsh: pipeline thread panicked: {msg}");
+            }
         }
 
         // Receive sink's finish() result
@@ -212,12 +219,25 @@ impl Pipeline {
             // Poll audio source at ~60Hz (every 16ms)
             let poll_interval = Duration::from_millis(16);
 
+            let mut consecutive_errors: u32 = 0;
+            const MAX_CONSECUTIVE_ERRORS: u32 = 10;
+
             while audio_running.load(Ordering::SeqCst) {
                 // Read samples from audio source
                 let samples = match audio_source.read_samples() {
-                    Ok(s) => s,
-                    Err(_) => {
-                        // Error reading samples - continue trying
+                    Ok(s) => {
+                        consecutive_errors = 0;
+                        s
+                    }
+                    Err(e) => {
+                        consecutive_errors += 1;
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            eprintln!(
+                                "voicsh: audio capture failed {consecutive_errors} times in a row: {e}"
+                            );
+                            eprintln!("voicsh: check your microphone connection and try again");
+                            break;
+                        }
                         thread::sleep(poll_interval);
                         continue;
                     }
@@ -247,7 +267,9 @@ impl Pipeline {
             }
 
             // Stop audio capture
-            let _ = audio_source.stop();
+            if let Err(e) = audio_source.stop() {
+                eprintln!("voicsh: failed to stop audio capture: {e}");
+            }
         });
 
         // Collect all thread handles
@@ -255,16 +277,24 @@ impl Pipeline {
 
         // Wrap runner join handles
         threads.push(thread::spawn(move || {
-            let _ = vad_runner.join();
+            if let Err(msg) = vad_runner.join() {
+                eprintln!("voicsh: {msg}");
+            }
         }));
         threads.push(thread::spawn(move || {
-            let _ = chunker_runner.join();
+            if let Err(msg) = chunker_runner.join() {
+                eprintln!("voicsh: {msg}");
+            }
         }));
         threads.push(thread::spawn(move || {
-            let _ = transcriber_runner.join();
+            if let Err(msg) = transcriber_runner.join() {
+                eprintln!("voicsh: {msg}");
+            }
         }));
         threads.push(thread::spawn(move || {
-            let _ = sink_runner.join();
+            if let Err(msg) = sink_runner.join() {
+                eprintln!("voicsh: {msg}");
+            }
         }));
 
         Ok(PipelineHandle {
@@ -652,8 +682,9 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_audio_read_error_continues() {
-        // Tests that audio read errors don't crash the pipeline
+    fn test_pipeline_audio_read_error_exits_after_threshold() {
+        // Audio source always fails → after 10 consecutive errors the audio
+        // loop exits on its own. Pipeline should stop cleanly with no output.
         let config = PipelineConfig {
             quiet: true,
             verbosity: 0,
@@ -662,7 +693,6 @@ mod tests {
 
         let pipeline = Pipeline::new(config);
 
-        // Create audio source that fails on read
         let audio_source = Box::new(MockAudioSource::new().with_read_failure());
 
         let transcriber = Arc::new(MockTranscriber::new("test-model"));
@@ -671,12 +701,43 @@ mod tests {
         let handle = pipeline.start(audio_source, transcriber, sink).unwrap();
         assert!(handle.is_running());
 
-        // Sleep briefly to allow audio thread to attempt reads
-        thread::sleep(Duration::from_millis(100));
+        // 10 errors × 16ms poll = ~160ms; give extra margin
+        thread::sleep(Duration::from_millis(300));
 
-        // Stop and verify no transcription produced
         let result = handle.stop();
-        assert!(result.is_none());
+        assert!(
+            result.is_none(),
+            "Persistent read errors should produce no transcription"
+        );
+    }
+
+    #[test]
+    fn test_pipeline_thread_panic_is_reported() {
+        // A panicking station thread should not hang the pipeline.
+        // PipelineHandle::stop() joins all threads; if any panicked the
+        // wrapper now logs via eprintln instead of silently swallowing.
+        // We verify the pipeline completes stop() without hanging.
+        let running = Arc::new(AtomicBool::new(true));
+        let panicking_handle = thread::spawn(|| {
+            panic!("intentional test panic");
+        });
+
+        let handle = PipelineHandle {
+            running: running.clone(),
+            threads: vec![panicking_handle],
+            result_rx: None,
+        };
+
+        // stop() must return without hanging — the panic is logged to stderr
+        let result = handle.stop();
+        assert!(
+            result.is_none(),
+            "Panicking thread pipeline should return None"
+        );
+        assert!(
+            !running.load(Ordering::SeqCst),
+            "Running flag should be false after stop"
+        );
     }
 
     #[test]

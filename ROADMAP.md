@@ -41,6 +41,7 @@ LLM post-processing for polished output.
 - X11 support (xdotool/xsel)
 - Profiles (per-app settings)
 - Benchmarking (`voicsh benchmark`)
+- Daemon: listen for PipeWire/PulseAudio device changes, auto-recover or show helpful message
 
 ## Non-goals
 

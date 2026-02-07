@@ -10,6 +10,7 @@ cargo build --release                                        # full build (catch
 cargo clippy --lib --no-default-features --features portal -- -D warnings
 cargo test --lib --no-default-features --features portal
 cargo test --lib --no-default-features
+cargo test
 ```
 
 ## Test Rules
@@ -18,6 +19,12 @@ cargo test --lib --no-default-features
 - `is_err()` checks must also verify the error variant or message
 - "Doesn't panic" tests must document why in a comment
 - A test without outcome validation does not count toward coverage goals
+
+## Error Handling Rules — Fail Fast, Fail Loud, Fail Helpful
+- Never silently discard errors (`let _ =` on Result is forbidden outside tests)
+- If an error means we can't do our job → exit with a helpful message
+- Cleanup/shutdown errors → `eprintln!` with context (not silent)
+- Every error message must tell the user what to do next
 
 ## Documentation Rules
 - Each .md file has **one purpose** — don't duplicate content, reference other files

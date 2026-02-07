@@ -143,8 +143,9 @@ impl Station for ChunkerStation {
     fn shutdown(&mut self) {
         if let Some(chunk) = self.flush()
             && let Some(tx) = self.flush_tx.take()
+            && tx.send(chunk).is_err()
         {
-            let _ = tx.send(chunk);
+            eprintln!("voicsh: chunker shutdown — output receiver already dropped");
         }
     }
 }
@@ -397,5 +398,24 @@ mod tests {
         assert_eq!(chunk.duration_ms, 1000);
         assert_eq!(chunk.samples.len(), 16000);
         assert_eq!(chunk.sequence, 0);
+    }
+
+    #[test]
+    fn test_chunker_shutdown_logs_on_send_failure() {
+        // Drop the receiver before shutdown so tx.send() fails.
+        // Verifies no panic — the error path logs via eprintln.
+        let config = make_test_config();
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        let mut station = ChunkerStation::new(config).with_flush_tx(tx);
+
+        // Accumulate some audio so flush() has something to send
+        let frame = make_speech_frame(vec![1; 160]);
+        station.process(frame).unwrap();
+
+        // Drop receiver so shutdown's send() will fail
+        drop(rx);
+
+        // shutdown() should log the failure but not panic
+        station.shutdown();
     }
 }

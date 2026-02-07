@@ -90,8 +90,10 @@ impl Station for SinkStation {
 
     fn shutdown(&mut self) {
         let result = self.sink.finish();
-        if let Some(tx) = self.result_tx.take() {
-            let _ = tx.send(result);
+        if let Some(tx) = self.result_tx.take()
+            && tx.send(result).is_err()
+        {
+            eprintln!("voicsh: sink shutdown — result receiver already dropped");
         }
     }
 }
@@ -435,5 +437,28 @@ mod tests {
     fn stdout_sink_name() {
         let sink = StdoutSink;
         assert_eq!(sink.name(), "stdout");
+    }
+
+    #[test]
+    fn test_sink_shutdown_logs_on_send_failure() {
+        // Drop the receiver before shutdown so tx.send() fails.
+        // Verifies no panic — the error path logs via eprintln.
+        let collector = CollectorSink::new();
+        let (result_tx, result_rx) = crossbeam_channel::bounded(1);
+
+        let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
+
+        let text = TranscribedText {
+            text: "before shutdown".to_string(),
+            timestamp: Instant::now(),
+        };
+        let processed = station.process(text).unwrap();
+        assert_eq!(processed, Some(()));
+
+        // Drop receiver so shutdown's send() will fail
+        drop(result_rx);
+
+        // shutdown() should log the failure but not panic
+        station.shutdown();
     }
 }
