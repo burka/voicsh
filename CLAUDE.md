@@ -6,6 +6,7 @@
 ## Commands Before Every Commit
 ```bash
 cargo fmt
+cargo build --release                                        # full build (catches daemon/feature-gated code)
 cargo clippy --lib --no-default-features --features portal -- -D warnings
 cargo test --lib --no-default-features --features portal
 cargo test --lib --no-default-features

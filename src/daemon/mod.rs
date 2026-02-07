@@ -188,10 +188,10 @@ async fn wait_for_sigterm() -> Result<()> {
 async fn create_transcriber(
     config: &Config,
     quiet: bool,
-    verbosity: u8,
+    _verbosity: u8,
     no_download: bool,
 ) -> Result<Arc<dyn Transcriber>> {
-    use crate::models::catalog::{english_variant, get_model, resolve_model_for_language};
+    use crate::models::catalog::{english_variant, resolve_model_for_language};
     use crate::models::download::{
         download_model, find_any_installed_model, is_model_installed, model_path,
     };
@@ -202,7 +202,7 @@ async fn create_transcriber(
     let language = &config.stt.language;
 
     // Resolve model name
-    let resolved_model = resolve_model_for_language(model_name, language);
+    let resolved_model = resolve_model_for_language(model_name, language, quiet);
 
     // Check if model is installed
     if !is_model_installed(&resolved_model) {
@@ -232,39 +232,53 @@ async fn create_transcriber(
     // Get model path
     let path = model_path(&resolved_model);
 
+    // Get model path (must exist after download check above)
+    let path = path.ok_or_else(|| VoicshError::TranscriptionModelNotFound {
+        path: resolved_model.clone(),
+    })?;
+
     // Create transcriber
     if config.stt.fan_out {
         // Fan-out mode: run English + multilingual in parallel
-        let en_model = english_variant(&resolved_model);
-        let en_path = model_path(&en_model);
+        let en_model = english_variant(&resolved_model).ok_or_else(|| {
+            VoicshError::TranscriptionModelNotFound {
+                path: format!("{}.en (English variant)", resolved_model),
+            }
+        })?;
+        let en_path =
+            model_path(en_model).ok_or_else(|| VoicshError::TranscriptionModelNotFound {
+                path: en_model.to_string(),
+            })?;
 
-        if !is_model_installed(&en_model) && !no_download {
+        if !is_model_installed(en_model) && !no_download {
             if !quiet {
                 eprintln!("Downloading English model '{}'...", en_model);
             }
-            download_model(&en_model, true).await?;
+            download_model(en_model, true).await?;
         }
 
         let en_transcriber = WhisperTranscriber::new(WhisperConfig {
             model_path: en_path,
-            language: Some("en".to_string()),
+            language: "en".to_string(),
+            threads: None,
         })?;
 
         let multilingual_transcriber = WhisperTranscriber::new(WhisperConfig {
             model_path: path,
-            language: Some(language.clone()),
+            language: language.clone(),
+            threads: None,
         })?;
 
-        Ok(Arc::new(FanOutTranscriber::new(
-            Arc::new(en_transcriber),
-            Arc::new(multilingual_transcriber),
-            verbosity,
-        )))
+        Ok(Arc::new(FanOutTranscriber::new(vec![
+            Arc::new(en_transcriber) as Arc<dyn Transcriber>,
+            Arc::new(multilingual_transcriber) as Arc<dyn Transcriber>,
+        ])))
     } else {
         // Single model mode
         let transcriber = WhisperTranscriber::new(WhisperConfig {
             model_path: path,
-            language: Some(language.clone()),
+            language: language.clone(),
+            threads: None,
         })?;
 
         Ok(Arc::new(transcriber))

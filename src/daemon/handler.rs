@@ -3,17 +3,14 @@
 use crate::audio::capture::CpalAudioSource;
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
+use crate::config::Config;
 use crate::daemon::DaemonState;
-use crate::input::injector::{InjectorSink, SystemCommandExecutor};
 use crate::ipc::protocol::{Command, Response};
 use crate::ipc::server::CommandHandler;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
-use crate::pipeline::sink::CollectorSink;
+use crate::pipeline::sink::InjectorSink;
 use std::sync::Arc;
-
-#[cfg(feature = "portal")]
-use crate::input::portal::PortalSession;
 
 /// Command handler for daemon IPC commands.
 pub struct DaemonCommandHandler {
@@ -63,7 +60,7 @@ impl DaemonCommandHandler {
         let transcriber = Arc::clone(&self.state.transcriber);
         let pipeline = Pipeline::new(pipeline_config);
 
-        match pipeline.start(audio_source, transcriber, Box::new(sink)) {
+        match pipeline.start(audio_source, transcriber, sink) {
             Ok(handle) => {
                 *pipeline_guard = Some(handle);
                 Response::Ok
