@@ -8,6 +8,29 @@
 //! Supports Sway (swaymsg), Hyprland (hyprctl), and GNOME (gdbus) compositors.
 
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static SWAYMSG_BROKEN: AtomicBool = AtomicBool::new(false);
+static HYPRCTL_BROKEN: AtomicBool = AtomicBool::new(false);
+static GNOME_DBUS_BROKEN: AtomicBool = AtomicBool::new(false);
+static GNOME_INTROSPECT_BROKEN: AtomicBool = AtomicBool::new(false);
+
+/// Reset detection cache. Call when session environment may have changed
+/// (e.g. compositor restart in daemon mode).
+pub fn reset_detection_cache() {
+    SWAYMSG_BROKEN.store(false, Ordering::Relaxed);
+    HYPRCTL_BROKEN.store(false, Ordering::Relaxed);
+    GNOME_DBUS_BROKEN.store(false, Ordering::Relaxed);
+    GNOME_INTROSPECT_BROKEN.store(false, Ordering::Relaxed);
+}
+
+/// Check if an I/O error is permanent (binary not found or permission denied).
+fn is_permanent_error(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+    )
+}
 
 /// Classification of the focused window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,22 +133,30 @@ pub fn detect_window_kind() -> WindowKind {
 /// Returns (WindowKind, Option<app_id>, detection_method_name).
 fn detect_window_kind_verbose(verbose: bool) -> (WindowKind, Option<String>, &'static str) {
     // Try swaymsg (Sway / i3-compatible)
-    if let Some(app_id) = detect_via_swaymsg(verbose) {
+    if !SWAYMSG_BROKEN.load(Ordering::Relaxed)
+        && let Some(app_id) = detect_via_swaymsg(verbose)
+    {
         return (classify_app_id(&app_id), Some(app_id), "swaymsg");
     }
 
     // Try hyprctl (Hyprland)
-    if let Some(app_id) = detect_via_hyprctl(verbose) {
+    if !HYPRCTL_BROKEN.load(Ordering::Relaxed)
+        && let Some(app_id) = detect_via_hyprctl(verbose)
+    {
         return (classify_app_id(&app_id), Some(app_id), "hyprctl");
     }
 
     // Try GNOME Shell D-Bus (Shell.Eval — disabled on GNOME 45+)
-    if let Some(app_id) = detect_via_gnome_dbus(verbose) {
+    if !GNOME_DBUS_BROKEN.load(Ordering::Relaxed)
+        && let Some(app_id) = detect_via_gnome_dbus(verbose)
+    {
         return (classify_app_id(&app_id), Some(app_id), "gnome-dbus");
     }
 
     // Try GNOME Shell Introspect (works on GNOME 41+, unlike Shell.Eval)
-    if let Some(app_id) = detect_via_gnome_introspect(verbose) {
+    if !GNOME_INTROSPECT_BROKEN.load(Ordering::Relaxed)
+        && let Some(app_id) = detect_via_gnome_introspect(verbose)
+    {
         return (classify_app_id(&app_id), Some(app_id), "gnome-introspect");
     }
 
@@ -168,6 +199,9 @@ fn detect_via_swaymsg(verbose: bool) -> Option<String> {
     {
         Ok(output) => output,
         Err(e) => {
+            if is_permanent_error(&e) {
+                SWAYMSG_BROKEN.store(true, Ordering::Relaxed);
+            }
             if verbose {
                 eprintln!("  [paste] swaymsg: failed to execute: {}", e);
             }
@@ -176,6 +210,8 @@ fn detect_via_swaymsg(verbose: bool) -> Option<String> {
     };
 
     if !output.status.success() {
+        // Not running under Sway — permanent for this session
+        SWAYMSG_BROKEN.store(true, Ordering::Relaxed);
         if verbose {
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!(
@@ -199,6 +235,9 @@ fn detect_via_hyprctl(verbose: bool) -> Option<String> {
     {
         Ok(output) => output,
         Err(e) => {
+            if is_permanent_error(&e) {
+                HYPRCTL_BROKEN.store(true, Ordering::Relaxed);
+            }
             if verbose {
                 eprintln!("  [paste] hyprctl: failed to execute: {}", e);
             }
@@ -207,6 +246,8 @@ fn detect_via_hyprctl(verbose: bool) -> Option<String> {
     };
 
     if !output.status.success() {
+        // Not running under Hyprland — permanent for this session
+        HYPRCTL_BROKEN.store(true, Ordering::Relaxed);
         if verbose {
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!(
@@ -252,6 +293,9 @@ fn detect_via_gnome_dbus(verbose: bool) -> Option<String> {
     let output = match cmd.output() {
         Ok(output) => output,
         Err(e) => {
+            if is_permanent_error(&e) {
+                GNOME_DBUS_BROKEN.store(true, Ordering::Relaxed);
+            }
             if verbose {
                 eprintln!("  [paste] gnome-dbus: failed to execute: {}", e);
             }
@@ -260,6 +304,8 @@ fn detect_via_gnome_dbus(verbose: bool) -> Option<String> {
     };
 
     if !output.status.success() {
+        // D-Bus method not available — permanent on this compositor version
+        GNOME_DBUS_BROKEN.store(true, Ordering::Relaxed);
         if verbose {
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!(
@@ -275,8 +321,12 @@ fn detect_via_gnome_dbus(verbose: bool) -> Option<String> {
     let result = String::from_utf8_lossy(&output.stdout);
     let parsed = extract_gnome_eval_result(&result);
 
-    if parsed.is_none() && verbose {
-        eprintln!("  [paste] gnome-dbus: Shell.Eval disabled or returned empty result");
+    if parsed.is_none() {
+        // Shell.Eval is disabled (GNOME 45+) — permanent
+        GNOME_DBUS_BROKEN.store(true, Ordering::Relaxed);
+        if verbose {
+            eprintln!("  [paste] gnome-dbus: Shell.Eval disabled or returned empty result");
+        }
     }
 
     parsed
@@ -386,6 +436,9 @@ fn detect_via_gnome_introspect(verbose: bool) -> Option<String> {
     let output = match cmd.output() {
         Ok(output) => output,
         Err(e) => {
+            if is_permanent_error(&e) {
+                GNOME_INTROSPECT_BROKEN.store(true, Ordering::Relaxed);
+            }
             if verbose {
                 eprintln!("  [paste] gnome-introspect: failed to execute: {}", e);
             }
@@ -394,6 +447,8 @@ fn detect_via_gnome_introspect(verbose: bool) -> Option<String> {
     };
 
     if !output.status.success() {
+        // D-Bus method denied or unavailable — permanent on this compositor
+        GNOME_INTROSPECT_BROKEN.store(true, Ordering::Relaxed);
         if verbose {
             let stderr = String::from_utf8_lossy(&output.stderr);
             eprintln!(
@@ -887,5 +942,46 @@ mod tests {
     fn test_is_gnome_desktop_does_not_panic() {
         // Just verify it returns a bool without panicking.
         let _ = is_gnome_desktop();
+    }
+
+    // --- Circuit breaker ---
+
+    #[test]
+    fn test_circuit_breaker_flags_are_false_by_default() {
+        // Reset first to avoid cross-test interference from parallel runs
+        reset_detection_cache();
+        assert!(!SWAYMSG_BROKEN.load(Ordering::Relaxed));
+        assert!(!HYPRCTL_BROKEN.load(Ordering::Relaxed));
+        assert!(!GNOME_DBUS_BROKEN.load(Ordering::Relaxed));
+        assert!(!GNOME_INTROSPECT_BROKEN.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_reset_detection_cache() {
+        // Set all flags to true
+        SWAYMSG_BROKEN.store(true, Ordering::Relaxed);
+        HYPRCTL_BROKEN.store(true, Ordering::Relaxed);
+        GNOME_DBUS_BROKEN.store(true, Ordering::Relaxed);
+        GNOME_INTROSPECT_BROKEN.store(true, Ordering::Relaxed);
+
+        reset_detection_cache();
+
+        assert!(!SWAYMSG_BROKEN.load(Ordering::Relaxed));
+        assert!(!HYPRCTL_BROKEN.load(Ordering::Relaxed));
+        assert!(!GNOME_DBUS_BROKEN.load(Ordering::Relaxed));
+        assert!(!GNOME_INTROSPECT_BROKEN.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_is_permanent_error() {
+        let not_found = std::io::Error::new(std::io::ErrorKind::NotFound, "not found");
+        assert!(is_permanent_error(&not_found));
+
+        let perm_denied =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied");
+        assert!(is_permanent_error(&perm_denied));
+
+        let other = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "transient");
+        assert!(!is_permanent_error(&other));
     }
 }

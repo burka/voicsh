@@ -78,6 +78,7 @@ pub struct FramePhase {
 #[derive(Debug, Clone)]
 pub struct MockAudioSource {
     is_started: bool,
+    force_live: bool,
     samples: Vec<i16>,
     should_fail_start: bool,
     should_fail_stop: bool,
@@ -93,6 +94,7 @@ impl MockAudioSource {
     pub fn new() -> Self {
         Self {
             is_started: false,
+            force_live: false,
             samples: vec![0i16; 160],
             should_fail_start: false,
             should_fail_stop: false,
@@ -147,6 +149,16 @@ impl MockAudioSource {
         self
     }
 
+    /// Mark this source as a live (infinite) source.
+    ///
+    /// Live sources return `is_finite() == false`, meaning empty reads
+    /// are not treated as end-of-stream by the pipeline. Overrides the
+    /// default inference from `frame_sequence`.
+    pub fn as_live_source(mut self) -> Self {
+        self.force_live = true;
+        self
+    }
+
     /// Check if the audio source is started
     pub fn is_started(&self) -> bool {
         self.is_started
@@ -183,7 +195,7 @@ impl AudioSource for MockAudioSource {
     }
 
     fn is_finite(&self) -> bool {
-        self.frame_sequence.is_some()
+        self.frame_sequence.is_some() && !self.force_live
     }
 
     fn read_samples(&mut self) -> Result<Vec<i16>> {
@@ -499,6 +511,25 @@ mod tests {
         let config1 = AudioSourceConfig { sample_rate: 48000 };
         let config2 = config1.clone();
         assert_eq!(config1.sample_rate, config2.sample_rate);
+    }
+
+    #[test]
+    fn test_mock_audio_source_not_finite_by_default() {
+        // Plain MockAudioSource has no frame_sequence, so it's live (infinite)
+        let source = MockAudioSource::new();
+        assert!(
+            !source.is_finite(),
+            "MockAudioSource without frame_sequence should be live (not finite)"
+        );
+    }
+
+    #[test]
+    fn test_mock_audio_source_as_live_source() {
+        let source = MockAudioSource::new().as_live_source();
+        assert!(
+            !source.is_finite(),
+            "as_live_source() should make the source infinite"
+        );
     }
 
     #[test]

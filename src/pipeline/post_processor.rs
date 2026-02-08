@@ -3,6 +3,7 @@
 //! Sits between TranscriberStation and SinkStation in the pipeline.
 //! The primary use case is voice commands: spoken punctuation and formatting.
 
+use crate::config::Config;
 use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::TranscribedText;
@@ -51,6 +52,23 @@ impl Station for PostProcessorStation {
     fn name(&self) -> &'static str {
         "post-processor"
     }
+}
+
+/// Build post-processors from application configuration.
+///
+/// Returns a `VoiceCommandProcessor` when `config.voice_commands.enabled` is
+/// true, or an empty list otherwise.
+pub fn build_post_processors(config: &Config) -> Vec<Box<dyn PostProcessor>> {
+    let mut processors: Vec<Box<dyn PostProcessor>> = Vec::new();
+
+    if config.voice_commands.enabled {
+        processors.push(Box::new(VoiceCommandProcessor::new(
+            &config.stt.language,
+            &config.voice_commands.commands,
+        )));
+    }
+
+    processors
 }
 
 /// Rule-based voice command processor.
@@ -172,6 +190,14 @@ impl VoiceCommandProcessor {
     }
 
     /// Apply voice command replacements to a single text segment.
+    ///
+    /// Uses a simple O(n*m) scan where n = text length and m = number of
+    /// commands. With n < 100 chars (typical Whisper segment) and m ~ 20
+    /// built-in commands, this runs in sub-millisecond time. Whisper
+    /// transcription dominates overall latency by orders of magnitude.
+    /// Alternatives considered (aho-corasick, HashMap sliding window) add
+    /// complexity for word-boundary validation, caps-lock state, and spacing
+    /// rules without meaningful benefit at this scale.
     fn apply(&mut self, text: &str) -> String {
         // Work on a mutable copy; scan case-insensitively.
         let mut result = String::with_capacity(text.len());
@@ -213,8 +239,10 @@ impl VoiceCommandProcessor {
                         attach_left,
                         attach_right,
                     } => {
-                        if *attach_left && result.ends_with(' ') {
-                            result.pop();
+                        if *attach_left {
+                            while result.ends_with(' ') {
+                                result.pop();
+                            }
                         }
                         result.push_str(replacement);
                         *attach_right
@@ -300,7 +328,10 @@ fn english_commands() -> Vec<(String, CommandAction)> {
         ("colon".into(), CommandAction::punct(":")),
         ("semicolon".into(), CommandAction::punct(";")),
         ("ellipsis".into(), CommandAction::punct("...")),
-        // Dash has its own spacing (eats surrounding); hyphen is tight
+        // "dash" is ambiguous: users may mean the literal word (e.g. "100-meter dash").
+        // This is inherent to rule-based voice commands. Users can override or disable
+        // the mapping via [voice_commands.commands] in config. Future NLP-based
+        // post-processing could disambiguate using context.
         ("dash".into(), CommandAction::tight(" — ")),
         ("hyphen".into(), CommandAction::tight("-")),
         // Quotes and brackets
@@ -802,8 +833,23 @@ mod tests {
     #[test]
     fn test_multiple_spaces_between_words() {
         let mut p = en_processor();
-        // Multiple spaces: only the first space before "period" gets popped
-        assert_eq!(p.apply("hello  period"), "hello .");
+        // All spaces before attach-left punctuation are consumed
+        assert_eq!(p.apply("hello  period"), "hello.");
+    }
+
+    #[test]
+    fn test_triple_space_before_punctuation() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello   comma world"), "hello, world");
+    }
+
+    #[test]
+    fn test_multi_space_before_close_quote() {
+        let mut p = en_processor();
+        assert_eq!(
+            p.apply("he said open quote hello  close quote"),
+            "he said \"hello\""
+        );
     }
 
     #[test]
@@ -927,5 +973,31 @@ mod tests {
     fn test_consecutive_commands() {
         let mut p = en_processor();
         assert_eq!(p.apply("hello period period period"), "hello...");
+    }
+
+    // ── build_post_processors tests ─────────────────────────────────────
+
+    #[test]
+    fn test_build_post_processors_enabled_returns_one() {
+        let mut config = Config::default();
+        config.voice_commands.enabled = true;
+        let processors = build_post_processors(&config);
+        assert_eq!(
+            processors.len(),
+            1,
+            "Enabled voice commands should produce one processor"
+        );
+        assert_eq!(processors[0].name(), "voice-commands");
+    }
+
+    #[test]
+    fn test_build_post_processors_disabled_returns_empty() {
+        let mut config = Config::default();
+        config.voice_commands.enabled = false;
+        let processors = build_post_processors(&config);
+        assert!(
+            processors.is_empty(),
+            "Disabled voice commands should produce no processors"
+        );
     }
 }

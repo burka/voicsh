@@ -348,6 +348,10 @@ impl AudioSource for CpalAudioSource {
         buffer.clear();
         Ok(samples)
     }
+
+    fn is_finite(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]

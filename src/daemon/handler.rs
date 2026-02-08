@@ -5,11 +5,12 @@ use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::config::Config;
 use crate::daemon::DaemonState;
+use crate::input::focused_window::reset_detection_cache;
 use crate::ipc::protocol::{Command, Response};
 use crate::ipc::server::CommandHandler;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
-use crate::pipeline::post_processor::{PostProcessor, VoiceCommandProcessor};
+use crate::pipeline::post_processor::build_post_processors;
 use crate::pipeline::sink::InjectorSink;
 use std::sync::Arc;
 
@@ -58,7 +59,10 @@ impl DaemonCommandHandler {
         let sink = self.create_sink(&config);
 
         // Build post-processors
-        let post_processors = self.build_post_processors(&config);
+        let post_processors = build_post_processors(&config);
+
+        // Reset window detection cache so a fresh session re-probes compositors
+        reset_detection_cache();
 
         // Start pipeline
         let transcriber = Arc::clone(&self.state.transcriber);
@@ -133,18 +137,6 @@ impl DaemonCommandHandler {
                 self.verbosity,
             ))
         }
-    }
-
-    /// Build post-processors from config.
-    fn build_post_processors(&self, config: &Config) -> Vec<Box<dyn PostProcessor>> {
-        let mut processors: Vec<Box<dyn PostProcessor>> = Vec::new();
-        if config.voice_commands.enabled {
-            processors.push(Box::new(VoiceCommandProcessor::new(
-                &config.stt.language,
-                &config.voice_commands.commands,
-            )));
-        }
-        processors
     }
 
     /// Stop recording and return transcription.

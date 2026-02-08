@@ -17,7 +17,7 @@ use crate::models::download::{
 };
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
-use crate::pipeline::post_processor::{PostProcessor, VoiceCommandProcessor};
+use crate::pipeline::post_processor::build_post_processors;
 use crate::pipeline::sink::{CollectorSink, InjectorSink, StdoutSink};
 use crate::stt::fan_out::FanOutTranscriber;
 use crate::stt::transcriber::Transcriber;
@@ -313,20 +313,6 @@ async fn run_single_session(
     }
 
     Ok(())
-}
-
-/// Build post-processors from configuration.
-fn build_post_processors(config: &Config) -> Vec<Box<dyn PostProcessor>> {
-    let mut processors: Vec<Box<dyn PostProcessor>> = Vec::new();
-
-    if config.voice_commands.enabled {
-        processors.push(Box::new(VoiceCommandProcessor::new(
-            &config.stt.language,
-            &config.voice_commands.commands,
-        )));
-    }
-
-    processors
 }
 
 /// Create the transcriber, handling model download and fan-out if needed.

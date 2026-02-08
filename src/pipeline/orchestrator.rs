@@ -49,11 +49,11 @@ impl Default for PipelineConfig {
             auto_level: true,
             quiet: false,
             sample_rate: 16000,
-            audio_buffer: 32,
-            vad_buffer: 16,
-            chunk_buffer: 4,
-            transcribe_buffer: 4,
-            post_process_buffer: 4,
+            audio_buffer: 1024,
+            vad_buffer: 1024,
+            chunk_buffer: 16,
+            transcribe_buffer: 16,
+            post_process_buffer: 16,
         }
     }
 }
@@ -70,24 +70,45 @@ pub struct PipelineHandle {
 
 impl PipelineHandle {
     /// Stops the pipeline gracefully and returns the sink's accumulated result.
+    ///
+    /// Waits up to 5s for the result, then 1s for threads to finish.
+    /// After the deadline, remaining threads are detached — they die with the process.
     pub fn stop(mut self) -> Option<String> {
         // Signal shutdown
         self.running.store(false, Ordering::SeqCst);
 
-        // Wait for all threads to complete
-        for handle in self.threads.drain(..) {
-            if let Err(panic_info) = handle.join() {
-                let msg = panic_info
-                    .downcast_ref::<&str>()
-                    .copied()
-                    .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
-                    .unwrap_or("unknown panic");
-                eprintln!("voicsh: pipeline thread panicked: {msg}");
+        // Try to receive the result first — it may arrive before all threads finish
+        // (e.g. sink sends result then its wrapper thread takes time to join).
+        // Allow up to 5s for in-flight transcription to complete.
+        let result = self
+            .result_rx
+            .as_ref()
+            .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok().flatten());
+
+        // Wait up to 1s more for threads to finish
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let poll_interval = Duration::from_millis(50);
+
+        loop {
+            self.threads.retain(|h| !h.is_finished());
+
+            if self.threads.is_empty() {
+                break;
             }
+
+            if Instant::now() >= deadline {
+                eprintln!(
+                    "voicsh: shutdown timeout — {} thread(s) still running, detaching",
+                    self.threads.len()
+                );
+                // Dropping JoinHandles detaches threads; they die with the process.
+                break;
+            }
+
+            thread::sleep(poll_interval);
         }
 
-        // Receive sink's finish() result
-        self.result_rx.and_then(|rx| rx.recv().ok().flatten())
+        result
     }
 
     /// Returns true if the pipeline is running.
@@ -453,11 +474,11 @@ mod tests {
     #[test]
     fn test_config_default() {
         let config = PipelineConfig::default();
-        assert_eq!(config.audio_buffer, 32);
+        assert_eq!(config.audio_buffer, 1024);
         assert_eq!(config.sample_rate, 16000);
-        assert_eq!(config.vad_buffer, 16);
-        assert_eq!(config.chunk_buffer, 4);
-        assert_eq!(config.transcribe_buffer, 4);
+        assert_eq!(config.vad_buffer, 1024);
+        assert_eq!(config.chunk_buffer, 16);
+        assert_eq!(config.transcribe_buffer, 16);
         assert_eq!(config.verbosity, 0);
         assert!(config.auto_level);
         assert!(!config.quiet);
@@ -803,6 +824,44 @@ mod tests {
     }
 
     #[test]
+    fn test_pipeline_stop_timeout_on_stuck_thread() {
+        // A thread that blocks indefinitely should not hang stop().
+        // stop() must return within the 1s deadline + margin.
+        let running = Arc::new(AtomicBool::new(true));
+
+        let stuck_running = running.clone();
+        let stuck_handle = thread::spawn(move || {
+            // Block until running is false, then keep blocking to simulate a stuck thread
+            while stuck_running.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(10));
+            }
+            // Simulate being stuck even after running=false
+            thread::park();
+        });
+
+        let handle = PipelineHandle {
+            running: running.clone(),
+            threads: vec![stuck_handle],
+            result_rx: None,
+        };
+
+        let start = Instant::now();
+        let result = handle.stop();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "stop() took {:?} — should complete within 5s even with stuck threads",
+            elapsed
+        );
+        assert!(result.is_none(), "Stuck pipeline should return None");
+        assert!(
+            !running.load(Ordering::SeqCst),
+            "Running flag should be false after stop"
+        );
+    }
+
+    #[test]
     fn test_pipeline_stop_without_transcription() {
         // Tests quick stop with no speech detected
         let mock_clock = Arc::new(MockClock::new());
@@ -1048,11 +1107,73 @@ mod tests {
     }
 
     #[test]
+    fn test_pipeline_handles_intermittent_empty_reads() {
+        // Simulates a live microphone that returns empty at startup before
+        // real audio arrives. The pipeline must not exit on the empty read.
+        let mock_clock = Arc::new(MockClock::new());
+
+        let config = PipelineConfig {
+            vad: VadConfig {
+                speech_threshold: 0.02,
+                silence_duration_ms: 200,
+                min_speech_ms: 50,
+                ..Default::default()
+            },
+            quiet: true,
+            verbosity: 0,
+            ..Default::default()
+        };
+
+        let pipeline = Pipeline::new(config).with_clock(mock_clock.clone());
+
+        // Phase 1: empty reads (simulates startup before first CPAL callback)
+        let empty_phase = FramePhase {
+            samples: vec![],
+            count: 5,
+        };
+        // Phase 2: loud speech
+        let loud_phase = FramePhase {
+            samples: vec![10000i16; 160],
+            count: 15,
+        };
+        // Phase 3: silence to trigger VAD end-of-speech
+        let quiet_phase = FramePhase {
+            samples: vec![0i16; 160],
+            count: 15,
+        };
+
+        let audio_source = Box::new(
+            MockAudioSource::new()
+                .as_live_source()
+                .with_frame_sequence(vec![empty_phase, loud_phase, quiet_phase]),
+        );
+
+        let transcriber = Arc::new(MockTranscriber::new("test-model").with_response("live audio"));
+        let sink = Box::new(CollectorSink::new());
+
+        let handle = pipeline.start(audio_source, transcriber, sink).unwrap();
+        assert!(handle.is_running());
+
+        // Let all phases play out, advance clock for VAD timing
+        for _ in 0..4 {
+            thread::sleep(Duration::from_millis(200));
+            mock_clock.advance(Duration::from_millis(400));
+        }
+
+        let result = handle.stop();
+        assert_eq!(
+            result,
+            Some("live audio".to_string()),
+            "Pipeline should survive empty reads from live source and produce output"
+        );
+    }
+
+    #[test]
     fn test_pipeline_config_default_includes_post_process_buffer() {
         let config = PipelineConfig::default();
         assert_eq!(
-            config.post_process_buffer, 4,
-            "Default post_process_buffer should be 4"
+            config.post_process_buffer, 16,
+            "Default post_process_buffer should be 16"
         );
     }
 
@@ -1134,6 +1255,9 @@ mod tests {
     /// Pipeline end-to-end with real Whisper model.
     /// Validates actual transcription works — catches CUDA/GPU runtime failures.
     /// Skips with a warning when no model is installed.
+    ///
+    /// Uses a longer wait than mock tests because Whisper inference in debug
+    /// builds can take 20-30s.
     #[cfg(feature = "whisper")]
     #[test]
     fn test_pipeline_wav_real_transcriber() {
@@ -1157,7 +1281,26 @@ mod tests {
         let transcriber: Arc<dyn Transcriber> =
             Arc::new(WhisperTranscriber::new(config).expect("Failed to load Whisper model"));
 
-        let result = run_pipeline_with_wav(transcriber);
+        let pipeline = Pipeline::new(pipe_config());
+        let mut handle = pipeline
+            .start(
+                wav_audio_source(),
+                transcriber,
+                Box::new(CollectorSink::new()),
+            )
+            .expect("Pipeline start failed");
+
+        // Real Whisper in debug builds can take 30-60s for a ~3.5s WAV,
+        // especially when running in parallel with other tests.
+        // Wait for the result to appear on the channel *before* signaling
+        // shutdown, so the transcriber has time to finish.
+        let result = handle
+            .result_rx
+            .take()
+            .and_then(|rx| rx.recv_timeout(Duration::from_secs(60)).ok().flatten());
+
+        // Now stop the pipeline (result already consumed, stop just cleans up threads)
+        let _ = handle.stop();
 
         assert!(
             result.is_some(),
