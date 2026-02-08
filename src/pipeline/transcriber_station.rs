@@ -85,7 +85,14 @@ impl Station for TranscriberStation {
                 eprintln_clear(&format!(
                     "voicsh: transcription slower than real-time ({elapsed_ms}ms for {chunk_duration_ms}ms of audio)"
                 ));
-                eprintln!("  Run 'voicsh benchmark' to find the right model for your hardware.");
+                if cfg!(feature = "benchmark") {
+                    eprintln!(
+                        "  Run 'voicsh benchmark' to find the right model for your hardware."
+                    );
+                } else {
+                    eprintln!("  Build with benchmark support to find the right model:");
+                    eprintln!("    cargo build --release --features benchmark");
+                }
                 eprintln!(
                     "  Consider a smaller model (--model tiny.en) or enable GPU acceleration."
                 );
