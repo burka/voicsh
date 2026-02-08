@@ -24,6 +24,10 @@ pub struct ChunkerStation {
     clock: Arc<dyn Clock>,
     /// Output channel for flushing remaining audio on shutdown.
     flush_tx: Option<crossbeam_channel::Sender<AudioChunk>>,
+    /// Timestamp of the first frame in the current chunk (for latency tracking).
+    first_frame_capture: Option<Instant>,
+    /// VAD start time of the first frame in the current chunk.
+    first_frame_vad: Option<Instant>,
 }
 
 impl ChunkerStation {
@@ -43,6 +47,8 @@ impl ChunkerStation {
             verbose: false,
             clock,
             flush_tx: None,
+            first_frame_capture: None,
+            first_frame_vad: None,
         }
     }
 
@@ -80,7 +86,12 @@ impl ChunkerStation {
         let duration_ms = self.calculate_duration_ms(samples.len());
         let seq = self.sequence;
         self.sequence += 1;
-        let chunk = AudioChunk::new(samples, duration_ms, seq);
+
+        // Use timing from first frame if available, otherwise use now
+        let capture_start = self.first_frame_capture.unwrap_or_else(Instant::now);
+        let vad_start = self.first_frame_vad.unwrap_or_else(Instant::now);
+
+        let chunk = AudioChunk::with_timing(samples, duration_ms, seq, capture_start, vad_start);
 
         // Log chunk emission if verbose
         if self.verbose {
@@ -89,6 +100,10 @@ impl ChunkerStation {
                 chunk.duration_ms, chunk.sequence
             ));
         }
+
+        // Reset timing for next chunk
+        self.first_frame_capture = None;
+        self.first_frame_vad = None;
 
         chunk
     }
@@ -125,6 +140,12 @@ impl Station for ChunkerStation {
     }
 
     fn process(&mut self, frame: VadFrame) -> Result<Option<AudioChunk>, StationError> {
+        // Track timing of first frame in chunk
+        if self.first_frame_capture.is_none() && frame.is_speech {
+            self.first_frame_capture = Some(frame.timestamp);
+            self.first_frame_vad = Some(frame.vad_start);
+        }
+
         // Update silence tracking
         self.update_silence_tracking(frame.is_speech);
 

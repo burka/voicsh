@@ -76,6 +76,15 @@ async fn main() -> Result<()> {
         Some(voicsh::cli::Commands::InstallService) => {
             install_systemd_service()?;
         }
+        #[cfg(feature = "benchmark")]
+        Some(voicsh::cli::Commands::Benchmark {
+            audio,
+            models,
+            iterations,
+            output,
+        }) => {
+            handle_benchmark_command(audio, models, iterations, &output)?;
+        }
     }
 
     Ok(())
@@ -227,6 +236,160 @@ WantedBy=default.target
     println!("  systemctl --user start voicsh.service");
     println!("\nTo check status:");
     println!("  systemctl --user status voicsh.service");
+
+    Ok(())
+}
+
+/// Handle benchmark command.
+#[cfg(feature = "benchmark")]
+fn handle_benchmark_command(
+    audio: Option<std::path::PathBuf>,
+    models: Option<String>,
+    iterations: usize,
+    output: &str,
+) -> Result<()> {
+    use voicsh::benchmark::{
+        BenchmarkReport, ResourceMonitor, SystemInfo, benchmark_model, load_wav_file,
+        print_json_report, print_results,
+    };
+    use voicsh::models::catalog::MODELS;
+    use voicsh::models::download::model_path;
+
+    // Determine audio file
+    let wav_file = if let Some(path) = audio {
+        path.to_string_lossy().to_string()
+    } else {
+        // Try to use test fixture
+        let fixture_path = "tests/fixtures/quick_brown_fox.wav";
+        if std::path::Path::new(fixture_path).exists() {
+            fixture_path.to_string()
+        } else {
+            eprintln!("Error: No audio file specified and test fixture not found");
+            eprintln!();
+            eprintln!("Usage: voicsh benchmark --audio <file.wav>");
+            eprintln!();
+            eprintln!("Or run from project root to use default test fixture:");
+            eprintln!("  tests/fixtures/quick_brown_fox.wav");
+            std::process::exit(1);
+        }
+    };
+
+    // Determine models to test
+    let model_list: Vec<String> = if let Some(models_str) = models {
+        models_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .collect()
+    } else {
+        // Use all installed models
+        MODELS
+            .iter()
+            .filter_map(|m| {
+                model_path(&m.name).and_then(|p| {
+                    if p.exists() {
+                        Some(m.name.to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    };
+
+    if model_list.is_empty() {
+        eprintln!("Error: No models available for benchmarking");
+        eprintln!();
+        eprintln!("Install models with:");
+        eprintln!("  voicsh models install <model-name>");
+        eprintln!();
+        eprintln!("Available models:");
+        for model in MODELS.iter() {
+            eprintln!("  {} ({}MB)", model.name, model.size_mb);
+        }
+        std::process::exit(1);
+    }
+
+    // Print system information
+    let system_info = SystemInfo::detect();
+    system_info.print_report(false); // Don't show backend comparison by default
+
+    println!("\nWAV Transcription Benchmark");
+    println!("{}", "=".repeat(120));
+
+    // Load audio file
+    let (audio_samples, audio_duration_ms) = match load_wav_file(&wav_file) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("Failed to load WAV file: {}", e);
+            eprintln!("File: {}", wav_file);
+            std::process::exit(1);
+        }
+    };
+
+    println!("Audio file:     {}", wav_file);
+    println!("Samples:        {}", audio_samples.len());
+    println!(
+        "Duration:       {}ms ({:.2}s)",
+        audio_duration_ms,
+        audio_duration_ms as f64 / 1000.0
+    );
+    println!("Sample rate:    16000 Hz");
+    println!("Iterations:     {}", iterations);
+    println!("{}", "=".repeat(120));
+    println!();
+
+    // Run benchmarks
+    let monitor = ResourceMonitor::new();
+    let mut results = Vec::new();
+
+    for model_name in &model_list {
+        if !model_path(model_name).map_or(false, |p| p.exists()) {
+            eprintln!("Skipping {}: model not installed", model_name);
+            eprintln!("  Install with: voicsh models install {}", model_name);
+            println!();
+            continue;
+        }
+
+        match benchmark_model(
+            model_name,
+            "auto", // Use auto language detection
+            &audio_samples,
+            audio_duration_ms,
+            &monitor,
+            iterations,
+        ) {
+            Ok(result) => {
+                println!("Result: \"{}\"", result.transcription.trim());
+                println!("Confidence: {:.2}", result.confidence);
+                println!();
+                results.push(result);
+            }
+            Err(e) => {
+                eprintln!("Failed to benchmark {}: {}", model_name, e);
+                println!();
+            }
+        }
+    }
+
+    if results.is_empty() {
+        eprintln!("No models were benchmarked successfully.");
+        std::process::exit(1);
+    }
+
+    // Output results in requested format
+    if output == "json" {
+        let report = BenchmarkReport {
+            system_info,
+            audio_file: wav_file,
+            audio_samples: audio_samples.len(),
+            audio_duration_ms,
+            iterations,
+            results,
+        };
+        print_json_report(&report);
+    } else {
+        print_results(&results, false); // Don't compare languages by default
+    }
 
     Ok(())
 }

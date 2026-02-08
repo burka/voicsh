@@ -459,6 +459,58 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_parse_benchmark() {
+        let cli = Cli::try_parse_from(["voicsh", "benchmark"]).unwrap();
+        match cli.command {
+            Some(Commands::Benchmark {
+                audio,
+                models,
+                iterations,
+                output,
+            }) => {
+                assert!(audio.is_none());
+                assert!(models.is_none());
+                assert_eq!(iterations, 1);
+                assert_eq!(output, "table");
+            }
+            _ => panic!("Expected Benchmark command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_parse_benchmark_with_all_options() {
+        let cli = Cli::try_parse_from([
+            "voicsh",
+            "benchmark",
+            "--audio",
+            "test.wav",
+            "--models",
+            "tiny.en,base.en",
+            "--iterations",
+            "3",
+            "--output",
+            "json",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Benchmark {
+                audio,
+                models,
+                iterations,
+                output,
+            }) => {
+                assert_eq!(audio, Some(PathBuf::from("test.wav")));
+                assert_eq!(models.as_deref(), Some("tiny.en,base.en"));
+                assert_eq!(iterations, 3);
+                assert_eq!(output, "json");
+            }
+            _ => panic!("Expected Benchmark command"),
+        }
+    }
+
+    #[test]
     fn test_parse_start_with_socket() {
         let cli = Cli::try_parse_from(["voicsh", "start", "--socket", "/tmp/test.sock"]).unwrap();
         match cli.command {

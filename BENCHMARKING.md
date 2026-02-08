@@ -1,13 +1,15 @@
 # WAV Transcription Benchmarking
 
-This document describes the benchmarking suite for testing WAV transcription performance across different Whisper models.
+This document describes the benchmarking suite for testing WAV transcription performance across different Whisper models, backends, and languages.
 
 ## Overview
 
-The benchmark suite provides two ways to test transcription performance:
+The benchmark suite provides comprehensive performance testing capabilities:
 
 1. **Standalone Binary** - Quick and easy performance comparison
-2. **Criterion Benchmarks** - Statistical analysis for detailed performance testing
+2. **Multi-Backend Comparison** - Compare CPU vs GPU performance
+3. **Multi-Language Testing** - Test the same model across different languages
+4. **Criterion Benchmarks** - Statistical analysis for detailed performance testing
 
 ## Standalone Benchmark Tool
 
@@ -34,6 +36,21 @@ cargo run --release --bin benchmark-transcription --features whisper,benchmark -
 Run multiple iterations for averaging:
 ```bash
 cargo run --release --bin benchmark-transcription --features whisper,benchmark -- audio.wav all 3
+```
+
+Compare backends:
+```bash
+cargo run --release --bin benchmark-transcription --features whisper,benchmark -- audio.wav --compare-backends
+```
+
+Test multiple languages:
+```bash
+cargo run --release --bin benchmark-transcription --features whisper,benchmark -- audio.wav tiny --languages en,de,es,fr
+```
+
+Output as JSON for analysis:
+```bash
+cargo run --release --bin benchmark-transcription --features whisper,benchmark -- audio.wav all --output json > results.json
 ```
 
 ### Example Output
@@ -94,6 +111,89 @@ Model Sizes:
   - 10x speed means processing is 10 times faster than the audio duration
 - **CPU (%)** - CPU usage percentage during transcription
 - **Mem (MB)** - Memory usage in megabytes during transcription
+
+## Multi-Backend Comparison
+
+The benchmark tool supports comparing performance across different backends (CPU, CUDA, Vulkan, HipBLAS, OpenBLAS).
+
+### Backend Detection
+
+Use `--compare-backends` to see which backends are available:
+
+```bash
+cargo run --release --bin benchmark-transcription -- audio.wav --compare-backends
+```
+
+Example output:
+```
+BACKEND COMPARISON
+========================================================================================================================
+Backend         Status        Active     Compile Flags
+------------------------------------------------------------------------------------------------------------------------
+CPU             Available     Yes        --no-default-features --features whisper,benchmark,model-download,cli
+CUDA            Not compiled  No         --features cuda,benchmark,model-download,cli
+Vulkan          Not compiled  No         --features vulkan,benchmark,model-download,cli
+HipBLAS         Not compiled  No         --features hipblas,benchmark,model-download,cli
+OpenBLAS        Not compiled  No         --features openblas,benchmark,model-download,cli
+```
+
+### Comparing Backends
+
+To compare different backends, compile and run the benchmark with each backend:
+
+```bash
+# CPU benchmark
+cargo build --release --bin benchmark-transcription --no-default-features --features whisper,benchmark,model-download,cli
+./target/release/benchmark-transcription audio.wav tiny --output json > results-cpu.json
+
+# CUDA benchmark (requires NVIDIA GPU and CUDA toolkit)
+cargo build --release --bin benchmark-transcription --features cuda,benchmark,model-download,cli
+./target/release/benchmark-transcription audio.wav tiny --output json > results-cuda.json
+
+# Vulkan benchmark (requires Vulkan SDK)
+cargo build --release --bin benchmark-transcription --features vulkan,benchmark,model-download,cli
+./target/release/benchmark-transcription audio.wav tiny --output json > results-vulkan.json
+```
+
+### Backend Requirements
+
+- **CPU**: No additional requirements (always available)
+- **CUDA**: NVIDIA GPU, CUDA toolkit, cuDNN
+- **Vulkan**: Vulkan SDK
+- **HipBLAS**: AMD GPU, ROCm/HIP toolkit
+- **OpenBLAS**: OpenBLAS library
+
+Expected speedups with GPU acceleration:
+- CUDA: 10-50x faster than CPU
+- Vulkan: 5-20x faster than CPU
+- HipBLAS: 10-40x faster than CPU (AMD GPUs)
+
+## Multi-Language Testing
+
+Test the same model with different language codes to compare performance and accuracy:
+
+```bash
+cargo run --release --bin benchmark-transcription -- audio.wav tiny --languages auto,en,de,es,fr,it
+```
+
+Example output:
+```
+Model: tiny
+Backend      Language    Time (ms)    RTF      Speed      CPU%       Memory
+------------------------------------------------------------------------------------------------------------------------
+CPU          auto        450          0.064    15.6x      22.1       248.1
+CPU          en          445          0.063    15.8x      21.8       248.0
+CPU          de          465          0.066    15.1x      22.3       248.2
+CPU          es          458          0.065    15.4x      22.2       248.1
+CPU          fr          462          0.066    15.2x      22.4       248.3
+CPU          it          460          0.065    15.3x      22.3       248.2
+```
+
+Notes:
+- Use multilingual models (without .en suffix) for language comparison
+- `auto` lets Whisper detect the language automatically
+- English-only models (.en suffix) ignore the language parameter and always use English
+- Performance differences between languages are usually minimal (within 5-10%)
 
 ## Available Models
 
