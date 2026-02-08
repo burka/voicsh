@@ -6,7 +6,7 @@ use crate::pipeline::station::Station;
 use crate::pipeline::types::TranscribedText;
 #[cfg(feature = "portal")]
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Pluggable text output handler for pipeline.
 /// Pairs with AudioSource for input - this handles transcription output.
@@ -82,6 +82,9 @@ impl Station for SinkStation {
                         chunk_created: chunk_timing.chunk_created,
                         transcription_done: text.timestamp,
                         output_done,
+                        audio_duration: Duration::from_millis(
+                            chunk_timing.audio_duration_ms as u64,
+                        ),
                     };
                     self.latency_tracker.record(timing.clone());
 

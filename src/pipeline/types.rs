@@ -11,6 +11,8 @@ pub struct ChunkTiming {
     pub vad_start: Instant,
     /// Timestamp when this chunk was created (after chunking).
     pub chunk_created: Instant,
+    /// Duration of the audio content in milliseconds.
+    pub audio_duration_ms: u32,
 }
 
 /// A frame of raw audio samples with timing information.
@@ -120,6 +122,7 @@ impl AudioChunk {
                 capture_start,
                 vad_start,
                 chunk_created: Instant::now(),
+                audio_duration_ms: duration_ms,
             })),
         }
     }
@@ -248,6 +251,7 @@ mod tests {
             capture_start: capture,
             vad_start: vad,
             chunk_created,
+            audio_duration_ms: 1000,
         }));
         let text = TranscribedText::with_timing("Hello world".to_string(), timing);
 
