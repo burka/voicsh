@@ -2,6 +2,30 @@
 
 Offline, privacy-first voice typing. Speak into your mic, text appears in your focused app. Or pipe a WAV file and get text on stdout.
 
+> **Status: Early MVP (v0.0.1-dev)**
+>
+> This project works on the author's machine and is shared in the hope that others find it useful or want to help improve it.
+>
+> **What works:**
+> - CPU transcription via whisper.cpp — functional, accuracy varies by model and environment
+> - Pipe mode (`cat file.wav | voicsh`) — most reliable path
+> - Daemon mode with IPC control
+> - Text injection on GNOME/KDE via xdg-desktop-portal
+> - Voice commands (punctuation, formatting)
+>
+> **What doesn't (yet):**
+> - GPU acceleration — feature-gated but largely untested; expect build or runtime issues
+> - Only tested on a handful of Wayland setups — your compositor may need tweaks
+> - VAD tuning is basic; background noise or quiet speech may cause missed/false chunks
+>
+> **What I'd love help with:**
+> - Testing on different hardware, distros, and compositors
+> - GPU backend testing (CUDA, Vulkan, ROCm)
+> - Improving transcription accuracy (VAD tuning, chunking strategy)
+> - Bug reports — even "it didn't build" is valuable at this stage
+>
+> If any of this sounds interesting, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Usage
 
 ```bash
