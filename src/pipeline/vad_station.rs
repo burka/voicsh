@@ -13,6 +13,9 @@ const NO_AUDIO_WARNING_FRAMES: u64 = 180;
 /// Threshold below which audio is considered "no signal" (essentially zero).
 const NO_AUDIO_THRESHOLD: f32 = 0.0001;
 
+/// Returns (current_len, capacity) for a pipeline buffer channel.
+pub type BufferGauge = Box<dyn Fn() -> (usize, usize) + Send + Sync>;
+
 /// VAD station that processes audio frames and annotates them with speech detection.
 pub struct VadStation {
     vad: Vad<Arc<dyn Clock>>,
@@ -27,6 +30,8 @@ pub struct VadStation {
     no_audio_warning_shown: bool,
     /// Count of consecutive frames with near-zero audio.
     zero_audio_frames: u64,
+    /// Optional gauge to read chunk buffer occupancy.
+    buffer_gauge: Option<BufferGauge>,
 }
 
 impl VadStation {
@@ -47,6 +52,7 @@ impl VadStation {
             frames_processed: 0,
             no_audio_warning_shown: false,
             zero_audio_frames: 0,
+            buffer_gauge: None,
         }
     }
 
@@ -65,6 +71,12 @@ impl VadStation {
     /// Sets the sample rate for VAD processing.
     pub fn with_sample_rate(mut self, sample_rate: u32) -> Self {
         self.sample_rate = sample_rate;
+        self
+    }
+
+    /// Sets a buffer gauge for displaying chunk queue depth on the meter line.
+    pub fn with_buffer_gauge(mut self, gauge: BufferGauge) -> Self {
+        self.buffer_gauge = Some(gauge);
         self
     }
 
@@ -107,7 +119,7 @@ impl VadStation {
         }
     }
 
-    /// Displays a visual level meter to stderr.
+    /// Displays a visual level meter to stderr, with optional buffer gauge.
     fn display_level(&self, level: f32, threshold: f32) {
         const BAR_WIDTH: usize = 30;
 
@@ -142,7 +154,12 @@ impl VadStation {
             .collect();
 
         // Use \r to overwrite the line, clear to end
-        eprint!("\r[{}] {:.3}  ", bar, level);
+        if let Some(gauge) = &self.buffer_gauge {
+            let (len, cap) = gauge();
+            eprint!("\r[{}] {:.3}  buf {}/{}  ", bar, level, len, cap);
+        } else {
+            eprint!("\r[{}] {:.3}  ", bar, level);
+        }
         io::stderr().flush().ok();
     }
 }
@@ -379,6 +396,27 @@ mod tests {
         assert!(station.show_levels);
         assert!(station.auto_level);
         assert_eq!(station.sample_rate, 48000);
+    }
+
+    #[test]
+    fn test_buffer_gauge_wired_through_builder() {
+        let config = VadConfig::default();
+        let station = VadStation::new(config).with_buffer_gauge(Box::new(|| (3, 8)));
+
+        let (len, cap) = (station.buffer_gauge.as_ref().unwrap())();
+        assert_eq!(len, 3);
+        assert_eq!(cap, 8);
+    }
+
+    #[test]
+    fn test_display_level_with_buffer_gauge() {
+        let config = VadConfig::default();
+        let station = VadStation::new(config)
+            .with_show_levels(true)
+            .with_buffer_gauge(Box::new(|| (2, 4)));
+
+        // Verify display with gauge doesn't panic
+        station.display_level(0.15, 0.08);
     }
 
     #[test]

@@ -200,10 +200,17 @@ impl Pipeline {
         let (transcribe_tx, transcribe_rx) = bounded(self.config.transcribe_buffer);
 
         // Create stations
-        let vad_station = VadStation::with_clock(self.config.vad, self.clock.clone())
+        let chunk_tx_gauge = chunk_tx.clone();
+        let mut vad_station = VadStation::with_clock(self.config.vad, self.clock.clone())
             .with_show_levels(self.config.verbosity >= 1)
             .with_auto_level(self.config.auto_level)
             .with_sample_rate(self.config.sample_rate);
+
+        if self.config.verbosity >= 1 {
+            vad_station = vad_station.with_buffer_gauge(Box::new(move || {
+                (chunk_tx_gauge.len(), chunk_tx_gauge.capacity().unwrap_or(0))
+            }));
+        }
 
         let chunker_station = ChunkerStation::with_clock(self.config.chunker, self.clock.clone())
             .with_sample_rate(self.config.sample_rate)
