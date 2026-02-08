@@ -3,13 +3,36 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use sysinfo::System;
-
 use crate::benchmark::{ResourceMonitor, SystemInfo, benchmark_model, compute_default_threads};
 use crate::config::Config;
 use crate::models::catalog;
 use crate::models::download::{download_model, is_model_installed, models_dir};
 use crate::models::remote::fetch_remote_models;
+
+// ── Tuning constants ────────────────────────────────────────────────────
+
+const PROBE_MODEL: &str = "tiny";
+const PROBE_MODEL_EN: &str = "tiny.en";
+
+const REFERENCE_SAMPLE_RATE: usize = 16_000;
+const REFERENCE_DURATION_SECS: u64 = 5;
+const REFERENCE_NUM_SAMPLES: usize = REFERENCE_SAMPLE_RATE * REFERENCE_DURATION_SECS as usize;
+const REFERENCE_DURATION_MS: u64 = REFERENCE_DURATION_SECS * 1000;
+
+/// Models must be faster than this RTF to be considered real-time capable.
+const RTF_REALTIME_THRESHOLD: f64 = 0.9;
+/// Fallback candidates need extra headroom beyond the realtime threshold.
+const RTF_FALLBACK_THRESHOLD: f64 = 0.7;
+
+const RAM_HEADROOM_FACTOR: f64 = 1.2;
+const DISK_HEADROOM_MB: u64 = 100;
+
+/// English-only models get a small quality bonus when language is "en".
+const ENGLISH_QUALITY_BONUS: f64 = 1.05;
+/// Below this percentage the estimate is considered "spot on".
+const ESTIMATE_ACCURACY_THRESHOLD: f64 = 5.0;
+
+// ── Public types ────────────────────────────────────────────────────────
 
 /// A candidate model for auto-tuning selection.
 #[derive(Debug, Clone)]
@@ -26,14 +49,11 @@ pub struct ModelCandidate {
     pub english_only: bool,
 }
 
+// ── Pure scoring / estimation functions ──────────────────────────────────
+
 /// Extract the model tier (tiny, base, small, medium, large) from a model name.
 ///
 /// The tier is the first component before any `.` or `-` separator.
-///
-/// # Examples
-///
-/// - `"tiny.en"` -> `"tiny"`
-/// - `"large-v3-turbo-q5_0"` -> `"large"`
 pub fn model_tier(name: &str) -> &str {
     let base = name.split('.').next().unwrap_or(name);
     base.split('-').next().unwrap_or(base)
@@ -91,9 +111,7 @@ pub fn quant_quality(quant: &str) -> f64 {
 ///
 /// The score is `tier_quality * quant_quality`, ranging from 0.0 to 1.0.
 pub fn quality_score(name: &str) -> f64 {
-    let tier = model_tier(name);
-    let quant = parse_quantization(name);
-    tier_quality(tier) * quant_quality(quant)
+    tier_quality(model_tier(name)) * quant_quality(parse_quantization(name))
 }
 
 /// Estimate the real-time factor (RTF) for a target model based on probe results.
@@ -107,25 +125,32 @@ pub fn estimate_rtf(probe_rtf: f64, probe_size_mb: u32, target_size_mb: u32) -> 
     probe_rtf * (target_size_mb as f64 / probe_size_mb as f64)
 }
 
-/// Generate 5 seconds of deterministic synthetic audio at 16 kHz.
+/// Generate deterministic synthetic audio at 16 kHz for benchmarking.
 ///
-/// Produces 80,000 i16 samples of low-amplitude pseudo-random noise using a
-/// linear congruential generator (no `rand` dependency). The output is
-/// deterministic (same samples every call) so benchmarks are reproducible.
+/// Produces [`REFERENCE_NUM_SAMPLES`] i16 samples of low-amplitude pseudo-random
+/// noise using a linear congruential generator (no `rand` dependency). The output
+/// is deterministic so benchmarks are reproducible.
 pub fn generate_reference_audio() -> Vec<i16> {
-    const NUM_SAMPLES: usize = 80_000; // 5 seconds at 16kHz
-    let mut samples = Vec::with_capacity(NUM_SAMPLES);
-    let mut state: u32 = 42; // fixed seed
-    for _ in 0..NUM_SAMPLES {
-        state = state.wrapping_mul(1103515245).wrapping_add(12345);
+    // POSIX LCG constants — well-known, deterministic sequence
+    const LCG_MULTIPLIER: u32 = 1103515245;
+    const LCG_INCREMENT: u32 = 12345;
+    const LCG_SEED: u32 = 42;
+    const AMPLITUDE: i16 = 500;
+
+    let mut samples = Vec::with_capacity(REFERENCE_NUM_SAMPLES);
+    let mut state = LCG_SEED;
+    for _ in 0..REFERENCE_NUM_SAMPLES {
+        state = state
+            .wrapping_mul(LCG_MULTIPLIER)
+            .wrapping_add(LCG_INCREMENT);
         // Use bits 16..30 for better randomness from the LCG
         let raw = ((state >> 16) & 0x7FFF) as i16;
-        // Scale to low amplitude (-500..500 range)
-        let sample = (raw % 1001) - 500;
-        samples.push(sample);
+        samples.push(raw % (AMPLITUDE * 2 + 1) - AMPLITUDE);
     }
     samples
 }
+
+// ── System detection ────────────────────────────────────────────────────
 
 /// Query available disk space (in MB) for the filesystem containing `path`.
 ///
@@ -176,12 +201,14 @@ fn find_existing_ancestor(path: &Path) -> &Path {
     current
 }
 
+// ── Candidate filtering and ranking ─────────────────────────────────────
+
 /// Filter model candidates by hardware constraints and language compatibility.
 ///
 /// A candidate passes if:
-/// - `model_size_mb * 1.2 < available_ram_mb` (fits in RAM with headroom)
-/// - `model_size_mb + 100 < available_disk_mb` (fits on disk)
-/// - `estimated_rtf < 0.9` (faster than real-time with 10% headroom)
+/// - `model_size_mb * RAM_HEADROOM_FACTOR < available_ram_mb`
+/// - `model_size_mb + DISK_HEADROOM_MB < available_disk_mb`
+/// - `estimated_rtf < RTF_REALTIME_THRESHOLD`
 /// - Language compatible (`.en` models excluded when `language != "en"`)
 pub fn filter_candidates<'a>(
     candidates: &'a [ModelCandidate],
@@ -192,9 +219,9 @@ pub fn filter_candidates<'a>(
     candidates
         .iter()
         .filter(|c| {
-            let ram_ok = (c.size_mb as f64 * 1.2) < available_ram_mb as f64;
-            let disk_ok = (c.size_mb as u64 + 100) < avail_disk_mb;
-            let rtf_ok = c.estimated_rtf < 0.9;
+            let ram_ok = (c.size_mb as f64 * RAM_HEADROOM_FACTOR) < available_ram_mb as f64;
+            let disk_ok = (c.size_mb as u64 + DISK_HEADROOM_MB) < avail_disk_mb;
+            let rtf_ok = c.estimated_rtf < RTF_REALTIME_THRESHOLD;
             let lang_ok = if language != "en" {
                 !c.english_only
             } else {
@@ -204,6 +231,193 @@ pub fn filter_candidates<'a>(
         })
         .collect()
 }
+
+/// Collect models from catalog and HuggingFace, deduplicate, and estimate RTF.
+async fn collect_all_candidates(probe_rtf: f64, probe_size: u32) -> Vec<ModelCandidate> {
+    println!("Fetching available models from HuggingFace...");
+    let remote_models = match fetch_remote_models().await {
+        Ok(models) => models,
+        Err(e) => {
+            eprintln!("  Warning: could not fetch remote models: {e}");
+            eprintln!("  Falling back to catalog models only.");
+            Vec::new()
+        }
+    };
+
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+
+    // Catalog models first (have verified SHA-1 checksums)
+    for m in catalog::list_models() {
+        if seen.insert(m.name.to_string()) {
+            candidates.push(ModelCandidate {
+                name: m.name.to_string(),
+                size_mb: m.size_mb,
+                estimated_rtf: estimate_rtf(probe_rtf, probe_size, m.size_mb),
+                quality: quality_score(m.name),
+                english_only: m.english_only,
+            });
+        }
+    }
+    for m in &remote_models {
+        if seen.insert(m.name.clone()) {
+            candidates.push(ModelCandidate {
+                name: m.name.clone(),
+                size_mb: m.size_mb,
+                estimated_rtf: estimate_rtf(probe_rtf, probe_size, m.size_mb),
+                quality: quality_score(&m.name),
+                english_only: m.english_only,
+            });
+        }
+    }
+
+    println!("  Found {} models", candidates.len());
+    println!();
+
+    candidates
+}
+
+/// Sort viable candidates by quality, highest first.
+///
+/// When `language` is `"en"`, `.en` models get a small quality bonus since
+/// they are optimised for English transcription at the same model size.
+fn rank_by_quality<'a>(
+    mut viable: Vec<&'a ModelCandidate>,
+    language: &str,
+) -> Vec<&'a ModelCandidate> {
+    viable.sort_by(|a, b| {
+        let adjusted_quality = |c: &ModelCandidate| -> f64 {
+            if language == "en" && c.english_only {
+                c.quality * ENGLISH_QUALITY_BONUS
+            } else {
+                c.quality
+            }
+        };
+        adjusted_quality(b)
+            .partial_cmp(&adjusted_quality(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    viable
+}
+
+/// Context passed to [`verify_or_fallback`] to avoid a long parameter list.
+struct VerifyContext<'a> {
+    language: &'a str,
+    audio: &'a [i16],
+    monitor: &'a ResourceMonitor,
+    verbose: u8,
+    threads: usize,
+    probe_name: &'a str,
+}
+
+/// Download, benchmark, and verify the recommended model.
+///
+/// If the recommended model turns out slower than real-time, iterates through
+/// `alternatives` looking for one that works. Returns the final chosen model name.
+async fn verify_or_fallback(
+    recommended: &ModelCandidate,
+    alternatives: &[&ModelCandidate],
+    ctx: &VerifyContext<'_>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    // Download recommended model
+    if is_model_installed(&recommended.name) {
+        println!("Model {} already installed", recommended.name);
+    } else {
+        println!(
+            "Downloading {} ({} MB)...",
+            recommended.name, recommended.size_mb
+        );
+    }
+    download_model(&recommended.name, true).await?;
+    println!("\u{2713} Model {} installed", recommended.name);
+    println!();
+
+    // Benchmark to verify estimate
+    println!("Verifying performance estimate...");
+    let result = benchmark_model(
+        &recommended.name,
+        ctx.language,
+        ctx.audio,
+        REFERENCE_DURATION_MS,
+        ctx.monitor,
+        1,
+        ctx.verbose,
+        ctx.threads,
+    )?;
+    let actual_rtf = result.realtime_factor;
+
+    println!(
+        "  {}: {}ms for {:.1}s audio \u{2192} {:.2}x real-time ({:.1}x speed)",
+        recommended.name,
+        result.elapsed_ms,
+        REFERENCE_DURATION_SECS as f64,
+        actual_rtf,
+        result.speed_multiplier,
+    );
+
+    let accuracy_pct = if recommended.estimated_rtf > 0.0 {
+        (actual_rtf - recommended.estimated_rtf).abs() / recommended.estimated_rtf * 100.0
+    } else {
+        0.0
+    };
+    if accuracy_pct < ESTIMATE_ACCURACY_THRESHOLD {
+        println!(
+            "  Estimate accuracy: estimated {:.2}, actual {:.2} \u{2014} spot on!",
+            recommended.estimated_rtf, actual_rtf,
+        );
+    } else {
+        println!(
+            "  Estimate accuracy: estimated {:.2}, actual {:.2} ({:.0}% off)",
+            recommended.estimated_rtf, actual_rtf, accuracy_pct,
+        );
+    }
+    println!();
+
+    // If verified fast enough, we're done
+    if actual_rtf <= 1.0 {
+        return Ok(recommended.name.clone());
+    }
+
+    // Otherwise try alternatives
+    eprintln!(
+        "Warning: {} is slower than real-time ({:.2}x RTF).",
+        recommended.name, actual_rtf,
+    );
+    for alt in alternatives {
+        if alt.estimated_rtf >= RTF_FALLBACK_THRESHOLD {
+            continue;
+        }
+        println!("Trying alternative: {} ...", alt.name);
+        if !is_model_installed(&alt.name) {
+            download_model(&alt.name, true).await?;
+        }
+        let alt_result = benchmark_model(
+            &alt.name,
+            ctx.language,
+            ctx.audio,
+            REFERENCE_DURATION_MS,
+            ctx.monitor,
+            1,
+            ctx.verbose,
+            ctx.threads,
+        )?;
+        if alt_result.realtime_factor < 1.0 {
+            println!(
+                "  {}: {:.2}x real-time \u{2014} OK!",
+                alt.name, alt_result.speed_multiplier,
+            );
+            return Ok(alt.name.clone());
+        }
+    }
+
+    eprintln!(
+        "No alternative runs faster than real-time. Using probe model '{}'.",
+        ctx.probe_name,
+    );
+    Ok(ctx.probe_name.to_string())
+}
+
+// ── Main entry point ────────────────────────────────────────────────────
 
 /// Run the `voicsh init` auto-tuning flow.
 ///
@@ -216,178 +430,108 @@ pub async fn run_init(language: &str, verbose: u8) -> Result<(), Box<dyn std::er
 
     // ── Step 1: Detect system ───────────────────────────────────────────
     let sys_info = SystemInfo::detect();
-    let mut sys = System::new_all();
-    sys.refresh_memory();
-    let ram_mb = sys.available_memory() / (1024 * 1024);
     let cache_dir = models_dir();
     let disk_mb = available_disk_mb(&cache_dir);
 
     let gpu_str = sys_info.gpu_info.as_deref().unwrap_or("None");
-    let total_ram_gb = sys.total_memory() / (1024 * 1024 * 1024);
     println!(
         "System: {} ({}c/{}t) | GPU: {} | RAM: {} GB",
-        sys_info.cpu_model, sys_info.cpu_cores, sys_info.cpu_threads, gpu_str, total_ram_gb,
+        sys_info.cpu_model,
+        sys_info.cpu_cores,
+        sys_info.cpu_threads,
+        gpu_str,
+        sys_info.total_memory_mb / 1024,
     );
-
-    let disk_path = find_existing_ancestor(&cache_dir);
     println!(
         "Disk: {} GB available on {}",
         disk_mb / 1024,
-        disk_path.display(),
+        find_existing_ancestor(&cache_dir).display(),
     );
     println!();
 
     // ── Step 2: Download probe model ────────────────────────────────────
-    let probe_name = if language == "en" { "tiny.en" } else { "tiny" };
+    let probe_name = if language == "en" {
+        PROBE_MODEL_EN
+    } else {
+        PROBE_MODEL
+    };
     let probe_info = catalog::get_model(probe_name).ok_or_else(|| {
-        format!(
-            "Probe model '{probe_name}' not found in catalog. This is a bug \u{2014} please report it."
-        )
+        format!("Probe model '{probe_name}' not found in catalog. This is a bug \u{2014} please report it.")
     })?;
     let probe_size = probe_info.size_mb;
 
     if is_model_installed(probe_name) {
         println!(
             "Probe model ({}, {} MB) already installed",
-            probe_name, probe_size,
+            probe_name, probe_size
         );
     } else {
         println!(
             "Downloading probe model ({}, {} MB)...",
-            probe_name, probe_size,
+            probe_name, probe_size
         );
     }
     download_model(probe_name, true).await?;
     println!("\u{2713} Model {} installed", probe_name);
     println!();
 
-    // ── Step 3: Generate reference audio ────────────────────────────────
+    // ── Step 3: Benchmark probe model ───────────────────────────────────
     let audio = generate_reference_audio();
-    let audio_duration_ms = 5000_u64; // 5 seconds
-
-    // ── Step 4: Benchmark probe model ───────────────────────────────────
-    println!("Benchmarking probe model...");
     let threads = compute_default_threads(sys_info.cpu_threads);
     let monitor = ResourceMonitor::new();
+
+    println!("Benchmarking probe model...");
     let probe_result = benchmark_model(
         probe_name,
         language,
         &audio,
-        audio_duration_ms,
+        REFERENCE_DURATION_MS,
         &monitor,
         1,
         verbose,
         threads,
     )?;
-    let probe_rtf = probe_result.realtime_factor;
     println!(
         "  {}: {}ms for {:.1}s audio \u{2192} {:.2}x real-time ({:.1}x speed)",
         probe_name,
         probe_result.elapsed_ms,
-        audio_duration_ms as f64 / 1000.0,
-        probe_rtf,
+        REFERENCE_DURATION_SECS as f64,
+        probe_result.realtime_factor,
         probe_result.speed_multiplier,
     );
     println!();
 
-    // ── Step 5: Fetch all available models ──────────────────────────────
-    println!("Fetching available models from HuggingFace...");
-    let remote_models = match fetch_remote_models().await {
-        Ok(models) => models,
-        Err(e) => {
-            eprintln!("  Warning: could not fetch remote models: {e}");
-            eprintln!("  Falling back to catalog models only.");
-            Vec::new()
-        }
-    };
+    // ── Step 4: Discover models and estimate performance ────────────────
+    let candidates = collect_all_candidates(probe_result.realtime_factor, probe_size).await;
 
-    // Combine catalog and remote, deduplicated by name
-    let mut all_models: Vec<(String, u32, bool)> = Vec::new();
-    let mut seen = HashSet::new();
-    for m in catalog::list_models() {
-        if seen.insert(m.name.to_string()) {
-            all_models.push((m.name.to_string(), m.size_mb, m.english_only));
-        }
-    }
-    for m in &remote_models {
-        if seen.insert(m.name.clone()) {
-            all_models.push((m.name.clone(), m.size_mb, m.english_only));
-        }
-    }
-
-    println!("  Found {} models", all_models.len());
-    println!();
-
-    // ── Step 6: Estimate performance for each ───────────────────────────
-    println!("Estimating performance for {} models...", all_models.len());
-    let candidates: Vec<ModelCandidate> = all_models
-        .iter()
-        .map(|(name, size_mb, english_only)| {
-            let est_rtf = estimate_rtf(probe_rtf, probe_size, *size_mb);
-            let quality = quality_score(name);
-            ModelCandidate {
-                name: name.clone(),
-                size_mb: *size_mb,
-                estimated_rtf: est_rtf,
-                quality,
-                english_only: *english_only,
-            }
-        })
-        .collect();
-
-    // ── Step 7: Filter candidates ───────────────────────────────────────
-    let viable = filter_candidates(&candidates, ram_mb, disk_mb, language);
+    println!("Estimating performance for {} models...", candidates.len());
+    let viable = filter_candidates(&candidates, sys_info.available_memory_mb, disk_mb, language);
     let too_slow = candidates.len() - viable.len();
     println!(
         "  \u{2713} {} models can run faster than real-time",
-        viable.len(),
+        viable.len()
     );
     if too_slow > 0 {
         println!(
             "  \u{2717} {} models too slow or incompatible for this hardware",
-            too_slow,
+            too_slow
         );
     }
     println!();
 
+    // ── Step 5: Handle empty viable set (fallback to probe) ─────────────
     if viable.is_empty() {
         println!("No models can run at real-time speed on this hardware.");
         println!("Using probe model '{}' as fallback.", probe_name);
         println!();
-        let config_path = Config::default_path();
-        Config::update_model(&config_path, probe_name)?;
-        println!("Saving configuration to {}...", config_path.display(),);
-        println!("  stt.model = \"{}\"", probe_name);
-        println!();
-        println!("voicsh is ready! Run 'voicsh' to start voice typing.");
-        println!("  Model: {} ({} MB)", probe_name, probe_size);
-        println!("  Speed: {:.1}x real-time", probe_result.speed_multiplier,);
-        println!("  Tip: Run 'voicsh init' again anytime to re-tune.");
+        save_and_summarize(probe_name, probe_size, probe_result.speed_multiplier)?;
         return Ok(());
     }
 
-    // ── Step 8: Rank by quality score ───────────────────────────────────
-    // When language is "en", give .en models a 5% quality bonus since they
-    // are optimised for English transcription at the same model size.
-    let mut ranked: Vec<&ModelCandidate> = viable;
-    ranked.sort_by(|a, b| {
-        let a_q = if language == "en" && a.english_only {
-            a.quality * 1.05
-        } else {
-            a.quality
-        };
-        let b_q = if language == "en" && b.english_only {
-            b.quality * 1.05
-        } else {
-            b.quality
-        };
-        b_q.partial_cmp(&a_q).unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    // SAFETY: ranked is non-empty because we checked viable.is_empty() above
+    // ── Step 6: Rank by quality and pick best ───────────────────────────
+    let ranked = rank_by_quality(viable, language);
     let recommended = ranked[0];
 
-    // ── Step 9: Print recommendation ────────────────────────────────────
     println!(
         "Recommended: {} ({} MB, estimated {:.2}x RTF, quality: {:.0}%)",
         recommended.name,
@@ -409,136 +553,54 @@ pub async fn run_init(language: &str, verbose: u8) -> Result<(), Box<dyn std::er
     }
     println!();
 
-    // Capture values before moving on (recommended is a borrow into ranked)
-    let rec_name = recommended.name.clone();
-    let rec_size = recommended.size_mb;
-    let rec_est_rtf = recommended.estimated_rtf;
-
-    // ── Step 10: Download recommended model ─────────────────────────────
-    if is_model_installed(&rec_name) {
-        println!("Model {} already installed", rec_name);
-    } else {
-        println!("Downloading {} ({} MB)...", rec_name, rec_size);
-    }
-    download_model(&rec_name, true).await?;
-    println!("\u{2713} Model {} installed", rec_name);
-    println!();
-
-    // ── Step 11: Verify estimate ────────────────────────────────────────
-    println!("Verifying performance estimate...");
-    let verify_result = benchmark_model(
-        &rec_name,
+    // ── Step 7: Download, verify, and potentially fallback ──────────────
+    let ctx = VerifyContext {
         language,
-        &audio,
-        audio_duration_ms,
-        &monitor,
-        1,
+        audio: &audio,
+        monitor: &monitor,
         verbose,
         threads,
-    )?;
-    let actual_rtf = verify_result.realtime_factor;
-    println!(
-        "  {}: {}ms for {:.1}s audio \u{2192} {:.2}x real-time ({:.1}x speed)",
-        rec_name,
-        verify_result.elapsed_ms,
-        audio_duration_ms as f64 / 1000.0,
-        actual_rtf,
-        verify_result.speed_multiplier,
-    );
-
-    let accuracy_pct = if rec_est_rtf > 0.0 {
-        (actual_rtf - rec_est_rtf).abs() / rec_est_rtf * 100.0
-    } else {
-        0.0
+        probe_name,
     };
-    if accuracy_pct < 5.0 {
-        println!(
-            "  Estimate accuracy: estimated {:.2}, actual {:.2} \u{2014} spot on!",
-            rec_est_rtf, actual_rtf,
-        );
-    } else {
-        println!(
-            "  Estimate accuracy: estimated {:.2}, actual {:.2} ({:.0}% off)",
-            rec_est_rtf, actual_rtf, accuracy_pct,
-        );
-    }
-    println!();
+    let final_model = verify_or_fallback(recommended, &ranked[1..], &ctx).await?;
 
-    // If actual RTF exceeds real-time, try alternatives
-    let final_model = if actual_rtf > 1.0 {
-        eprintln!(
-            "Warning: {} is slower than real-time ({:.2}x RTF).",
-            rec_name, actual_rtf,
-        );
-        let mut fallback_name: Option<String> = None;
-        for alt in ranked.iter().skip(1) {
-            // Require extra headroom for fallback candidates
-            if alt.estimated_rtf >= 0.7 {
-                continue;
-            }
-            println!("Trying alternative: {} ...", alt.name);
-            if !is_model_installed(&alt.name) {
-                download_model(&alt.name, true).await?;
-            }
-            let alt_result = benchmark_model(
-                &alt.name,
-                language,
-                &audio,
-                audio_duration_ms,
-                &monitor,
-                1,
-                verbose,
-                threads,
-            )?;
-            if alt_result.realtime_factor < 1.0 {
-                println!(
-                    "  {}: {:.2}x real-time \u{2014} OK!",
-                    alt.name, alt_result.speed_multiplier,
-                );
-                fallback_name = Some(alt.name.clone());
-                break;
-            }
-        }
-        fallback_name.unwrap_or_else(|| {
-            eprintln!(
-                "No alternative runs faster than real-time. Using probe model '{}'.",
-                probe_name,
-            );
-            probe_name.to_string()
-        })
-    } else {
-        rec_name.clone()
-    };
-
-    // ── Step 12: Save config ────────────────────────────────────────────
-    let config_path = Config::default_path();
-    println!("Saving configuration to {}...", config_path.display());
-    Config::update_model(&config_path, &final_model)?;
-    println!("  stt.model = \"{}\"", final_model);
-    println!();
-
-    // ── Step 13: Print summary ──────────────────────────────────────────
+    // ── Step 8: Save config and print summary ───────────────────────────
     let final_size = candidates
         .iter()
         .find(|c| c.name == final_model)
         .map(|c| c.size_mb)
         .unwrap_or(0);
-    let final_speed = if final_model == rec_name && actual_rtf > 0.0 {
-        1.0 / actual_rtf
-    } else {
-        let est = candidates
-            .iter()
-            .find(|c| c.name == final_model)
-            .map(|c| c.estimated_rtf)
-            .unwrap_or(1.0);
-        if est > 0.0 { 1.0 / est } else { 0.0 }
-    };
+    let final_speed = candidates
+        .iter()
+        .find(|c| c.name == final_model)
+        .map(|c| {
+            if c.estimated_rtf > 0.0 {
+                1.0 / c.estimated_rtf
+            } else {
+                0.0
+            }
+        })
+        .unwrap_or(0.0);
 
+    save_and_summarize(&final_model, final_size, final_speed)?;
+    Ok(())
+}
+
+/// Save the chosen model to config and print a summary.
+fn save_and_summarize(
+    model: &str,
+    size_mb: u32,
+    speed_multiplier: f64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config_path = Config::default_path();
+    println!("Saving configuration to {}...", config_path.display());
+    Config::update_model(&config_path, model)?;
+    println!("  stt.model = \"{}\"", model);
+    println!();
     println!("voicsh is ready! Run 'voicsh' to start voice typing.");
-    println!("  Model: {} ({} MB)", final_model, final_size);
-    println!("  Speed: {:.1}x real-time", final_speed);
+    println!("  Model: {} ({} MB)", model, size_mb);
+    println!("  Speed: {:.1}x real-time", speed_multiplier);
     println!("  Tip: Run 'voicsh init' again anytime to re-tune.");
-
     Ok(())
 }
 
@@ -578,7 +640,6 @@ mod tests {
 
     #[test]
     fn quality_score_ordering() {
-        // Larger models should have higher quality scores
         let tiny_q = quality_score("tiny");
         let base_q = quality_score("base");
         let small_q = quality_score("small");
@@ -615,17 +676,15 @@ mod tests {
 
     #[test]
     fn estimate_rtf_proportional_to_size() {
-        let probe_rtf = 0.1; // tiny at 0.1 RTF
+        let probe_rtf = 0.1;
         let probe_size = 75;
 
-        // base is ~2x the size of tiny
         let base_rtf = estimate_rtf(probe_rtf, probe_size, 142);
         assert!(
             (base_rtf - 0.189).abs() < 0.01,
             "base RTF should be ~0.189, got {base_rtf}"
         );
 
-        // small is ~6.2x the size of tiny
         let small_rtf = estimate_rtf(probe_rtf, probe_size, 466);
         assert!(
             (small_rtf - 0.621).abs() < 0.01,
@@ -636,8 +695,7 @@ mod tests {
     #[test]
     fn generate_reference_audio_correct_length() {
         let samples = generate_reference_audio();
-        // 5 seconds at 16kHz = 80,000 samples
-        assert_eq!(samples.len(), 80_000);
+        assert_eq!(samples.len(), REFERENCE_NUM_SAMPLES);
     }
 
     #[test]
@@ -687,25 +745,25 @@ mod tests {
             },
         ];
 
-        // With enough RAM/disk, language "auto": .en models excluded, large too slow
+        // language "auto": .en models excluded, large too slow
         let filtered = filter_candidates(&candidates, 8192, 10000, "auto");
         let names: Vec<&str> = filtered.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["tiny", "small"]);
 
-        // With language "en": .en models included, large still too slow
+        // language "en": .en models included, large still too slow
         let filtered = filter_candidates(&candidates, 8192, 10000, "en");
         let names: Vec<&str> = filtered.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["tiny", "small", "base.en"]);
 
-        // With limited RAM: small doesn't fit (466 * 1.2 = 559.2 > 400)
+        // Limited RAM: small doesn't fit (466 * 1.2 = 559.2 > 400)
         let filtered = filter_candidates(&candidates, 400, 10000, "en");
         let names: Vec<&str> = filtered.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, vec!["tiny", "base.en"]);
 
-        // With limited disk: base.en doesn't fit (142 + 100 = 242 > 200)
+        // Limited disk: base.en doesn't fit (142 + 100 = 242 > 200)
         let filtered = filter_candidates(&candidates, 8192, 200, "en");
         let names: Vec<&str> = filtered.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, vec!["tiny"]); // 75 + 100 = 175 < 200
+        assert_eq!(names, vec!["tiny"]);
     }
 
     #[test]
@@ -729,7 +787,6 @@ mod tests {
 
     #[test]
     fn quant_quality_prefix_fallbacks() {
-        // Unknown specific variants should match by prefix
         assert_eq!(quant_quality("q8_1"), 0.99);
         assert_eq!(quant_quality("q5_K"), 0.96);
         assert_eq!(quant_quality("q4_K"), 0.93);
@@ -739,16 +796,9 @@ mod tests {
 
     #[test]
     fn quality_score_concrete_values() {
-        // tiny full precision: 0.25 * 1.0 = 0.25
         assert!((quality_score("tiny") - 0.25).abs() < f64::EPSILON);
-
-        // small-q5_1: 0.65 * 0.97 = 0.6305
         assert!((quality_score("small-q5_1") - 0.6305).abs() < 0.001);
-
-        // large-v3 full precision: 0.95 * 1.0 = 0.95
         assert!((quality_score("large-v3") - 0.95).abs() < f64::EPSILON);
-
-        // large-v3-q4_0: 0.95 * 0.93 = 0.8835
         assert!((quality_score("large-v3-q4_0") - 0.8835).abs() < 0.001);
     }
 
@@ -792,8 +842,73 @@ mod tests {
 
     #[test]
     fn available_disk_mb_root() {
-        // Root filesystem should always have some space
         let mb = available_disk_mb(Path::new("/"));
         assert!(mb > 0, "Root filesystem should report available space > 0");
+    }
+
+    #[test]
+    fn rank_by_quality_prefers_higher_tiers() {
+        let candidates = vec![
+            ModelCandidate {
+                name: "tiny".to_string(),
+                size_mb: 75,
+                estimated_rtf: 0.07,
+                quality: quality_score("tiny"),
+                english_only: false,
+            },
+            ModelCandidate {
+                name: "small".to_string(),
+                size_mb: 466,
+                estimated_rtf: 0.42,
+                quality: quality_score("small"),
+                english_only: false,
+            },
+        ];
+        let refs: Vec<&ModelCandidate> = candidates.iter().collect();
+        let ranked = rank_by_quality(refs, "auto");
+        assert_eq!(ranked[0].name, "small");
+        assert_eq!(ranked[1].name, "tiny");
+    }
+
+    #[test]
+    fn rank_by_quality_english_bonus() {
+        let candidates = vec![
+            ModelCandidate {
+                name: "base".to_string(),
+                size_mb: 142,
+                estimated_rtf: 0.13,
+                quality: quality_score("base"),
+                english_only: false,
+            },
+            ModelCandidate {
+                name: "base.en".to_string(),
+                size_mb: 142,
+                estimated_rtf: 0.13,
+                quality: quality_score("base.en"),
+                english_only: true,
+            },
+        ];
+        // With language "en", the .en model should rank higher
+        let refs: Vec<&ModelCandidate> = candidates.iter().collect();
+        let ranked = rank_by_quality(refs, "en");
+        assert_eq!(
+            ranked[0].name, "base.en",
+            ".en model should rank first for English"
+        );
+
+        // With language "auto", both have same quality, order is stable
+        let refs: Vec<&ModelCandidate> = candidates.iter().collect();
+        let ranked = rank_by_quality(refs, "auto");
+        assert_eq!(
+            ranked[0].name, "base",
+            "multilingual should rank first for auto"
+        );
+    }
+
+    #[test]
+    fn constants_are_consistent() {
+        assert_eq!(REFERENCE_NUM_SAMPLES, 80_000);
+        assert_eq!(REFERENCE_DURATION_MS, 5000);
+        assert!(RTF_FALLBACK_THRESHOLD < RTF_REALTIME_THRESHOLD);
     }
 }

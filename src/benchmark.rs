@@ -84,6 +84,8 @@ pub struct SystemInfo {
     pub cpu_cores: usize,
     pub cpu_threads: usize,
     pub cpu_frequency: Option<f32>,
+    pub total_memory_mb: u64,
+    pub available_memory_mb: u64,
     pub gpu_info: Option<String>,
     pub whisper_backend: String,
     pub whisper_threads: usize,
@@ -110,6 +112,9 @@ impl SystemInfo {
             .first()
             .map(|cpu| cpu.frequency() as f32 / 1000.0); // Convert MHz to GHz
 
+        let total_memory_mb = system.total_memory() / (1024 * 1024);
+        let available_memory_mb = system.available_memory() / (1024 * 1024);
+
         // GPU detection - check for NVIDIA/AMD/Intel
         let gpu_info = detect_gpu();
 
@@ -127,6 +132,8 @@ impl SystemInfo {
             cpu_cores,
             cpu_threads,
             cpu_frequency,
+            total_memory_mb,
+            available_memory_mb,
             gpu_info,
             whisper_backend,
             whisper_threads,

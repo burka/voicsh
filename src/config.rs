@@ -185,20 +185,17 @@ impl Config {
 
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
-                crate::error::VoicshError::Io(std::io::Error::new(
-                    e.kind(),
-                    format!(
-                        "Failed to create config directory '{}': {e}",
-                        parent.display()
-                    ),
+                crate::error::VoicshError::Other(format!(
+                    "Failed to create config directory '{}': {e}",
+                    parent.display()
                 ))
             })?;
         }
 
         fs::write(path, toml_str).map_err(|e| {
-            crate::error::VoicshError::Io(std::io::Error::new(
-                e.kind(),
-                format!("Failed to write config to '{}': {e}", path.display()),
+            crate::error::VoicshError::Other(format!(
+                "Failed to write config to '{}': {e}",
+                path.display()
             ))
         })?;
 

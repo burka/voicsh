@@ -152,7 +152,7 @@ What it does:
 
 1. Detects your CPU, RAM, disk space, and GPU
 2. Downloads a tiny probe model (75 MB) and benchmarks it
-3. Fetches all available models from HuggingFace (including quantized variants)
+3. Fetches the model list from HuggingFace (metadata only — names and sizes, not the model files)
 4. Estimates performance for every model using a size-ratio formula
 5. Picks the highest-quality model that runs faster than real-time on your hardware
 6. Downloads and verifies the recommended model
