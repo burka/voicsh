@@ -6,15 +6,23 @@
 ## Commands Before Every Commit
 ```bash
 cargo fmt
-cargo clippy --lib --no-default-features --features cli,portal,model-download -- -D warnings
-cargo build  --lib --no-default-features --features cli,portal,model-download
-cargo test --lib   --no-default-features --features cli,portal,model-download
-cargo test --lib  --no-default-features --features portal
-cargo test --lib  --no-default-features
+cargo clippy -- -D warnings
+cargo build
+cargo test
+cargo test --lib --no-default-features --features portal
+cargo test --lib --no-default-features
 ```
 
-> `default = ["full"]` includes `cpal-audio` (ALSA) and `whisper` (cmake) for end users.
-> Quality gates use `cli,portal,model-download` — the binary requires `cpal-audio` so we check `--lib` only.
+> `default = ["full"]` pulls in `cpal-audio` (ALSA) and `whisper` (cmake).
+> If ALSA/cmake are unavailable (CI, containers, remote agents), use this reduced set:
+> ```bash
+> cargo fmt
+> cargo clippy --lib --no-default-features --features cli,portal,model-download -- -D warnings
+> cargo build  --lib --no-default-features --features cli,portal,model-download
+> cargo test --lib   --no-default-features --features cli,portal,model-download
+> cargo test --lib  --no-default-features --features portal
+> cargo test --lib  --no-default-features
+> ```
 
 ## Test Rules
 - Every test MUST assert expected values, not just `is_ok()` / `is_some()`
