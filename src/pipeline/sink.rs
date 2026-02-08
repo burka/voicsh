@@ -1,10 +1,12 @@
 use crate::config::InputMethod;
 use crate::input::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
 use crate::pipeline::error::{StationError, eprintln_clear};
+use crate::pipeline::latency::{LatencyTracker, TranscriptionTiming};
 use crate::pipeline::station::Station;
 use crate::pipeline::types::TranscribedText;
 #[cfg(feature = "portal")]
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Pluggable text output handler for pipeline.
 /// Pairs with AudioSource for input - this handles transcription output.
@@ -31,6 +33,8 @@ pub(crate) struct SinkStation {
     quiet: bool,
     verbosity: u8,
     result_tx: Option<crossbeam_channel::Sender<Option<String>>>,
+    latency_tracker: LatencyTracker,
+    transcription_count: usize,
 }
 
 #[allow(dead_code)]
@@ -46,6 +50,8 @@ impl SinkStation {
             quiet,
             verbosity,
             result_tx: Some(result_tx),
+            latency_tracker: LatencyTracker::new(),
+            transcription_count: 0,
         }
     }
 }
@@ -65,13 +71,36 @@ impl Station for SinkStation {
 
         match self.sink.handle(&text.text) {
             Ok(()) => {
-                if !self.quiet {
-                    if self.verbosity >= 1 {
-                        let chars = text.text.len();
-                        eprintln_clear(&format!("[ok {}ch] \"{}\"", chars, text.text));
-                    } else {
-                        eprintln_clear(&format!("\"{}\"", text.text));
+                let output_done = Instant::now();
+                self.transcription_count += 1;
+
+                // Record timing if available
+                if let Some(chunk_timing) = text.timing {
+                    let timing = TranscriptionTiming {
+                        capture_start: chunk_timing.capture_start,
+                        vad_start: chunk_timing.vad_start,
+                        chunk_created: chunk_timing.chunk_created,
+                        transcription_done: text.timestamp,
+                        output_done,
+                    };
+                    self.latency_tracker.record(timing.clone());
+
+                    if !self.quiet {
+                        if self.verbosity >= 2 {
+                            // Full diagnostic breakdown
+                            self.latency_tracker.print_detailed(
+                                &timing,
+                                &text.text,
+                                self.transcription_count,
+                            );
+                        } else if self.verbosity >= 1 {
+                            // Basic timing
+                            self.latency_tracker.print_basic(&timing, &text.text);
+                        }
                     }
+                } else if !self.quiet && self.verbosity == 0 {
+                    // No verbosity and no timing - just text
+                    eprintln_clear(&format!("\"{}\"", text.text));
                 }
                 Ok(Some(()))
             }
@@ -89,6 +118,11 @@ impl Station for SinkStation {
     }
 
     fn shutdown(&mut self) {
+        // Print latency summary if we have measurements and verbosity is enabled
+        if !self.quiet && self.verbosity >= 1 {
+            self.latency_tracker.print_summary();
+        }
+
         let result = self.sink.finish();
         if let Some(tx) = self.result_tx.take()
             && tx.send(result).is_err()
@@ -226,7 +260,6 @@ impl TextSink for StdoutSink {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
-    use std::time::Instant;
 
     #[test]
     fn text_sink_is_object_safe() {
@@ -356,14 +389,8 @@ mod tests {
         let (result_tx, result_rx) = crossbeam_channel::bounded(1);
         let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
 
-        let text1 = TranscribedText {
-            text: "First".to_string(),
-            timestamp: Instant::now(),
-        };
-        let text2 = TranscribedText {
-            text: "Second".to_string(),
-            timestamp: Instant::now(),
-        };
+        let text1 = TranscribedText::new("First".to_string());
+        let text2 = TranscribedText::new("Second".to_string());
 
         station.process(text1).unwrap();
         station.process(text2).unwrap();
@@ -379,10 +406,7 @@ mod tests {
         let (result_tx, result_rx) = crossbeam_channel::bounded(1);
         let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
 
-        let empty_text = TranscribedText {
-            text: "   ".to_string(),
-            timestamp: Instant::now(),
-        };
+        let empty_text = TranscribedText::new("   ".to_string());
 
         let result = station.process(empty_text).unwrap();
         assert_eq!(result, None);
@@ -402,10 +426,7 @@ mod tests {
         let (result_tx, _result_rx) = crossbeam_channel::bounded(1);
         let mut station = SinkStation::new(Box::new(sink), true, 0, result_tx);
 
-        let text = TranscribedText {
-            text: "Test".to_string(),
-            timestamp: Instant::now(),
-        };
+        let text = TranscribedText::new("Test".to_string());
 
         let result = station.process(text);
         assert!(result.is_ok());
@@ -448,10 +469,7 @@ mod tests {
 
         let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
 
-        let text = TranscribedText {
-            text: "before shutdown".to_string(),
-            timestamp: Instant::now(),
-        };
+        let text = TranscribedText::new("before shutdown".to_string());
         let processed = station.process(text).unwrap();
         assert_eq!(processed, Some(()));
 

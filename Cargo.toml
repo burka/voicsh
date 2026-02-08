@@ -56,16 +56,31 @@ default = ["full"]
 full = ["whisper", "cpal-audio", "model-download", "cli", "portal"]
 whisper = ["whisper-rs"]
 cpal-audio = ["dep:cpal"]
-model-download = ["dep:reqwest", "dep:sha1", "dep:indicatif", "dep:futures-util"]
+model-download = ["dep:reqwest", "dep:sha1", "dep:indicatif", "dep:futures-util", "dep:dirs"]
 cli = ["dep:clap", "dep:dirs"]
 portal = ["dep:ashpd"]
+benchmark = ["dep:sysinfo", "dep:flate2", "whisper", "model-download", "cli"]
 cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
 hipblas = ["whisper-rs/hipblas"]
 openblas = ["whisper-rs/openblas"]
 
+[dependencies.sysinfo]
+version = "0.33"
+optional = true
+
+[dependencies.flate2]
+version = "1.0"
+optional = true
+
 [dev-dependencies]
 tempfile = "3"
+sysinfo = "0.33"
+criterion = "0.5"
+
+[[bench]]
+name = "wav_transcription"
+harness = false
 
 [profile.release]
 lto = true

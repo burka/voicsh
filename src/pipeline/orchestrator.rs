@@ -154,7 +154,7 @@ impl Pipeline {
 
         let chunker_station = ChunkerStation::with_clock(self.config.chunker, self.clock.clone())
             .with_sample_rate(self.config.sample_rate)
-            .with_verbose(self.config.verbosity >= 2)
+            .with_verbosity(self.config.verbosity)
             .with_flush_tx(chunk_tx.clone());
 
         let transcriber_station =

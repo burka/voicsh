@@ -20,10 +20,14 @@ pub struct ChunkerStation {
     sequence: u64,
     sample_rate: u32,
     silence_start: Option<Instant>,
-    verbose: bool,
+    verbosity: u8,
     clock: Arc<dyn Clock>,
     /// Output channel for flushing remaining audio on shutdown.
     flush_tx: Option<crossbeam_channel::Sender<AudioChunk>>,
+    /// Timestamp of the first frame in the current chunk (for latency tracking).
+    first_frame_capture: Option<Instant>,
+    /// VAD start time of the first frame in the current chunk.
+    first_frame_vad: Option<Instant>,
 }
 
 impl ChunkerStation {
@@ -40,9 +44,11 @@ impl ChunkerStation {
             sequence: 0,
             sample_rate,
             silence_start: None,
-            verbose: false,
+            verbosity: 0,
             clock,
             flush_tx: None,
+            first_frame_capture: None,
+            first_frame_vad: None,
         }
     }
 
@@ -58,12 +64,21 @@ impl ChunkerStation {
         self
     }
 
-    /// Enable diagnostic output to stderr.
+    /// Set verbosity level for diagnostic output.
+    ///
+    /// When verbosity >= 1, timing information is tracked.
+    /// When verbosity >= 2, diagnostic info is logged when chunks are emitted.
+    pub fn with_verbosity(mut self, verbosity: u8) -> Self {
+        self.verbosity = verbosity;
+        self
+    }
+
+    /// Enable diagnostic output to stderr (deprecated - use with_verbosity).
     ///
     /// When verbose is true, diagnostic info is logged when chunks are emitted.
-    pub fn with_verbose(mut self, verbose: bool) -> Self {
-        self.verbose = verbose;
-        self
+    #[deprecated(note = "Use with_verbosity instead")]
+    pub fn with_verbose(self, verbose: bool) -> Self {
+        self.with_verbosity(if verbose { 2 } else { 0 })
     }
 
     /// Flushes any remaining audio during shutdown.
@@ -80,15 +95,28 @@ impl ChunkerStation {
         let duration_ms = self.calculate_duration_ms(samples.len());
         let seq = self.sequence;
         self.sequence += 1;
-        let chunk = AudioChunk::new(samples, duration_ms, seq);
 
-        // Log chunk emission if verbose
-        if self.verbose {
+        let chunk = if self.verbosity >= 1 {
+            // Populate timing when verbosity >= 1
+            let capture_start = self.first_frame_capture.unwrap_or_else(Instant::now);
+            let vad_start = self.first_frame_vad.unwrap_or_else(Instant::now);
+            AudioChunk::with_timing(samples, duration_ms, seq, capture_start, vad_start)
+        } else {
+            // No timing when verbosity < 1
+            AudioChunk::new(samples, duration_ms, seq)
+        };
+
+        // Log chunk emission if verbosity >= 2
+        if self.verbosity >= 2 {
             eprintln_clear(&format!(
                 "  [chunk: {}ms, seq {}]",
                 chunk.duration_ms, chunk.sequence
             ));
         }
+
+        // Reset timing for next chunk
+        self.first_frame_capture = None;
+        self.first_frame_vad = None;
 
         chunk
     }
@@ -125,6 +153,12 @@ impl Station for ChunkerStation {
     }
 
     fn process(&mut self, frame: VadFrame) -> Result<Option<AudioChunk>, StationError> {
+        // Track timing of first frame in chunk (only if verbosity >= 1)
+        if self.verbosity >= 1 && self.first_frame_capture.is_none() && frame.is_speech {
+            self.first_frame_capture = Some(frame.timestamp);
+            self.first_frame_vad = frame.vad_start;
+        }
+
         // Update silence tracking
         self.update_silence_tracking(frame.is_speech);
 

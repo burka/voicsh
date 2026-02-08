@@ -8,6 +8,8 @@
 #![warn(clippy::let_underscore_must_use)]
 
 pub mod audio;
+#[cfg(feature = "benchmark")]
+pub mod benchmark;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod config;

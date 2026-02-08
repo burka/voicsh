@@ -5,7 +5,6 @@ use crate::pipeline::station::Station;
 use crate::pipeline::types::{AudioChunk, TranscribedText};
 use crate::stt::transcriber::Transcriber;
 use std::sync::Arc;
-use std::time::Instant;
 
 /// Filters common Whisper markers and noise indicators from transcribed text.
 fn clean_transcription(text: &str) -> String {
@@ -80,8 +79,11 @@ impl Station for TranscriberStation {
             return Ok(None);
         }
 
-        // Return transcribed text with current timestamp
-        Ok(Some(TranscribedText::new(cleaned_text, Instant::now())))
+        // Return transcribed text with timing information from chunk (if available)
+        Ok(Some(TranscribedText::with_timing(
+            cleaned_text,
+            chunk.timing,
+        )))
     }
 }
 
@@ -89,6 +91,7 @@ impl Station for TranscriberStation {
 mod tests {
     use super::*;
     use crate::stt::transcriber::MockTranscriber;
+    use std::time::Instant;
 
     #[test]
     fn test_successful_transcription() {

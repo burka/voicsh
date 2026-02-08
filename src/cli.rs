@@ -105,6 +105,26 @@ pub enum Commands {
         socket: Option<PathBuf>,
     },
 
+    /// Benchmark transcription performance across models
+    #[cfg(feature = "benchmark")]
+    Benchmark {
+        /// WAV file to benchmark (defaults to test fixture if available)
+        #[arg(long, value_name = "FILE")]
+        audio: Option<PathBuf>,
+
+        /// Models to test (comma-separated, default: all installed)
+        #[arg(long, value_name = "MODELS")]
+        models: Option<String>,
+
+        /// Number of iterations to average (default: 1)
+        #[arg(long, short = 'n', value_name = "N", default_value = "1")]
+        iterations: usize,
+
+        /// Output format: table (default) or json
+        #[arg(long, short = 'o', value_name = "FORMAT", default_value = "table")]
+        output: String,
+    },
+
     /// Install systemd user service
     InstallService,
 }
@@ -435,6 +455,58 @@ mod tests {
         match cli.command {
             Some(Commands::InstallService) => {}
             _ => panic!("Expected InstallService command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_parse_benchmark() {
+        let cli = Cli::try_parse_from(["voicsh", "benchmark"]).unwrap();
+        match cli.command {
+            Some(Commands::Benchmark {
+                audio,
+                models,
+                iterations,
+                output,
+            }) => {
+                assert!(audio.is_none());
+                assert!(models.is_none());
+                assert_eq!(iterations, 1);
+                assert_eq!(output, "table");
+            }
+            _ => panic!("Expected Benchmark command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_parse_benchmark_with_all_options() {
+        let cli = Cli::try_parse_from([
+            "voicsh",
+            "benchmark",
+            "--audio",
+            "test.wav",
+            "--models",
+            "tiny.en,base.en",
+            "--iterations",
+            "3",
+            "--output",
+            "json",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Benchmark {
+                audio,
+                models,
+                iterations,
+                output,
+            }) => {
+                assert_eq!(audio, Some(PathBuf::from("test.wav")));
+                assert_eq!(models.as_deref(), Some("tiny.en,base.en"));
+                assert_eq!(iterations, 3);
+                assert_eq!(output, "json");
+            }
+            _ => panic!("Expected Benchmark command"),
         }
     }
 

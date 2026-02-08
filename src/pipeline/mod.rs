@@ -6,6 +6,7 @@
 pub mod adaptive_chunker;
 pub mod chunker_station;
 pub mod error;
+pub mod latency;
 pub mod orchestrator;
 pub mod sink;
 pub mod station;
@@ -15,6 +16,7 @@ pub mod vad_station;
 
 pub use chunker_station::ChunkerStation;
 pub use error::{ErrorReporter, LogReporter, StationError};
+pub use latency::{LatencyTracker, TranscriptionTiming};
 pub use orchestrator::{Pipeline, PipelineConfig, PipelineHandle};
 pub use sink::{CollectorSink, InjectorSink, TextSink};
 pub use station::{Station, StationRunner};
