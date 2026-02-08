@@ -105,6 +105,26 @@ pub enum Commands {
         socket: Option<PathBuf>,
     },
 
+    /// Benchmark transcription performance across models
+    #[cfg(feature = "benchmark")]
+    Benchmark {
+        /// WAV file to benchmark (defaults to test fixture if available)
+        #[arg(long, value_name = "FILE")]
+        audio: Option<PathBuf>,
+
+        /// Models to test (comma-separated, default: all installed)
+        #[arg(long, value_name = "MODELS")]
+        models: Option<String>,
+
+        /// Number of iterations to average (default: 1)
+        #[arg(long, short = 'n', value_name = "N", default_value = "1")]
+        iterations: usize,
+
+        /// Output format: table (default) or json
+        #[arg(long, short = 'o', value_name = "FORMAT", default_value = "table")]
+        output: String,
+    },
+
     /// Install systemd user service
     InstallService,
 }

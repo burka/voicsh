@@ -59,7 +59,7 @@ cpal-audio = ["dep:cpal"]
 model-download = ["dep:reqwest", "dep:sha1", "dep:indicatif", "dep:futures-util"]
 cli = ["dep:clap", "dep:dirs"]
 portal = ["dep:ashpd"]
-benchmark = ["dep:sysinfo"]
+benchmark = ["dep:sysinfo", "dep:flate2"]
 cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
 hipblas = ["whisper-rs/hipblas"]
@@ -67,6 +67,10 @@ openblas = ["whisper-rs/openblas"]
 
 [dependencies.sysinfo]
 version = "0.33"
+optional = true
+
+[dependencies.flate2]
+version = "1.0"
 optional = true
 
 [dev-dependencies]

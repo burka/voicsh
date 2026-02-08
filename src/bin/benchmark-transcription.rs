@@ -1,17 +1,183 @@
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::File;
 use std::io::BufReader;
 use std::process;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use sysinfo::{Pid, ProcessRefreshKind, System};
+use sysinfo::{Pid, System};
 use voicsh::audio::wav::WavAudioSource;
 use voicsh::models::catalog::MODELS;
 use voicsh::models::download::model_path;
 use voicsh::stt::transcriber::Transcriber;
 use voicsh::stt::whisper::{WhisperConfig, WhisperTranscriber};
 
-#[derive(Debug, Clone)]
+/// System information for benchmark reporting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SystemInfo {
+    cpu_model: String,
+    cpu_cores: usize,
+    cpu_threads: usize,
+    cpu_frequency: Option<f32>,
+    gpu_info: Option<String>,
+    whisper_backend: String,
+    whisper_threads: usize,
+}
+
+impl SystemInfo {
+    fn detect() -> Self {
+        let mut system = System::new_all();
+        system.refresh_all();
+
+        // CPU information
+        let cpu_model = system
+            .cpus()
+            .first()
+            .map(|cpu| cpu.brand().trim().to_string())
+            .unwrap_or_else(|| "Unknown CPU".to_string());
+
+        let cpu_cores = system.physical_core_count().unwrap_or(1);
+        let cpu_threads = system.cpus().len();
+
+        let cpu_frequency = system
+            .cpus()
+            .first()
+            .map(|cpu| cpu.frequency() as f32 / 1000.0); // Convert MHz to GHz
+
+        // GPU detection - check for NVIDIA/AMD/Intel
+        let gpu_info = Self::detect_gpu();
+
+        // Whisper backend - determined by compile-time features
+        let whisper_backend = Self::detect_whisper_backend();
+
+        // Thread count for whisper - None means auto-detect (use all cores)
+        let whisper_threads = cpu_threads;
+
+        Self {
+            cpu_model,
+            cpu_cores,
+            cpu_threads,
+            cpu_frequency,
+            gpu_info,
+            whisper_backend,
+            whisper_threads,
+        }
+    }
+
+    fn detect_gpu() -> Option<String> {
+        // Try to detect NVIDIA GPU
+        if let Ok(output) = std::process::Command::new("nvidia-smi")
+            .arg("--query-gpu=name")
+            .arg("--format=csv,noheader")
+            .output()
+        {
+            if output.status.success() {
+                if let Ok(gpu_name) = String::from_utf8(output.stdout) {
+                    let gpu_name = gpu_name.trim();
+                    if !gpu_name.is_empty() {
+                        return Some(format!("NVIDIA {}", gpu_name));
+                    }
+                }
+            }
+        }
+
+        // Try to detect AMD GPU via lspci
+        if let Ok(output) = std::process::Command::new("lspci").output() {
+            if output.status.success() {
+                if let Ok(lspci_output) = String::from_utf8(output.stdout) {
+                    for line in lspci_output.lines() {
+                        if line.contains("VGA") || line.contains("3D") {
+                            if line.contains("AMD") || line.contains("Radeon") {
+                                // Extract GPU name
+                                if let Some(gpu_part) = line.split(':').nth(2) {
+                                    return Some(format!("AMD {}", gpu_part.trim()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn detect_whisper_backend() -> String {
+        #[cfg(feature = "cuda")]
+        {
+            return "whisper.cpp (CUDA)".to_string();
+        }
+
+        #[cfg(feature = "vulkan")]
+        {
+            return "whisper.cpp (Vulkan)".to_string();
+        }
+
+        #[cfg(feature = "hipblas")]
+        {
+            return "whisper.cpp (HIP/ROCm)".to_string();
+        }
+
+        #[cfg(feature = "openblas")]
+        {
+            return "whisper.cpp (OpenBLAS)".to_string();
+        }
+
+        "whisper.cpp (CPU)".to_string()
+    }
+
+    fn print_report(&self) {
+        println!("\n{}", "=".repeat(120));
+        println!("SYSTEM INFORMATION");
+        println!("{}", "=".repeat(120));
+
+        // CPU info
+        print!(
+            "CPU:       {} ({} cores, {} threads)",
+            self.cpu_model, self.cpu_cores, self.cpu_threads
+        );
+        if let Some(freq) = self.cpu_frequency {
+            println!(" @ {:.1} GHz", freq);
+        } else {
+            println!();
+        }
+
+        // GPU info
+        match &self.gpu_info {
+            Some(gpu) => println!("GPU:       {}", gpu),
+            None => {
+                println!("GPU:       Not detected");
+            }
+        }
+
+        // Backend info
+        println!(
+            "Backend:   {} ({} threads)",
+            self.whisper_backend, self.whisper_threads
+        );
+
+        // Recommendations
+        if self.gpu_info.is_some() && self.whisper_backend.contains("CPU") {
+            if self.gpu_info.as_ref().unwrap().contains("NVIDIA") {
+                println!("\n⚡ GPU detected but not in use!");
+                println!("   Compile with --features cuda for 10-50x speedup:");
+                println!(
+                    "   cargo build --release --features whisper,cuda,benchmark,model-download,cli"
+                );
+            } else if self.gpu_info.as_ref().unwrap().contains("AMD") {
+                println!("\n⚡ AMD GPU detected but not in use!");
+                println!("   Compile with --features hipblas for GPU acceleration:");
+                println!(
+                    "   cargo build --release --features whisper,hipblas,benchmark,model-download,cli"
+                );
+            }
+        }
+
+        println!("{}", "=".repeat(120));
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct BenchmarkResult {
     model_name: String,
     transcription: String,
@@ -19,14 +185,26 @@ struct BenchmarkResult {
     elapsed_ms: u128,
     audio_duration_ms: u64,
     realtime_factor: f64,
-    cpu_usage_percent: f32,
+    cpu_usage_total: f32,
+    cpu_usage_per_core: f32,
     memory_usage_mb: f64,
     model_size_mb: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BenchmarkReport {
+    system_info: SystemInfo,
+    audio_file: String,
+    audio_samples: usize,
+    audio_duration_ms: u64,
+    iterations: usize,
+    results: Vec<BenchmarkResult>,
 }
 
 struct ResourceMonitor {
     system: Arc<Mutex<System>>,
     pid: Pid,
+    num_cpus: usize,
 }
 
 impl ResourceMonitor {
@@ -34,14 +212,16 @@ impl ResourceMonitor {
         let mut system = System::new_all();
         system.refresh_all();
         let pid = sysinfo::get_current_pid().expect("Failed to get current PID");
+        let num_cpus = system.cpus().len();
 
         Self {
             system: Arc::new(Mutex::new(system)),
             pid,
+            num_cpus,
         }
     }
 
-    fn get_current_stats(&self) -> (f32, f64) {
+    fn get_current_stats(&self) -> (f32, f32, f64) {
         self.system.lock().unwrap().refresh_all();
 
         let system = self.system.lock().unwrap();
@@ -49,10 +229,11 @@ impl ResourceMonitor {
             .process(self.pid)
             .expect("Failed to get process info");
 
-        let cpu_usage = process.cpu_usage();
+        let cpu_usage_total = process.cpu_usage();
+        let cpu_usage_per_core = cpu_usage_total / self.num_cpus as f32;
         let memory_usage = process.memory() as f64 / (1024.0 * 1024.0);
 
-        (cpu_usage, memory_usage)
+        (cpu_usage_total, cpu_usage_per_core, memory_usage)
     }
 }
 
@@ -88,7 +269,8 @@ fn benchmark_model(
     println!("Running {} iteration(s)...", iterations);
 
     let mut total_elapsed_ms = 0u128;
-    let mut total_cpu = 0.0f32;
+    let mut total_cpu_total = 0.0f32;
+    let mut total_cpu_per_core = 0.0f32;
     let mut total_memory = 0.0f64;
     let mut last_result = None;
 
@@ -99,10 +281,11 @@ fn benchmark_model(
         let result = transcriber.transcribe(audio)?;
         let elapsed = start.elapsed();
 
-        let (cpu, memory) = monitor.get_current_stats();
+        let (cpu_total, cpu_per_core, memory) = monitor.get_current_stats();
 
         total_elapsed_ms += elapsed.as_millis();
-        total_cpu += cpu;
+        total_cpu_total += cpu_total;
+        total_cpu_per_core += cpu_per_core;
         total_memory += memory;
         last_result = Some(result);
 
@@ -110,7 +293,8 @@ fn benchmark_model(
     }
 
     let avg_elapsed_ms = total_elapsed_ms / iterations as u128;
-    let avg_cpu = total_cpu / iterations as f32;
+    let avg_cpu_total = total_cpu_total / iterations as f32;
+    let avg_cpu_per_core = total_cpu_per_core / iterations as f32;
     let avg_memory = total_memory / iterations as f64;
 
     let realtime_factor = if audio_duration_ms > 0 {
@@ -133,7 +317,8 @@ fn benchmark_model(
         elapsed_ms: avg_elapsed_ms,
         audio_duration_ms,
         realtime_factor,
-        cpu_usage_percent: avg_cpu,
+        cpu_usage_total: avg_cpu_total,
+        cpu_usage_per_core: avg_cpu_per_core,
         memory_usage_mb: avg_memory,
         model_size_mb: model_info.size_mb as u64,
     })
@@ -145,8 +330,8 @@ fn print_results(results: &[BenchmarkResult]) {
     println!("{}", "=".repeat(120));
 
     println!(
-        "\n{:<12} {:<50} {:>10} {:>8} {:>10} {:>10} {:>10}",
-        "Model", "Transcription", "Time (ms)", "RTF", "Speed", "CPU (%)", "Mem (MB)"
+        "\n{:<12} {:<35} {:>10} {:>8} {:>10} {:>12} {:>10}",
+        "Model", "Transcription", "Time (ms)", "RTF", "Speed", "CPU/Core %", "Mem (MB)"
     );
     println!("{}", "-".repeat(120));
 
@@ -157,20 +342,20 @@ fn print_results(results: &[BenchmarkResult]) {
             "N/A".to_string()
         };
 
-        let transcription = if result.transcription.len() > 47 {
-            format!("{}...", &result.transcription[..47])
+        let transcription = if result.transcription.len() > 32 {
+            format!("{}...", &result.transcription[..32])
         } else {
             result.transcription.clone()
         };
 
         println!(
-            "{:<12} {:<50} {:>10} {:>8.2} {:>10} {:>10.1} {:>10.1}",
+            "{:<12} {:<35} {:>10} {:>8.2} {:>10} {:>12.1} {:>10.1}",
             result.model_name,
             transcription,
             result.elapsed_ms,
             result.realtime_factor,
             speed,
-            result.cpu_usage_percent,
+            result.cpu_usage_per_core,
             result.memory_usage_mb
         );
     }
@@ -200,13 +385,13 @@ fn print_results(results: &[BenchmarkResult]) {
     }
 
     if let Some(lowest_cpu) = results.iter().min_by(|a, b| {
-        a.cpu_usage_percent
-            .partial_cmp(&b.cpu_usage_percent)
+        a.cpu_usage_per_core
+            .partial_cmp(&b.cpu_usage_per_core)
             .unwrap()
     }) {
         println!(
-            "Lowest CPU:     {} ({:.1}%)",
-            lowest_cpu.model_name, lowest_cpu.cpu_usage_percent
+            "Lowest CPU:     {} ({:.1}% per core, {:.1}% total)",
+            lowest_cpu.model_name, lowest_cpu.cpu_usage_per_core, lowest_cpu.cpu_usage_total
         );
     }
 
@@ -226,12 +411,20 @@ fn print_results(results: &[BenchmarkResult]) {
     }
 }
 
+fn print_json_report(report: &BenchmarkReport) {
+    match serde_json::to_string_pretty(report) {
+        Ok(json) => println!("{}", json),
+        Err(e) => eprintln!("Error serializing to JSON: {}", e),
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let (wav_file, models, iterations) = if args.len() < 2 {
+    // Parse command line arguments
+    let (wav_file, models, iterations, output_format) = if args.len() < 2 {
         eprintln!(
-            "Usage: {} <wav-file> [model1,model2,...] [iterations]",
+            "Usage: {} <wav-file> [model1,model2,...] [iterations] [--output json]",
             args[0]
         );
         eprintln!();
@@ -239,6 +432,7 @@ fn main() {
         eprintln!("  {} tests/fixtures/quick_brown_fox.wav", args[0]);
         eprintln!("  {} audio.wav tiny.en,base.en,small.en", args[0]);
         eprintln!("  {} audio.wav all 3", args[0]);
+        eprintln!("  {} audio.wav all 1 --output json", args[0]);
         eprintln!();
         eprintln!("Available models:");
         for model in MODELS.iter() {
@@ -247,20 +441,45 @@ fn main() {
         process::exit(1);
     } else {
         let wav_file = &args[1];
-        let models: Vec<String> = if args.len() > 2 && args[2] != "all" {
-            args[2].split(',').map(|s| s.to_string()).collect()
-        } else {
-            MODELS.iter().map(|m| m.name.to_string()).collect()
-        };
-        let iterations = if args.len() > 3 {
+        let models: Vec<String> =
+            if args.len() > 2 && args[2] != "all" && !args[2].starts_with("--") {
+                args[2].split(',').map(|s| s.to_string()).collect()
+            } else if args.get(2).map(|s| s.starts_with("--")).unwrap_or(false) {
+                MODELS.iter().map(|m| m.name.to_string()).collect()
+            } else {
+                MODELS.iter().map(|m| m.name.to_string()).collect()
+            };
+
+        let iterations = if args.len() > 3 && !args[3].starts_with("--") {
             args[3].parse().unwrap_or(1)
         } else {
             1
         };
-        (wav_file.to_string(), models, iterations)
+
+        // Check for --output json flag
+        let output_format = if args.iter().any(|arg| arg == "--output") {
+            if let Some(pos) = args.iter().position(|arg| arg == "--output") {
+                args.get(pos + 1).map(|s| s.as_str()).unwrap_or("table")
+            } else {
+                "table"
+            }
+        } else {
+            "table"
+        };
+
+        (
+            wav_file.to_string(),
+            models,
+            iterations,
+            output_format.to_string(),
+        )
     };
 
-    println!("WAV Transcription Benchmark");
+    // Print system information
+    let system_info = SystemInfo::detect();
+    system_info.print_report();
+
+    println!("\nWAV Transcription Benchmark");
     println!("{}", "=".repeat(120));
 
     let (audio, audio_duration_ms) = match load_wav_file(&wav_file) {
@@ -319,5 +538,18 @@ fn main() {
         process::exit(1);
     }
 
-    print_results(&results);
+    // Output results in requested format
+    if output_format == "json" {
+        let report = BenchmarkReport {
+            system_info,
+            audio_file: wav_file,
+            audio_samples: audio.len(),
+            audio_duration_ms,
+            iterations,
+            results,
+        };
+        print_json_report(&report);
+    } else {
+        print_results(&results);
+    }
 }
