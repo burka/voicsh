@@ -4,7 +4,7 @@ Offline, privacy-first voice typing. Speak into your mic, text appears in your f
 
 > **Status: Early MVP (v0.0.1-dev)**
 >
-> This project works on the author's machine and is shared in the hope that others find it useful or want to help improve it.
+> This is a free-time side project. It works on the author's machine and is shared in the hope that others find it useful or want to help improve it. Maintenance time is limited — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to make the most of it.
 >
 > **What works:**
 > - CPU transcription via whisper.cpp — functional, accuracy varies by model and environment

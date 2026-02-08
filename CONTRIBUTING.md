@@ -1,6 +1,20 @@
 # Contributing to voicsh
 
-voicsh is an early-stage project and contributions of all kinds are welcome — from bug reports to code changes to just telling me it didn't build on your machine.
+voicsh is a free-time side project. Contributions of all kinds are welcome — from bug reports to code changes to just telling me it didn't build on your machine.
+
+Maintenance time is limited, so the most helpful contributions are ones that are **easy to review**: small, focused, and well-described. A PR that does one thing with a clear explanation gets merged fast. A vague issue titled "it doesn't work" might sit for a while.
+
+### Before opening an issue
+
+- **Build problems or usage questions**: try `voicsh check`, check the README, and consider asking Claude Code with the source — it knows this codebase well
+- **Bug reports**: great, but include enough context to reproduce (see template below)
+- **Feature requests**: check [ROADMAP.md](ROADMAP.md) first — it might already be planned
+
+### What makes a great contribution
+
+- **Concise PRs** — one logical change per PR, with a short description of what and why
+- **Actionable issues** — describe what you did, what happened, and what you expected
+- **Test reports** — "I ran it on [hardware/distro/compositor] and [result]" is genuinely useful
 
 ## Ways to contribute
 
