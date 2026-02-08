@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
                     cli.once,
                     cli.fan_out,
                     cli.chunk_size,
+                    cli.buffer,
                 )
                 .await?;
             } else {
@@ -44,6 +45,7 @@ async fn main() -> Result<()> {
                     cli.quiet,
                     cli.verbose,
                     cli.no_download,
+                    cli.buffer,
                 )
                 .await?;
             }
@@ -260,7 +262,7 @@ async fn handle_benchmark_command(
 ) -> Result<()> {
     use voicsh::benchmark::{
         BenchmarkReport, ResourceMonitor, SystemInfo, benchmark_model, load_wav_file,
-        print_json_report, print_results,
+        print_guidance, print_json_report, print_results,
     };
     use voicsh::models::catalog::MODELS;
     use voicsh::models::download::model_path;
@@ -427,6 +429,7 @@ async fn handle_benchmark_command(
         print_json_report(&report);
     } else {
         print_results(&results, verbose);
+        print_guidance(&results, &system_info);
     }
 
     Ok(())

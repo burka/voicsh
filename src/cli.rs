@@ -52,6 +52,25 @@ pub struct Cli {
     /// Chunk duration in seconds for progressive transcription
     #[arg(long, short = 'c', value_name = "SECONDS", default_value = "3")]
     pub chunk_size: u32,
+
+    /// Transcription buffer duration (default: 10s). Examples: 30s, 5m, 1h30m
+    #[arg(long, short = 'b', value_name = "DURATION", default_value = "10s", value_parser = parse_buffer_secs)]
+    pub buffer: u64,
+}
+
+/// Parse a buffer duration string into seconds.
+///
+/// Supports any duration format accepted by `humantime`: bare numbers (seconds),
+/// single-unit (`30s`, `5m`, `2h`), and compound (`1h30m`, `2m30s`).
+fn parse_buffer_secs(s: &str) -> Result<u64, String> {
+    let s = s.trim();
+    // Bare number → seconds
+    if let Ok(secs) = s.parse::<u64>() {
+        return Ok(secs);
+    }
+    humantime::parse_duration(s)
+        .map(|d| d.as_secs())
+        .map_err(|e| e.to_string())
 }
 
 /// Available commands
@@ -156,6 +175,7 @@ mod tests {
         assert!(!cli.once);
         assert!(!cli.fan_out);
         assert_eq!(cli.chunk_size, 3); // default: 3 seconds
+        assert_eq!(cli.buffer, 10); // default: 10 seconds
         assert!(!cli.quiet);
         assert_eq!(cli.verbose, 0);
         assert!(cli.config.is_none());
@@ -541,5 +561,80 @@ mod tests {
             }
             _ => panic!("Expected Status command"),
         }
+    }
+
+    // ── Buffer parsing tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_buffer_secs_bare_number() {
+        assert_eq!(parse_buffer_secs("10").unwrap(), 10);
+        assert_eq!(parse_buffer_secs("0").unwrap(), 0);
+        assert_eq!(parse_buffer_secs("300").unwrap(), 300);
+    }
+
+    #[test]
+    fn test_parse_buffer_secs_with_s_suffix() {
+        assert_eq!(parse_buffer_secs("10s").unwrap(), 10);
+        assert_eq!(parse_buffer_secs("20s").unwrap(), 20);
+        assert_eq!(parse_buffer_secs("0s").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_parse_buffer_secs_with_m_suffix() {
+        assert_eq!(parse_buffer_secs("1m").unwrap(), 60);
+        assert_eq!(parse_buffer_secs("5m").unwrap(), 300);
+        assert_eq!(parse_buffer_secs("0m").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_parse_buffer_secs_hours() {
+        assert_eq!(parse_buffer_secs("1h").unwrap(), 3600);
+        assert_eq!(parse_buffer_secs("2h").unwrap(), 7200);
+    }
+
+    #[test]
+    fn test_parse_buffer_secs_compound() {
+        assert_eq!(parse_buffer_secs("1h30m").unwrap(), 5400);
+        assert_eq!(parse_buffer_secs("2m30s").unwrap(), 150);
+        assert_eq!(parse_buffer_secs("1h2m3s").unwrap(), 3723);
+    }
+
+    #[test]
+    fn test_parse_buffer_secs_verbose_units() {
+        assert_eq!(parse_buffer_secs("5minutes").unwrap(), 300);
+        assert_eq!(parse_buffer_secs("30seconds").unwrap(), 30);
+        assert_eq!(parse_buffer_secs("1hour").unwrap(), 3600);
+    }
+
+    #[test]
+    fn test_parse_buffer_secs_invalid() {
+        assert!(parse_buffer_secs("abc").is_err());
+        assert!(parse_buffer_secs("10x").is_err());
+        assert!(parse_buffer_secs("").is_err());
+        assert!(parse_buffer_secs("-5").is_err());
+    }
+
+    #[test]
+    fn test_buffer_cli_arg_default() {
+        let cli = Cli::try_parse_from(["voicsh"]).unwrap();
+        assert_eq!(cli.buffer, 10);
+    }
+
+    #[test]
+    fn test_buffer_cli_arg_short() {
+        let cli = Cli::try_parse_from(["voicsh", "-b", "20s"]).unwrap();
+        assert_eq!(cli.buffer, 20);
+    }
+
+    #[test]
+    fn test_buffer_cli_arg_long() {
+        let cli = Cli::try_parse_from(["voicsh", "--buffer", "5m"]).unwrap();
+        assert_eq!(cli.buffer, 300);
+    }
+
+    #[test]
+    fn test_buffer_cli_arg_bare_number() {
+        let cli = Cli::try_parse_from(["voicsh", "-b", "30"]).unwrap();
+        assert_eq!(cli.buffer, 30);
     }
 }

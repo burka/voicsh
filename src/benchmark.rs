@@ -227,23 +227,6 @@ impl SystemInfo {
             "System: {} | GPU: {} | Backend: {}",
             cpu_info, gpu_info, backend_info
         );
-
-        // Show recommendations only with verbose >= 2
-        if verbose >= 2
-            && let Some(ref gpu) = self.gpu_info
-            && self.whisper_backend.contains("CPU")
-        {
-            println!();
-            if gpu.contains("NVIDIA") {
-                println!("Recommendation: GPU detected but not in use!");
-                println!("  Compile with --features cuda for 10-50x speedup:");
-                println!("  cargo build --release --features cuda,benchmark,model-download,cli");
-            } else if gpu.contains("AMD") {
-                println!("Recommendation: AMD GPU detected but not in use!");
-                println!("  Compile with --features hipblas for GPU acceleration:");
-                println!("  cargo build --release --features hipblas,benchmark,model-download,cli");
-            }
-        }
     }
 }
 
@@ -453,31 +436,6 @@ pub fn print_results(results: &[BenchmarkResult], verbose: u8) {
         );
     }
 
-    // Compact summary on one line
-    print!("\nSummary: ");
-
-    if let Some(fastest) = results.iter().min_by_key(|r| r.elapsed_ms) {
-        print!("Fastest: {} ({}ms)", fastest.model_name, fastest.elapsed_ms);
-    }
-
-    if let Some(lowest_cpu) = results.iter().min_by(|a, b| {
-        a.cpu_usage_per_core
-            .partial_cmp(&b.cpu_usage_per_core)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    }) {
-        // Only show if it's different from fastest
-        let fastest = results.iter().min_by_key(|r| r.elapsed_ms);
-        let should_show = fastest.is_none_or(|f| f.model_name != lowest_cpu.model_name);
-        if should_show {
-            print!(
-                " | Lowest CPU: {} ({:.1}%)",
-                lowest_cpu.model_name, lowest_cpu.cpu_usage_per_core
-            );
-        }
-    }
-
-    println!();
-
     // Show transcriptions only with verbose >= 1
     if verbose >= 1 {
         println!("\nTranscriptions:");
@@ -489,6 +447,58 @@ pub fn print_results(results: &[BenchmarkResult], verbose: u8) {
                 result.detected_language,
                 result.confidence
             );
+        }
+    }
+}
+
+/// Print guidance based on benchmark results and system information.
+///
+/// Shows the fastest model, the best quality model that still runs at real-time,
+/// and GPU acceleration suggestions if a GPU is detected but not in use.
+pub fn print_guidance(results: &[BenchmarkResult], system_info: &SystemInfo) {
+    if results.is_empty() {
+        return;
+    }
+
+    println!("\nGuidance:");
+
+    // Fastest model
+    if let Some(fastest) = results.iter().min_by_key(|r| r.elapsed_ms) {
+        println!(
+            "  Fastest: {} ({:.1}x real-time)",
+            fastest.model_name, fastest.speed_multiplier
+        );
+    }
+
+    // Best quality model that still runs faster than real-time (RTF < 1.0)
+    // Quality correlates with model size — larger models are more accurate.
+    let realtime_capable: Vec<_> = results.iter().filter(|r| r.realtime_factor < 1.0).collect();
+
+    if let Some(best_quality) = realtime_capable.iter().max_by_key(|r| r.model_size_mb) {
+        let fastest = results.iter().min_by_key(|r| r.elapsed_ms);
+        if fastest.is_none_or(|f| f.model_name != best_quality.model_name) {
+            println!(
+                "  Best quality at real-time: {} ({:.1}x real-time)",
+                best_quality.model_name, best_quality.speed_multiplier
+            );
+        }
+    } else {
+        println!("  No model runs faster than real-time on this hardware.");
+        println!("  Try --buffer 5m to tolerate slow transcription, or enable GPU acceleration.");
+    }
+
+    // GPU recommendation if detected but not in use
+    if let Some(ref gpu) = system_info.gpu_info {
+        if system_info.whisper_backend.contains("CPU") {
+            if gpu.contains("NVIDIA") {
+                println!("\n  GPU detected ({}) but not in use.", gpu);
+                println!("  Compile with CUDA for 10-50x speedup:");
+                println!("    cargo build --release --features cuda");
+            } else if gpu.contains("AMD") {
+                println!("\n  GPU detected ({}) but not in use.", gpu);
+                println!("  Compile with HipBLAS for GPU acceleration:");
+                println!("    cargo build --release --features hipblas");
+            }
         }
     }
 }

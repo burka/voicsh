@@ -5,6 +5,7 @@ use crate::pipeline::station::Station;
 use crate::pipeline::types::{AudioChunk, TranscribedText};
 use crate::stt::transcriber::Transcriber;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Filters common Whisper markers and noise indicators from transcribed text.
 fn clean_transcription(text: &str) -> String {
@@ -31,6 +32,7 @@ fn clean_transcription(text: &str) -> String {
 pub struct TranscriberStation {
     transcriber: Arc<dyn Transcriber>,
     verbose: bool,
+    warned_backpressure: bool,
 }
 
 impl TranscriberStation {
@@ -39,6 +41,7 @@ impl TranscriberStation {
         Self {
             transcriber,
             verbose: false,
+            warned_backpressure: false,
         }
     }
 
@@ -65,11 +68,37 @@ impl Station for TranscriberStation {
             eprintln_clear(&format!("  [transcribing {}ms...]", chunk.duration_ms));
         }
 
+        let start = Instant::now();
+        let chunk_duration_ms = chunk.duration_ms;
+
         // Attempt transcription
         let result = self
             .transcriber
             .transcribe(&chunk.samples)
             .map_err(|e| StationError::Recoverable(format!("Transcription failed: {}", e)))?;
+
+        // Backpressure detection: warn once if transcription is slower than real-time
+        if !self.warned_backpressure {
+            let elapsed_ms = start.elapsed().as_millis() as u32;
+            if elapsed_ms > chunk_duration_ms {
+                self.warned_backpressure = true;
+                eprintln_clear(&format!(
+                    "voicsh: transcription slower than real-time ({elapsed_ms}ms for {chunk_duration_ms}ms of audio)"
+                ));
+                if cfg!(feature = "benchmark") {
+                    eprintln!(
+                        "  Run 'voicsh benchmark' to find the right model for your hardware."
+                    );
+                } else {
+                    eprintln!("  Build with benchmark support to find the right model:");
+                    eprintln!("    cargo build --release --features benchmark");
+                }
+                eprintln!(
+                    "  Consider a smaller model (--model tiny.en) or enable GPU acceleration."
+                );
+                eprintln!("  To tolerate slower transcription, increase the buffer: --buffer 30s");
+            }
+        }
 
         // Clean Whisper markers
         let cleaned_text = clean_transcription(&result.text);
@@ -261,5 +290,76 @@ mod tests {
         // Timestamp should be between before and after
         assert!(text.timestamp >= before);
         assert!(text.timestamp <= after);
+    }
+
+    // ── Backpressure detection tests ─────────────────────────────────────
+
+    #[test]
+    fn test_backpressure_detected_for_slow_transcription() {
+        // Transcription takes 20ms but chunk is only 5ms of audio → backpressure.
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Hello")
+                .with_delay(std::time::Duration::from_millis(20)),
+        );
+        let mut station = TranscriberStation::new(transcriber);
+
+        let chunk = AudioChunk::new(vec![1, 2, 3], 5, 1);
+        let result = station.process(chunk);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unwrap().text, "Hello");
+        assert!(
+            station.warned_backpressure,
+            "Should detect backpressure when transcription exceeds chunk duration"
+        );
+    }
+
+    #[test]
+    fn test_no_backpressure_for_fast_transcription() {
+        // Chunk represents 100s of audio, instant mock → no backpressure.
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Hello"));
+        let mut station = TranscriberStation::new(transcriber);
+
+        let chunk = AudioChunk::new(vec![1, 2, 3], 100_000, 1);
+        let result = station.process(chunk);
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().unwrap().text, "Hello");
+        assert!(
+            !station.warned_backpressure,
+            "Should not warn when transcription is faster than real-time"
+        );
+    }
+
+    #[test]
+    fn test_backpressure_warning_fires_only_once() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Hello")
+                .with_delay(std::time::Duration::from_millis(20)),
+        );
+        let mut station = TranscriberStation::new(transcriber);
+
+        // First slow chunk triggers warning
+        let chunk1 = AudioChunk::new(vec![1, 2, 3], 5, 1);
+        let _ = station.process(chunk1);
+        assert!(station.warned_backpressure);
+
+        // Second slow chunk: warned_backpressure stays true, no second warning
+        let chunk2 = AudioChunk::new(vec![1, 2, 3], 5, 2);
+        let result = station.process(chunk2);
+        assert!(result.is_ok());
+        assert!(station.warned_backpressure);
+    }
+
+    #[test]
+    fn test_backpressure_initial_state() {
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Hello"));
+        let station = TranscriberStation::new(transcriber);
+        assert!(
+            !station.warned_backpressure,
+            "Should start with no backpressure warning"
+        );
     }
 }

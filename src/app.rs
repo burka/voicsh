@@ -29,6 +29,13 @@ use std::sync::Arc;
 #[cfg(feature = "portal")]
 use crate::input::portal::PortalSession;
 
+/// Convert a buffer duration (seconds) to a chunk channel capacity.
+///
+/// Assumes ~3s average chunk duration. Minimum capacity is 2.
+fn chunk_buffer_from_secs(buffer_secs: u64) -> usize {
+    (buffer_secs as usize).div_ceil(3).max(2)
+}
+
 /// Run pipe mode: read WAV from stdin → transcribe → write to stdout.
 ///
 /// # Arguments
@@ -48,6 +55,7 @@ pub async fn run_pipe_command(
     quiet: bool,
     verbosity: u8,
     no_download: bool,
+    buffer_secs: u64,
 ) -> Result<()> {
     // Apply CLI overrides
     if let Some(m) = model {
@@ -82,6 +90,7 @@ pub async fn run_pipe_command(
         auto_level: false, // No auto-level for file input
         quiet: true,       // No meter display for pipe mode
         sample_rate: 16000,
+        chunk_buffer: chunk_buffer_from_secs(buffer_secs),
         ..Default::default()
     };
 
@@ -122,6 +131,7 @@ pub async fn run_record_command(
     once: bool,
     fan_out: bool,
     _chunk_size: u32,
+    buffer_secs: u64,
 ) -> Result<()> {
     // Suppress noisy JACK/ALSA warnings before audio init
     suppress_audio_warnings();
@@ -193,9 +203,25 @@ pub async fn run_record_command(
     };
 
     if once {
-        run_single_session(&config, transcriber, quiet, verbosity, make_sink).await
+        run_single_session(
+            &config,
+            transcriber,
+            quiet,
+            verbosity,
+            buffer_secs,
+            make_sink,
+        )
+        .await
     } else {
-        run_continuous(&config, transcriber, quiet, verbosity, make_sink).await
+        run_continuous(
+            &config,
+            transcriber,
+            quiet,
+            verbosity,
+            buffer_secs,
+            make_sink,
+        )
+        .await
     }
 }
 
@@ -205,6 +231,7 @@ async fn run_continuous(
     transcriber: Arc<dyn Transcriber>,
     quiet: bool,
     verbosity: u8,
+    buffer_secs: u64,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let device_name = config.audio.device.as_deref();
@@ -221,6 +248,7 @@ async fn run_continuous(
         auto_level: true,
         quiet,
         sample_rate: 16000,
+        chunk_buffer: chunk_buffer_from_secs(buffer_secs),
         ..Default::default()
     };
 
@@ -256,6 +284,7 @@ async fn run_single_session(
     transcriber: Arc<dyn Transcriber>,
     quiet: bool,
     verbosity: u8,
+    buffer_secs: u64,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let device_name = config.audio.device.as_deref();
@@ -272,6 +301,7 @@ async fn run_single_session(
         auto_level: true,
         quiet,
         sample_rate: 16000,
+        chunk_buffer: chunk_buffer_from_secs(buffer_secs),
         ..Default::default()
     };
 
@@ -621,5 +651,42 @@ mod tests {
         let result = build_model_path("/absolute/path/model.bin");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), PathBuf::from("/absolute/path/model.bin"));
+    }
+
+    // ── Buffer capacity tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_chunk_buffer_from_secs_default() {
+        // 10s / 3s per chunk = 4 (ceiling division)
+        assert_eq!(chunk_buffer_from_secs(10), 4);
+    }
+
+    #[test]
+    fn test_chunk_buffer_from_secs_large() {
+        // 5 minutes = 300s / 3 = 100
+        assert_eq!(chunk_buffer_from_secs(300), 100);
+    }
+
+    #[test]
+    fn test_chunk_buffer_from_secs_minimum() {
+        // Very small values clamp to minimum of 2
+        assert_eq!(chunk_buffer_from_secs(0), 2);
+        assert_eq!(chunk_buffer_from_secs(1), 2);
+    }
+
+    #[test]
+    fn test_chunk_buffer_from_secs_exact_multiple() {
+        // 9s / 3 = 3
+        assert_eq!(chunk_buffer_from_secs(9), 3);
+        // 6s / 3 = 2
+        assert_eq!(chunk_buffer_from_secs(6), 2);
+    }
+
+    #[test]
+    fn test_chunk_buffer_from_secs_non_multiple() {
+        // 7s / 3 = 3 (ceiling)
+        assert_eq!(chunk_buffer_from_secs(7), 3);
+        // 20s / 3 = 7 (ceiling)
+        assert_eq!(chunk_buffer_from_secs(20), 7);
     }
 }

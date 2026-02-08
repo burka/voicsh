@@ -43,6 +43,12 @@ pub const ENGLISH_ONLY_SUFFIX: &str = ".en";
 /// English language code.
 pub const ENGLISH_LANGUAGE: &str = "en";
 
+/// Default transcription buffer duration in seconds.
+///
+/// Controls how many seconds of audio chunks the pipeline will buffer
+/// while waiting for transcription. Increase for slower hardware.
+pub const BUFFER_SECS: u64 = 10;
+
 /// Report the GPU backend compiled into this build.
 ///
 /// Returns a human-readable name based on the compile-time feature flags.

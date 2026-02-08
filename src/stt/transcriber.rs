@@ -84,6 +84,7 @@ pub struct MockTranscriber {
     should_fail: bool,
     confidence: f32,
     language: String,
+    delay: Option<std::time::Duration>,
 }
 
 impl MockTranscriber {
@@ -95,6 +96,7 @@ impl MockTranscriber {
             should_fail: false,
             confidence: 1.0,
             language: String::new(),
+            delay: None,
         }
     }
 
@@ -121,10 +123,19 @@ impl MockTranscriber {
         self.language = language.to_string();
         self
     }
+
+    /// Configure the mock to sleep before returning (simulates slow transcription)
+    pub fn with_delay(mut self, delay: std::time::Duration) -> Self {
+        self.delay = Some(delay);
+        self
+    }
 }
 
 impl Transcriber for MockTranscriber {
     fn transcribe(&self, _audio: &[i16]) -> Result<TranscriptionResult> {
+        if let Some(delay) = self.delay {
+            std::thread::sleep(delay);
+        }
         if self.should_fail {
             Err(VoicshError::Transcription {
                 message: "mock transcription failure".to_string(),
