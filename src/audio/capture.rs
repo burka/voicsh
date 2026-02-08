@@ -320,12 +320,12 @@ impl CpalAudioSource {
         use cpal::SampleFormat;
         use std::sync::atomic::Ordering;
 
-        let default_config = self
-            .device
-            .default_input_config()
-            .map_err(|e| VoicshError::AudioCapture {
-                message: format!("Failed to query default input config: {}", e),
-            })?;
+        let default_config =
+            self.device
+                .default_input_config()
+                .map_err(|e| VoicshError::AudioCapture {
+                    message: format!("Failed to query default input config: {}", e),
+                })?;
 
         let native_rate = default_config.sample_rate().0;
         let native_channels = default_config.channels() as usize;

@@ -157,29 +157,27 @@ pub async fn run_record_command(
     // Timeout after 5s — the portal D-Bus call can block the async runtime
     // in non-interactive environments (tmux, CI, background processes).
     #[cfg(feature = "portal")]
-    let portal = match tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        PortalSession::try_new(),
-    )
-    .await
-    {
-        Ok(Ok(session)) => {
-            if verbosity >= 1 {
-                eprintln!("Portal keyboard access granted.");
+    let portal =
+        match tokio::time::timeout(std::time::Duration::from_secs(5), PortalSession::try_new())
+            .await
+        {
+            Ok(Ok(session)) => {
+                if verbosity >= 1 {
+                    eprintln!("Portal keyboard access granted.");
+                }
+                Some(Arc::new(session))
             }
-            Some(Arc::new(session))
-        }
-        Ok(Err(e)) => {
-            if verbosity >= 2 {
-                eprintln!("Portal unavailable ({}), using wtype/ydotool fallback.", e);
+            Ok(Err(e)) => {
+                if verbosity >= 2 {
+                    eprintln!("Portal unavailable ({}), using wtype/ydotool fallback.", e);
+                }
+                None
             }
-            None
-        }
-        Err(_) => {
-            eprintln!("Portal timed out, using wtype/ydotool fallback.");
-            None
-        }
-    };
+            Err(_) => {
+                eprintln!("Portal timed out, using wtype/ydotool fallback.");
+                None
+            }
+        };
 
     // Load model ONCE before the loop (this is the slow part)
     if !quiet {

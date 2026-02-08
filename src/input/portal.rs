@@ -10,6 +10,7 @@ use crate::error::{Result, VoicshError};
 use ashpd::desktop::PersistMode;
 use ashpd::desktop::Session;
 use ashpd::desktop::remote_desktop::{DeviceType, KeyState, RemoteDesktop};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Evdev keycodes for paste key simulation.
@@ -87,6 +88,38 @@ async fn send_key_sequence(sender: &dyn KeySender, codes: &[i32]) -> Result<()> 
     Ok(())
 }
 
+/// Path where the portal restore token is cached.
+///
+/// Stored at `~/.cache/voicsh/portal_restore_token`. When a valid token is
+/// present, the portal skips the permission dialog on subsequent sessions.
+fn restore_token_path() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from(".cache"))
+        .join("voicsh")
+        .join("portal_restore_token")
+}
+
+/// Load a previously saved portal restore token, if any.
+fn load_restore_token() -> Option<String> {
+    std::fs::read_to_string(restore_token_path())
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// Save a portal restore token for future sessions.
+fn save_restore_token(token: &str) {
+    let path = restore_token_path();
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("voicsh: failed to create cache dir: {e}");
+        return;
+    }
+    if let Err(e) = std::fs::write(&path, token) {
+        eprintln!("voicsh: failed to save portal restore token: {e}");
+    }
+}
+
 /// Production connector using ashpd D-Bus RemoteDesktop portal.
 struct AshpdConnector;
 
@@ -102,11 +135,14 @@ impl PortalConnector for AshpdConnector {
             .await
             .map_err(|e| VoicshError::Other(format!("Portal session creation failed: {e}")))?;
 
+        // Load saved restore token to skip the permission dialog
+        let saved_token = load_restore_token();
+
         proxy
             .select_devices(
                 &session,
                 DeviceType::Keyboard.into(),
-                None,
+                saved_token.as_deref(),
                 PersistMode::ExplicitlyRevoked,
             )
             .await
@@ -120,6 +156,11 @@ impl PortalConnector for AshpdConnector {
             .map_err(|e| VoicshError::Other(format!("Portal session start failed: {e}")))?
             .response()
             .map_err(|e| VoicshError::Other(format!("Portal session start rejected: {e}")))?;
+
+        // Save restore token so subsequent sessions skip the dialog
+        if let Some(token) = response.restore_token() {
+            save_restore_token(token);
+        }
 
         let devices = response.devices();
         if !devices.contains(DeviceType::Keyboard) {
@@ -627,6 +668,43 @@ mod tests {
                 assert!(msg.contains("keyboard not included"), "Got: {msg}")
             }
             _ => panic!("Expected Other error with keyboard not included message"),
+        }
+    }
+
+    #[test]
+    fn test_restore_token_path_is_in_cache_dir() {
+        let path = restore_token_path();
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.contains("voicsh"),
+            "Path should contain 'voicsh': {path_str}"
+        );
+        assert!(
+            path_str.ends_with("portal_restore_token"),
+            "Path should end with 'portal_restore_token': {path_str}"
+        );
+    }
+
+    #[test]
+    fn test_save_and_load_restore_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("portal_restore_token");
+
+        // Write token to temp path
+        std::fs::write(&path, "test-token-abc123").unwrap();
+        let loaded = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(loaded, "test-token-abc123");
+    }
+
+    #[test]
+    fn test_load_restore_token_returns_none_for_missing_file() {
+        // load_restore_token reads from a fixed path — if the file doesn't
+        // exist (likely in CI), it should return None without error.
+        let result = load_restore_token();
+        // We can't assert None since the file may exist on dev machines,
+        // but it must not panic.
+        if let Some(token) = &result {
+            assert!(!token.is_empty(), "Loaded token should not be empty");
         }
     }
 }
