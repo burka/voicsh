@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
             iterations,
             output,
         }) => {
-            handle_benchmark_command(audio, models, iterations, &output)?;
+            handle_benchmark_command(audio, models, iterations, &output, cli.no_download).await?;
         }
     }
 
@@ -242,11 +242,12 @@ WantedBy=default.target
 
 /// Handle benchmark command.
 #[cfg(feature = "benchmark")]
-fn handle_benchmark_command(
+async fn handle_benchmark_command(
     audio: Option<std::path::PathBuf>,
     models: Option<String>,
     iterations: usize,
     output: &str,
+    no_download: bool,
 ) -> Result<()> {
     use voicsh::benchmark::{
         BenchmarkReport, ResourceMonitor, SystemInfo, benchmark_model, load_wav_file,
@@ -343,11 +344,31 @@ fn handle_benchmark_command(
     let mut results = Vec::new();
 
     for model_name in &model_list {
-        if !model_path(model_name).map_or(false, |p| p.exists()) {
-            eprintln!("Skipping {}: model not installed", model_name);
-            eprintln!("  Install with: voicsh models install {}", model_name);
-            println!();
-            continue;
+        // Check if model exists
+        let model_exists = model_path(model_name).map_or(false, |p| p.exists());
+
+        if !model_exists {
+            if no_download {
+                eprintln!(
+                    "Skipping {}: model not installed (--no-download)",
+                    model_name
+                );
+                eprintln!("  Install with: voicsh models install {}", model_name);
+                println!();
+                continue;
+            }
+
+            // Auto-download missing model
+            println!("Downloading model {}...", model_name);
+            match download_model(model_name, true).await {
+                Ok(_) => println!("Model {} downloaded successfully\n", model_name),
+                Err(e) => {
+                    eprintln!("Failed to download {}: {}", model_name, e);
+                    eprintln!("  Try manually: voicsh models install {}", model_name);
+                    println!();
+                    continue;
+                }
+            }
         }
 
         match benchmark_model(
