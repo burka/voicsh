@@ -5,6 +5,9 @@
 use crate::defaults;
 use std::process::Command;
 
+#[cfg(feature = "benchmark")]
+use crate::benchmark::detect_gpu;
+
 /// Result of a dependency check.
 #[derive(Debug, PartialEq)]
 pub enum CheckResult {
@@ -191,26 +194,51 @@ pub fn check_dependencies() {
     }
 }
 
-/// Check for NVIDIA GPU via `nvidia-smi`.
+/// Check for NVIDIA GPU via GPU detection.
 fn check_gpu_nvidia(compiled: &str) {
     print!("  NVIDIA (CUDA):   ");
-    match Command::new("nvidia-smi")
-        .arg("--query-gpu=gpu_name")
-        .arg("--format=csv,noheader")
-        .output()
+
+    #[cfg(feature = "benchmark")]
     {
-        Ok(output) if output.status.success() => {
-            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if compiled == "CUDA" {
-                println!("✓ Active ({})", name);
-            } else {
-                println!(
-                    "✓ {} found → rebuild with: cargo build --release --features cuda",
-                    name
-                );
+        // Use shared GPU detection when benchmark feature is available
+        if let Some(gpu_name) = detect_gpu() {
+            if gpu_name.starts_with("NVIDIA") {
+                let name = gpu_name.strip_prefix("NVIDIA ").unwrap_or(&gpu_name);
+                if compiled == "CUDA" {
+                    println!("✓ Active ({})", name);
+                } else {
+                    println!(
+                        "✓ {} found → rebuild with: cargo build --release --features cuda",
+                        name
+                    );
+                }
+                return;
             }
         }
-        _ => println!("- nvidia-smi not found"),
+        println!("- not detected");
+    }
+
+    #[cfg(not(feature = "benchmark"))]
+    {
+        // Fallback to direct nvidia-smi check when benchmark feature not available
+        match Command::new("nvidia-smi")
+            .arg("--query-gpu=gpu_name")
+            .arg("--format=csv,noheader")
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if compiled == "CUDA" {
+                    println!("✓ Active ({})", name);
+                } else {
+                    println!(
+                        "✓ {} found → rebuild with: cargo build --release --features cuda",
+                        name
+                    );
+                }
+            }
+            _ => println!("- nvidia-smi not found"),
+        }
     }
 }
 

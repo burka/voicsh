@@ -16,6 +16,48 @@ use crate::models::download::model_path;
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 
+/// Detect available GPU hardware.
+///
+/// Returns GPU name if detected (NVIDIA or AMD), or None if no GPU found.
+pub fn detect_gpu() -> Option<String> {
+    // Try to detect NVIDIA GPU
+    let nvidia_result = std::process::Command::new("nvidia-smi")
+        .arg("--query-gpu=name")
+        .arg("--format=csv,noheader")
+        .output();
+
+    if let Ok(output) = nvidia_result
+        && output.status.success()
+        && let Ok(gpu_name) = String::from_utf8(output.stdout)
+    {
+        let gpu_name = gpu_name.trim();
+        if !gpu_name.is_empty() {
+            return Some(format!("NVIDIA {}", gpu_name));
+        }
+    }
+
+    // Try to detect AMD GPU via lspci
+    let lspci_result = std::process::Command::new("lspci").output();
+    if let Ok(output) = lspci_result
+        && output.status.success()
+        && let Ok(lspci_output) = String::from_utf8(output.stdout)
+    {
+        for line in lspci_output.lines() {
+            let is_gpu = line.contains("VGA") || line.contains("3D");
+            let is_amd = line.contains("AMD") || line.contains("Radeon");
+
+            if is_gpu
+                && is_amd
+                && let Some(gpu_part) = line.split(':').nth(2)
+            {
+                return Some(format!("AMD {}", gpu_part.trim()));
+            }
+        }
+    }
+
+    None
+}
+
 /// Backend availability information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendInfo {
@@ -59,7 +101,7 @@ impl SystemInfo {
             .map(|cpu| cpu.frequency() as f32 / 1000.0); // Convert MHz to GHz
 
         // GPU detection - check for NVIDIA/AMD/Intel
-        let gpu_info = Self::detect_gpu();
+        let gpu_info = detect_gpu();
 
         // Whisper backend - determined by compile-time features
         let whisper_backend = Self::detect_whisper_backend();
@@ -80,45 +122,6 @@ impl SystemInfo {
             whisper_threads,
             available_backends,
         }
-    }
-
-    fn detect_gpu() -> Option<String> {
-        // Try to detect NVIDIA GPU
-        let nvidia_result = std::process::Command::new("nvidia-smi")
-            .arg("--query-gpu=name")
-            .arg("--format=csv,noheader")
-            .output();
-
-        if let Ok(output) = nvidia_result
-            && output.status.success()
-            && let Ok(gpu_name) = String::from_utf8(output.stdout)
-        {
-            let gpu_name = gpu_name.trim();
-            if !gpu_name.is_empty() {
-                return Some(format!("NVIDIA {}", gpu_name));
-            }
-        }
-
-        // Try to detect AMD GPU via lspci
-        let lspci_result = std::process::Command::new("lspci").output();
-        if let Ok(output) = lspci_result
-            && output.status.success()
-            && let Ok(lspci_output) = String::from_utf8(output.stdout)
-        {
-            for line in lspci_output.lines() {
-                let is_gpu = line.contains("VGA") || line.contains("3D");
-                let is_amd = line.contains("AMD") || line.contains("Radeon");
-
-                if is_gpu
-                    && is_amd
-                    && let Some(gpu_part) = line.split(':').nth(2)
-                {
-                    return Some(format!("AMD {}", gpu_part.trim()));
-                }
-            }
-        }
-
-        None
     }
 
     fn detect_whisper_backend() -> String {

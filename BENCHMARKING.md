@@ -5,38 +5,38 @@ This document describes the benchmarking suite for testing WAV transcription per
 ## Overview
 
 The benchmark suite provides:
-- Standalone binary for quick performance comparison
+- CLI command for quick performance comparison
 - Multi-backend comparison (CPU vs GPU)
 - Multi-language testing
 - Criterion integration for statistical analysis
 
-## Standalone Benchmark Tool
+## Benchmark CLI
 
 ### Installation
 
-The benchmark tool requires the `whisper` and `benchmark` features:
+The benchmark tool requires the `benchmark` feature:
 
 ```bash
-cargo build --release --bin benchmark-transcription --features whisper,benchmark
+cargo build --release --features benchmark
 ```
 
 ### Usage
 
 ```bash
 # Basic usage
-cargo run --release --bin benchmark-transcription --features whisper,benchmark -- <wav-file>
+voicsh benchmark <wav-file>
 
 # Specific models with iterations
-cargo run --release --bin benchmark-transcription --features whisper,benchmark -- audio.wav tiny.en,base.en,small.en 3
+voicsh benchmark audio.wav tiny.en,base.en,small.en 3
 
 # Compare backends
-cargo run --release --bin benchmark-transcription --features whisper,benchmark -- audio.wav --compare-backends
+voicsh benchmark audio.wav --compare-backends
 
 # Test languages
-cargo run --release --bin benchmark-transcription --features whisper,benchmark -- audio.wav tiny --languages en,de,es,fr
+voicsh benchmark audio.wav tiny --languages en,de,es,fr
 
 # JSON output
-cargo run --release --bin benchmark-transcription --features whisper,benchmark -- audio.wav all --output json > results.json
+voicsh benchmark audio.wav all --output json > results.json
 ```
 
 ## Metrics Explained
@@ -61,25 +61,25 @@ The benchmark tool supports comparing performance across different backends (CPU
 Use `--compare-backends` to see which backends are available:
 
 ```bash
-cargo run --release --bin benchmark-transcription -- audio.wav --compare-backends
+voicsh benchmark audio.wav --compare-backends
 ```
 
 ### Comparing Backends
 
-To compare different backends, compile and run the benchmark with each backend:
+To compare different backends, compile voicsh with each backend:
 
 ```bash
 # CPU benchmark
-cargo build --release --bin benchmark-transcription --no-default-features --features whisper,benchmark,model-download,cli
-./target/release/benchmark-transcription audio.wav tiny --output json > results-cpu.json
+cargo build --release --no-default-features --features whisper,benchmark,model-download,cli
+./target/release/voicsh benchmark audio.wav tiny --output json > results-cpu.json
 
 # CUDA benchmark (requires NVIDIA GPU and CUDA toolkit)
-cargo build --release --bin benchmark-transcription --features cuda,benchmark,model-download,cli
-./target/release/benchmark-transcription audio.wav tiny --output json > results-cuda.json
+cargo build --release --features cuda,benchmark,model-download,cli
+./target/release/voicsh benchmark audio.wav tiny --output json > results-cuda.json
 
 # Vulkan benchmark (requires Vulkan SDK)
-cargo build --release --bin benchmark-transcription --features vulkan,benchmark,model-download,cli
-./target/release/benchmark-transcription audio.wav tiny --output json > results-vulkan.json
+cargo build --release --features vulkan,benchmark,model-download,cli
+./target/release/voicsh benchmark audio.wav tiny --output json > results-vulkan.json
 ```
 
 ### Backend Requirements
@@ -95,7 +95,7 @@ cargo build --release --bin benchmark-transcription --features vulkan,benchmark,
 Test the same model with different language codes to compare performance and accuracy:
 
 ```bash
-cargo run --release --bin benchmark-transcription -- audio.wav tiny --languages auto,en,de,es,fr,it
+voicsh benchmark audio.wav tiny --languages auto,en,de,es,fr,it
 ```
 
 Notes:

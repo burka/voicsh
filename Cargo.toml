@@ -78,11 +78,6 @@ tempfile = "3"
 sysinfo = "0.33"
 criterion = "0.5"
 
-[[bin]]
-name = "benchmark-transcription"
-path = "src/bin/benchmark-transcription.rs"
-required-features = ["whisper", "benchmark", "model-download", "cli"]
-
 [[bench]]
 name = "wav_transcription"
 harness = false
