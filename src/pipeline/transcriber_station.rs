@@ -79,12 +79,10 @@ impl Station for TranscriberStation {
             return Ok(None);
         }
 
-        // Return transcribed text with timing information from chunk
+        // Return transcribed text with timing information from chunk (if available)
         Ok(Some(TranscribedText::with_timing(
             cleaned_text,
-            chunk.capture_start,
-            chunk.vad_start,
-            chunk.chunk_created,
+            chunk.timing,
         )))
     }
 }

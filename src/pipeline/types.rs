@@ -2,6 +2,17 @@
 
 use std::time::Instant;
 
+/// Timing information for pipeline stages (only populated when verbosity >= 1).
+#[derive(Debug, Clone)]
+pub struct ChunkTiming {
+    /// Timestamp when the first frame in this chunk was captured.
+    pub capture_start: Instant,
+    /// Timestamp when VAD processing began.
+    pub vad_start: Instant,
+    /// Timestamp when this chunk was created (after chunking).
+    pub chunk_created: Instant,
+}
+
 /// A frame of raw audio samples with timing information.
 #[derive(Debug, Clone)]
 pub struct AudioFrame {
@@ -35,8 +46,8 @@ pub struct VadFrame {
     pub is_speech: bool,
     /// Voice activity level (0.0 = silence, 1.0 = full speech).
     pub level: f32,
-    /// Timestamp when VAD processing started for this frame.
-    pub vad_start: Instant,
+    /// Timestamp when VAD processing started for this frame (only when verbosity >= 1).
+    pub vad_start: Option<Instant>,
 }
 
 impl VadFrame {
@@ -47,7 +58,24 @@ impl VadFrame {
             timestamp,
             is_speech,
             level,
-            vad_start: Instant::now(),
+            vad_start: None,
+        }
+    }
+
+    /// Creates a new VAD frame with timing information.
+    pub fn with_timing(
+        samples: Vec<i16>,
+        timestamp: Instant,
+        is_speech: bool,
+        level: f32,
+        vad_start: Instant,
+    ) -> Self {
+        Self {
+            samples,
+            timestamp,
+            is_speech,
+            level,
+            vad_start: Some(vad_start),
         }
     }
 }
@@ -61,25 +89,18 @@ pub struct AudioChunk {
     pub duration_ms: u32,
     /// Sequence number for ordering.
     pub sequence: u64,
-    /// Timestamp when the first frame in this chunk was captured.
-    pub capture_start: Instant,
-    /// Timestamp when VAD processing began.
-    pub vad_start: Instant,
-    /// Timestamp when this chunk was created (after chunking).
-    pub chunk_created: Instant,
+    /// Timing information (only populated when verbosity >= 1).
+    pub timing: Option<Box<ChunkTiming>>,
 }
 
 impl AudioChunk {
-    /// Creates a new audio chunk.
+    /// Creates a new audio chunk without timing information.
     pub fn new(samples: Vec<i16>, duration_ms: u32, sequence: u64) -> Self {
-        let now = Instant::now();
         Self {
             samples,
             duration_ms,
             sequence,
-            capture_start: now,
-            vad_start: now,
-            chunk_created: now,
+            timing: None,
         }
     }
 
@@ -95,9 +116,11 @@ impl AudioChunk {
             samples,
             duration_ms,
             sequence,
-            capture_start,
-            vad_start,
-            chunk_created: Instant::now(),
+            timing: Some(Box::new(ChunkTiming {
+                capture_start,
+                vad_start,
+                chunk_created: Instant::now(),
+            })),
         }
     }
 }
@@ -109,40 +132,26 @@ pub struct TranscribedText {
     pub text: String,
     /// Timestamp when transcription completed.
     pub timestamp: Instant,
-    /// Timestamp when the first frame was captured.
-    pub capture_start: Instant,
-    /// Timestamp when VAD processing began.
-    pub vad_start: Instant,
-    /// Timestamp when the chunk was created.
-    pub chunk_created: Instant,
+    /// Timing information (only populated when verbosity >= 1).
+    pub timing: Option<Box<ChunkTiming>>,
 }
 
 impl TranscribedText {
-    /// Creates a new transcribed text result.
-    pub fn new(text: String, timestamp: Instant) -> Self {
-        let now = Instant::now();
+    /// Creates a new transcribed text result without timing information.
+    pub fn new(text: String) -> Self {
         Self {
             text,
-            timestamp,
-            capture_start: now,
-            vad_start: now,
-            chunk_created: now,
+            timestamp: Instant::now(),
+            timing: None,
         }
     }
 
     /// Creates a new transcribed text result with timing information.
-    pub fn with_timing(
-        text: String,
-        capture_start: Instant,
-        vad_start: Instant,
-        chunk_created: Instant,
-    ) -> Self {
+    pub fn with_timing(text: String, timing: Option<Box<ChunkTiming>>) -> Self {
         Self {
             text,
             timestamp: Instant::now(),
-            capture_start,
-            vad_start,
-            chunk_created,
+            timing,
         }
     }
 }
@@ -175,8 +184,22 @@ mod tests {
         assert_eq!(frame.timestamp, timestamp);
         assert!(frame.is_speech);
         assert!((frame.level - 0.8).abs() < f32::EPSILON);
-        // vad_start is set to now, so just verify it exists
-        assert!(frame.vad_start <= Instant::now());
+        assert!(frame.vad_start.is_none());
+    }
+
+    #[test]
+    fn test_vad_frame_with_timing() {
+        let samples = vec![100, 200, 300];
+        let timestamp = Instant::now();
+        let vad_start = Instant::now();
+
+        let frame = VadFrame::with_timing(samples.clone(), timestamp, true, 0.8, vad_start);
+
+        assert_eq!(frame.samples, samples);
+        assert_eq!(frame.timestamp, timestamp);
+        assert!(frame.is_speech);
+        assert!((frame.level - 0.8).abs() < f32::EPSILON);
+        assert_eq!(frame.vad_start, Some(vad_start));
     }
 
     #[test]
@@ -187,23 +210,16 @@ mod tests {
         assert_eq!(chunk.samples, samples);
         assert_eq!(chunk.duration_ms, 1000);
         assert_eq!(chunk.sequence, 5);
-        // Timing fields are set to now
-        assert!(chunk.capture_start <= Instant::now());
-        assert!(chunk.vad_start <= Instant::now());
-        assert!(chunk.chunk_created <= Instant::now());
+        assert!(chunk.timing.is_none());
     }
 
     #[test]
     fn test_transcribed_text_creation() {
-        let timestamp = Instant::now();
-        let text = TranscribedText::new("Hello world".to_string(), timestamp);
+        let text = TranscribedText::new("Hello world".to_string());
 
         assert_eq!(text.text, "Hello world");
-        assert_eq!(text.timestamp, timestamp);
-        // Timing fields are set to now
-        assert!(text.capture_start <= Instant::now());
-        assert!(text.vad_start <= Instant::now());
-        assert!(text.chunk_created <= Instant::now());
+        assert!(text.timestamp <= Instant::now());
+        assert!(text.timing.is_none());
     }
 
     #[test]
@@ -216,9 +232,11 @@ mod tests {
         assert_eq!(chunk.samples, samples);
         assert_eq!(chunk.duration_ms, 1000);
         assert_eq!(chunk.sequence, 5);
-        assert_eq!(chunk.capture_start, capture);
-        assert_eq!(chunk.vad_start, vad);
-        assert!(chunk.chunk_created >= vad);
+        assert!(chunk.timing.is_some());
+        let timing = chunk.timing.unwrap();
+        assert_eq!(timing.capture_start, capture);
+        assert_eq!(timing.vad_start, vad);
+        assert!(timing.chunk_created >= vad);
     }
 
     #[test]
@@ -226,13 +244,19 @@ mod tests {
         let capture = Instant::now();
         let vad = Instant::now();
         let chunk_created = Instant::now();
-        let text =
-            TranscribedText::with_timing("Hello world".to_string(), capture, vad, chunk_created);
+        let timing = Some(Box::new(ChunkTiming {
+            capture_start: capture,
+            vad_start: vad,
+            chunk_created,
+        }));
+        let text = TranscribedText::with_timing("Hello world".to_string(), timing);
 
         assert_eq!(text.text, "Hello world");
-        assert_eq!(text.capture_start, capture);
-        assert_eq!(text.vad_start, vad);
-        assert_eq!(text.chunk_created, chunk_created);
+        assert!(text.timing.is_some());
+        let timing = text.timing.unwrap();
+        assert_eq!(timing.capture_start, capture);
+        assert_eq!(timing.vad_start, vad);
+        assert_eq!(timing.chunk_created, chunk_created);
         assert!(text.timestamp >= chunk_created);
     }
 }

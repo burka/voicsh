@@ -1,10 +1,9 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use std::fs::File;
 use std::io::BufReader;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use sysinfo::{Pid, ProcessRefreshKind, System};
 use voicsh::audio::wav::WavAudioSource;
+use voicsh::benchmark::ResourceMonitor;
 use voicsh::models::catalog::MODELS;
 use voicsh::models::download::model_path;
 use voicsh::stt::transcriber::Transcriber;
@@ -13,69 +12,12 @@ use voicsh::stt::whisper::{WhisperConfig, WhisperTranscriber};
 /// System metrics collected during benchmarking
 #[derive(Debug, Clone)]
 struct SystemMetrics {
-    cpu_usage_percent: f32,
+    cpu_usage_total: f32,
+    cpu_usage_per_core: f32,
     memory_usage_mb: f64,
     elapsed_ms: u128,
     audio_duration_ms: u64,
     realtime_factor: f64,
-}
-
-/// Monitor system resources during transcription
-struct ResourceMonitor {
-    system: Arc<Mutex<System>>,
-    pid: Pid,
-}
-
-impl ResourceMonitor {
-    fn new() -> Self {
-        let mut system = System::new_all();
-        system.refresh_all();
-        let pid = sysinfo::get_current_pid().expect("Failed to get current PID");
-
-        Self {
-            system: Arc::new(Mutex::new(system)),
-            pid,
-        }
-    }
-
-    fn measure<F>(&self, f: F) -> (SystemMetrics, String)
-    where
-        F: FnOnce() -> (String, u64),
-    {
-        // Initial measurement
-        self.system.lock().unwrap().refresh_all();
-
-        let start = Instant::now();
-        let (result, audio_duration_ms) = f();
-        let elapsed = start.elapsed();
-
-        // Final measurement
-        self.system.lock().unwrap().refresh_all();
-
-        let system = self.system.lock().unwrap();
-        let process = system
-            .process(self.pid)
-            .expect("Failed to get process info");
-
-        let cpu_usage = process.cpu_usage();
-        let memory_usage = process.memory() as f64 / (1024.0 * 1024.0);
-
-        let realtime_factor = if audio_duration_ms > 0 {
-            elapsed.as_millis() as f64 / audio_duration_ms as f64
-        } else {
-            0.0
-        };
-
-        let metrics = SystemMetrics {
-            cpu_usage_percent: cpu_usage,
-            memory_usage_mb: memory_usage,
-            elapsed_ms: elapsed.as_millis(),
-            audio_duration_ms,
-            realtime_factor,
-        };
-
-        (metrics, result)
-    }
 }
 
 /// Load WAV file and return audio samples with duration
@@ -127,21 +69,38 @@ fn benchmark_model(
         }
     };
 
-    let audio_clone = audio.to_vec();
-    let (metrics, text) = monitor.measure(|| {
-        let result = transcriber
-            .transcribe(&audio_clone)
-            .expect("Transcription failed");
-        let duration_ms = (audio_clone.len() as u64 * 1000) / 16000;
-        (result.text, duration_ms)
-    });
+    let start = Instant::now();
+    let result = transcriber.transcribe(audio).expect("Transcription failed");
+    let elapsed = start.elapsed();
 
-    println!("  Result: {} (confidence: {:.2})", text.trim(), 0.0); // Confidence not available in this benchmark
+    let (cpu_total, cpu_per_core, memory) = monitor.get_current_stats();
+    let audio_duration_ms = (audio.len() as u64 * 1000) / 16000;
+
+    let realtime_factor = if audio_duration_ms > 0 {
+        elapsed.as_millis() as f64 / audio_duration_ms as f64
+    } else {
+        0.0
+    };
+
+    let metrics = SystemMetrics {
+        cpu_usage_total: cpu_total,
+        cpu_usage_per_core: cpu_per_core,
+        memory_usage_mb: memory,
+        elapsed_ms: elapsed.as_millis(),
+        audio_duration_ms,
+        realtime_factor,
+    };
+
     println!(
-        "  Time: {}ms, RTF: {:.2}x, CPU: {:.1}%, Memory: {:.1}MB",
+        "  Result: {} (confidence: {:.2})",
+        result.text.trim(),
+        result.confidence
+    );
+    println!(
+        "  Time: {}ms, RTF: {:.2}x, CPU: {:.1}% per core, Memory: {:.1}MB",
         metrics.elapsed_ms,
         metrics.realtime_factor,
-        metrics.cpu_usage_percent,
+        metrics.cpu_usage_per_core,
         metrics.memory_usage_mb
     );
 
@@ -239,7 +198,7 @@ fn run_comparison_benchmark() {
                 metrics.elapsed_ms,
                 metrics.realtime_factor,
                 speed,
-                metrics.cpu_usage_percent,
+                metrics.cpu_usage_per_core,
                 metrics.memory_usage_mb
             );
         }

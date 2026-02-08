@@ -192,12 +192,20 @@ impl Station for VadStation {
         );
 
         // Always return a VadFrame - never filter
-        Ok(Some(VadFrame::new(
-            frame.samples,
-            frame.timestamp,
-            is_speech,
-            result.level,
-        )))
+        // Populate timing when show_levels is enabled (verbosity >= 1)
+        let vad_frame = if self.show_levels {
+            VadFrame::with_timing(
+                frame.samples,
+                frame.timestamp,
+                is_speech,
+                result.level,
+                std::time::Instant::now(),
+            )
+        } else {
+            VadFrame::new(frame.samples, frame.timestamp, is_speech, result.level)
+        };
+
+        Ok(Some(vad_frame))
     }
 
     fn shutdown(&mut self) {

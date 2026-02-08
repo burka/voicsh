@@ -74,31 +74,33 @@ impl Station for SinkStation {
                 let output_done = Instant::now();
                 self.transcription_count += 1;
 
-                // Record timing
-                let timing = TranscriptionTiming {
-                    capture_start: text.capture_start,
-                    vad_start: text.vad_start,
-                    chunk_created: text.chunk_created,
-                    transcription_done: text.timestamp,
-                    output_done,
-                };
-                self.latency_tracker.record(timing.clone());
+                // Record timing if available
+                if let Some(chunk_timing) = text.timing {
+                    let timing = TranscriptionTiming {
+                        capture_start: chunk_timing.capture_start,
+                        vad_start: chunk_timing.vad_start,
+                        chunk_created: chunk_timing.chunk_created,
+                        transcription_done: text.timestamp,
+                        output_done,
+                    };
+                    self.latency_tracker.record(timing.clone());
 
-                if !self.quiet {
-                    if self.verbosity >= 2 {
-                        // Full diagnostic breakdown
-                        self.latency_tracker.print_detailed(
-                            &timing,
-                            &text.text,
-                            self.transcription_count,
-                        );
-                    } else if self.verbosity >= 1 {
-                        // Basic timing
-                        self.latency_tracker.print_basic(&timing, &text.text);
-                    } else {
-                        // No verbosity - just text
-                        eprintln_clear(&format!("\"{}\"", text.text));
+                    if !self.quiet {
+                        if self.verbosity >= 2 {
+                            // Full diagnostic breakdown
+                            self.latency_tracker.print_detailed(
+                                &timing,
+                                &text.text,
+                                self.transcription_count,
+                            );
+                        } else if self.verbosity >= 1 {
+                            // Basic timing
+                            self.latency_tracker.print_basic(&timing, &text.text);
+                        }
                     }
+                } else if !self.quiet && self.verbosity == 0 {
+                    // No verbosity and no timing - just text
+                    eprintln_clear(&format!("\"{}\"", text.text));
                 }
                 Ok(Some(()))
             }
@@ -258,7 +260,6 @@ impl TextSink for StdoutSink {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
-    use std::time::Instant;
 
     #[test]
     fn text_sink_is_object_safe() {
@@ -388,8 +389,8 @@ mod tests {
         let (result_tx, result_rx) = crossbeam_channel::bounded(1);
         let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
 
-        let text1 = TranscribedText::new("First".to_string(), Instant::now());
-        let text2 = TranscribedText::new("Second".to_string(), Instant::now());
+        let text1 = TranscribedText::new("First".to_string());
+        let text2 = TranscribedText::new("Second".to_string());
 
         station.process(text1).unwrap();
         station.process(text2).unwrap();
@@ -405,7 +406,7 @@ mod tests {
         let (result_tx, result_rx) = crossbeam_channel::bounded(1);
         let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
 
-        let empty_text = TranscribedText::new("   ".to_string(), Instant::now());
+        let empty_text = TranscribedText::new("   ".to_string());
 
         let result = station.process(empty_text).unwrap();
         assert_eq!(result, None);
@@ -425,7 +426,7 @@ mod tests {
         let (result_tx, _result_rx) = crossbeam_channel::bounded(1);
         let mut station = SinkStation::new(Box::new(sink), true, 0, result_tx);
 
-        let text = TranscribedText::new("Test".to_string(), Instant::now());
+        let text = TranscribedText::new("Test".to_string());
 
         let result = station.process(text);
         assert!(result.is_ok());
@@ -468,7 +469,7 @@ mod tests {
 
         let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
 
-        let text = TranscribedText::new("before shutdown".to_string(), Instant::now());
+        let text = TranscribedText::new("before shutdown".to_string());
         let processed = station.process(text).unwrap();
         assert_eq!(processed, Some(()));
 
