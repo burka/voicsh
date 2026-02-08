@@ -465,13 +465,15 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
         });
     }
 
-    let model_filename = if model.ends_with(".bin") {
-        model.to_string()
-    } else {
-        format!("ggml-{}.bin", model)
-    };
+    // Non-catalog model: check the standard cache directory
+    let cache_path = model_path(model);
+    if cache_path.exists() {
+        return Ok(cache_path);
+    }
 
-    Ok(PathBuf::from("models").join(model_filename))
+    Err(VoicshError::TranscriptionModelNotFound {
+        path: cache_path.display().to_string(),
+    })
 }
 
 /// Check that required system tools are available.
@@ -582,8 +584,23 @@ mod tests {
 
     #[test]
     fn test_build_model_path_with_model_name_and_bin_extension() {
-        let path = build_model_path("ggml-tiny.bin").unwrap();
-        assert_eq!(path, PathBuf::from("models/ggml-tiny.bin"));
+        // Non-catalog model with .bin extension: resolves to cache dir or errors
+        let result = build_model_path("ggml-tiny.bin");
+        if let Ok(path) = result {
+            // If model is installed, path should be in the cache directory
+            assert!(
+                path.to_string_lossy().contains("voicsh"),
+                "Path should be in cache dir: {:?}",
+                path
+            );
+        } else {
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains("not found"),
+                "Error should mention 'not found': {}",
+                err_msg
+            );
+        }
     }
 
     #[test]
@@ -600,8 +617,15 @@ mod tests {
 
     #[test]
     fn test_build_model_path_with_unknown_model_name() {
-        let path = build_model_path("custom-model").unwrap();
-        assert_eq!(path, PathBuf::from("models/ggml-custom-model.bin"));
+        // Unknown model not installed: should error with cache path
+        let result = build_model_path("custom-model");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not found") && err_msg.contains("ggml-custom-model.bin"),
+            "Error should reference the model file: {}",
+            err_msg
+        );
     }
 
     #[test]
