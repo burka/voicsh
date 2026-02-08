@@ -53,27 +53,24 @@ pub struct Cli {
     #[arg(long, short = 'c', value_name = "SECONDS", default_value = "3")]
     pub chunk_size: u32,
 
-    /// Transcription buffer duration (default: 10s). Examples: 10, 20s, 5m
+    /// Transcription buffer duration (default: 10s). Examples: 30s, 5m, 1h30m
     #[arg(long, short = 'b', value_name = "DURATION", default_value = "10s", value_parser = parse_buffer_secs)]
     pub buffer: u64,
 }
 
 /// Parse a buffer duration string into seconds.
 ///
-/// Accepts bare numbers (seconds), `s` suffix, or `m` suffix.
-/// Examples: "10" → 10, "20s" → 20, "5m" → 300.
+/// Supports any duration format accepted by `humantime`: bare numbers (seconds),
+/// single-unit (`30s`, `5m`, `2h`), and compound (`1h30m`, `2m30s`).
 fn parse_buffer_secs(s: &str) -> Result<u64, String> {
     let s = s.trim();
-    if let Some(n) = s.strip_suffix('m') {
-        n.trim()
-            .parse::<u64>()
-            .map(|v| v * 60)
-            .map_err(|e| e.to_string())
-    } else if let Some(n) = s.strip_suffix('s') {
-        n.trim().parse::<u64>().map_err(|e| e.to_string())
-    } else {
-        s.parse::<u64>().map_err(|e| e.to_string())
+    // Bare number → seconds
+    if let Ok(secs) = s.parse::<u64>() {
+        return Ok(secs);
     }
+    humantime::parse_duration(s)
+        .map(|d| d.as_secs())
+        .map_err(|e| e.to_string())
 }
 
 /// Available commands
@@ -587,6 +584,26 @@ mod tests {
         assert_eq!(parse_buffer_secs("1m").unwrap(), 60);
         assert_eq!(parse_buffer_secs("5m").unwrap(), 300);
         assert_eq!(parse_buffer_secs("0m").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_parse_buffer_secs_hours() {
+        assert_eq!(parse_buffer_secs("1h").unwrap(), 3600);
+        assert_eq!(parse_buffer_secs("2h").unwrap(), 7200);
+    }
+
+    #[test]
+    fn test_parse_buffer_secs_compound() {
+        assert_eq!(parse_buffer_secs("1h30m").unwrap(), 5400);
+        assert_eq!(parse_buffer_secs("2m30s").unwrap(), 150);
+        assert_eq!(parse_buffer_secs("1h2m3s").unwrap(), 3723);
+    }
+
+    #[test]
+    fn test_parse_buffer_secs_verbose_units() {
+        assert_eq!(parse_buffer_secs("5minutes").unwrap(), 300);
+        assert_eq!(parse_buffer_secs("30seconds").unwrap(), 30);
+        assert_eq!(parse_buffer_secs("1hour").unwrap(), 3600);
     }
 
     #[test]
