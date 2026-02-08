@@ -1,7 +1,7 @@
 use crate::config::InputMethod;
 use crate::input::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
 use crate::pipeline::error::{StationError, eprintln_clear};
-use crate::pipeline::latency::{LatencyTracker, TranscriptionTiming};
+use crate::pipeline::latency::{LatencyTracker, SessionContext, TranscriptionTiming};
 use crate::pipeline::station::Station;
 use crate::pipeline::types::TranscribedText;
 #[cfg(feature = "portal")]
@@ -53,6 +53,11 @@ impl SinkStation {
             latency_tracker: LatencyTracker::new(),
             transcription_count: 0,
         }
+    }
+
+    pub(crate) fn with_session_context(mut self, context: SessionContext) -> Self {
+        self.latency_tracker = LatencyTracker::with_context(context);
+        self
     }
 }
 

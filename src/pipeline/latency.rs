@@ -79,9 +79,17 @@ pub struct LatencyStats {
     pub realtime_factor_avg: f64,
 }
 
+/// Context about the session for diagnostic output.
+#[derive(Debug, Clone)]
+pub struct SessionContext {
+    /// Pre-formatted system info line (model, backend, CPU, GPU, threads).
+    pub system_line: String,
+}
+
 /// Collects and reports latency measurements.
 pub struct LatencyTracker {
     measurements: Vec<TranscriptionTiming>,
+    context: Option<SessionContext>,
 }
 
 impl LatencyTracker {
@@ -89,6 +97,15 @@ impl LatencyTracker {
     pub fn new() -> Self {
         Self {
             measurements: Vec::new(),
+            context: None,
+        }
+    }
+
+    /// Creates a new latency tracker with session context for diagnostics.
+    pub fn with_context(context: SessionContext) -> Self {
+        Self {
+            measurements: Vec::new(),
+            context: Some(context),
         }
     }
 
@@ -165,40 +182,24 @@ impl LatencyTracker {
         })
     }
 
-    /// Prints a user-friendly summary of session performance.
+    /// Prints a compact session summary suitable for bug reports.
     pub fn print_summary(&self) {
         if let Some(stats) = self.stats() {
             eprintln!();
-            eprintln!("=== Session Summary ===");
+            // Line 1: performance
             eprintln!(
-                "Transcribed {} utterance{}",
+                "voicsh: {}x avg {} audio | {} wait ({:.1}x RT) | best {} worst {}",
                 stats.count,
-                if stats.count == 1 { "" } else { "s" }
-            );
-            eprintln!();
-            eprintln!(
-                "  Avg spoken audio:         {}",
-                format_duration(stats.audio_duration_avg)
-            );
-            eprintln!(
-                "  Avg wait after speaking:  {}",
-                format_duration(stats.perceived_wait_avg)
-            );
-            eprintln!(
-                "    Transcription:          {}  ({:.1}x real-time)",
-                format_duration(stats.transcription_avg),
-                stats.realtime_factor_avg
-            );
-            eprintln!(
-                "    Text output:            {}",
-                format_duration(stats.output_avg)
-            );
-            eprintln!();
-            eprintln!(
-                "  Fastest: {} | Slowest: {}",
+                format_duration(stats.audio_duration_avg),
+                format_duration(stats.perceived_wait_avg),
+                stats.realtime_factor_avg,
                 format_duration(stats.perceived_wait_min),
-                format_duration(stats.perceived_wait_max)
+                format_duration(stats.perceived_wait_max),
             );
+            // Line 2: system context (if available)
+            if let Some(ctx) = &self.context {
+                eprintln!("voicsh: {}", ctx.system_line);
+            }
         }
     }
 
@@ -234,6 +235,74 @@ impl Default for LatencyTracker {
     fn default() -> Self {
         Self::new()
     }
+}
+
+impl SessionContext {
+    /// Builds a session context from available system info.
+    ///
+    /// Detects CPU model (from /proc/cpuinfo), GPU (via nvidia-smi),
+    /// thread count, and uses the provided model name and backend.
+    pub fn detect(model_name: &str, backend: &str) -> Self {
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+
+        let cpu = detect_cpu_model().unwrap_or_else(|| "unknown CPU".to_string());
+        let gpu = detect_gpu_name();
+
+        let mut parts = vec![model_name.to_string(), backend.to_string()];
+        parts.push(format!("{cpu} {threads}t"));
+        if let Some(gpu) = gpu {
+            parts.push(gpu);
+        }
+
+        Self {
+            system_line: parts.join(" | "),
+        }
+    }
+}
+
+/// Read CPU model name from /proc/cpuinfo (Linux).
+fn detect_cpu_model() -> Option<String> {
+    let content = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+    for line in content.lines() {
+        if line.starts_with("model name") {
+            return line.split(':').nth(1).map(|s| s.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Detect GPU via nvidia-smi (NVIDIA) or lspci (AMD).
+fn detect_gpu_name() -> Option<String> {
+    if let Ok(output) = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=name", "--format=csv,noheader"])
+        .output()
+        && output.status.success()
+    {
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() {
+            return Some(format!("NVIDIA {name}"));
+        }
+    }
+
+    if let Ok(output) = std::process::Command::new("lspci").output()
+        && output.status.success()
+    {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let is_gpu = line.contains("VGA") || line.contains("3D");
+            let is_amd = line.contains("AMD") || line.contains("Radeon");
+            if is_gpu
+                && is_amd
+                && let Some(part) = line.split(':').nth(2)
+            {
+                return Some(format!("AMD {}", part.trim()));
+            }
+        }
+    }
+
+    None
 }
 
 /// Formats a duration as a human-friendly string.
@@ -453,5 +522,53 @@ mod tests {
         tracker.print_summary();
         tracker.print_detailed(&timing, "test text", 1);
         tracker.print_basic(&timing, "test text");
+    }
+
+    #[test]
+    fn test_print_summary_with_context() {
+        // Exercises the context-aware print path.
+        let context = SessionContext {
+            system_line: "base.en | CPU | test-cpu 4t".to_string(),
+        };
+        let mut tracker = LatencyTracker::with_context(context);
+        let now = Instant::now();
+        let timing = TranscriptionTiming {
+            capture_start: now,
+            vad_start: now + Duration::from_millis(10),
+            chunk_created: now + Duration::from_millis(20),
+            transcription_done: now + Duration::from_millis(100),
+            output_done: now + Duration::from_millis(110),
+            audio_duration: Duration::from_millis(15),
+        };
+
+        tracker.record(timing);
+        // Verifies no panic and that context is present
+        tracker.print_summary();
+        assert!(tracker.context.is_some());
+        assert_eq!(
+            tracker.context.unwrap().system_line,
+            "base.en | CPU | test-cpu 4t"
+        );
+    }
+
+    #[test]
+    fn test_session_context_detect_contains_model_and_backend() {
+        let ctx = SessionContext::detect("tiny.en", "CPU");
+        assert!(
+            ctx.system_line.contains("tiny.en"),
+            "system_line should contain model name: {}",
+            ctx.system_line
+        );
+        assert!(
+            ctx.system_line.contains("CPU"),
+            "system_line should contain backend: {}",
+            ctx.system_line
+        );
+        // Should contain thread count (at least "1t")
+        assert!(
+            ctx.system_line.contains('t'),
+            "system_line should contain thread count: {}",
+            ctx.system_line
+        );
     }
 }
