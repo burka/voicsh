@@ -113,7 +113,7 @@ impl AudioSource for WavAudioSource {
 }
 
 /// Simple linear interpolation resampling.
-fn resample(samples: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16> {
+pub(crate) fn resample(samples: &[i16], from_rate: u32, to_rate: u32) -> Vec<i16> {
     if from_rate == to_rate {
         return samples.to_vec();
     }

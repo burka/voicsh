@@ -183,6 +183,8 @@ unsafe impl Send for SendableStream {}
 /// Real audio capture implementation using CPAL.
 ///
 /// Captures 16-bit PCM audio at 16kHz mono, as required by Whisper.
+/// Tries the preferred format first (i16/16kHz/mono), then falls back to the
+/// device's default config with software conversion (channel mixing + resampling).
 ///
 /// Note: The stream is wrapped in SendableStream + Mutex to make it Send+Sync.
 /// This is safe because we ensure exclusive access through the Mutex.
@@ -190,6 +192,7 @@ pub struct CpalAudioSource {
     device: cpal::Device,
     stream: Arc<Mutex<Option<SendableStream>>>,
     buffer: Arc<Mutex<Vec<i16>>>,
+    callback_count: Arc<std::sync::atomic::AtomicU64>,
     sample_rate: u32,
 }
 
@@ -242,18 +245,24 @@ impl CpalAudioSource {
             device,
             stream: Arc::new(Mutex::new(None)),
             buffer: Arc::new(Mutex::new(Vec::new())),
+            callback_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             sample_rate: defaults::SAMPLE_RATE,
         })
     }
 
     /// Build the audio stream with the configured format.
     ///
-    /// Tries i16/16kHz/mono first (preferred). If the device doesn't support
-    /// that natively, falls back to f32 capture with software conversion.
-    /// PipeWire/PulseAudio backends often handle format conversion transparently,
-    /// so the i16 path usually succeeds even for devices that only report f32.
+    /// Tries in order:
+    /// 1. i16/16kHz/mono — preferred, zero-copy path
+    /// 2. f32/16kHz/mono — for devices that only expose float formats
+    /// 3. Device default config — native rate/channels with software conversion
+    ///
+    /// Step 3 handles PipeWire setups where the ALSA compatibility layer accepts
+    /// non-native configs but never fires the data callback.
     fn build_stream(&self) -> Result<cpal::Stream> {
-        let stream_config = cpal::StreamConfig {
+        use std::sync::atomic::Ordering;
+
+        let preferred_config = cpal::StreamConfig {
             channels: 1,
             sample_rate: cpal::SampleRate(self.sample_rate),
             buffer_size: cpal::BufferSize::Default,
@@ -263,11 +272,13 @@ impl CpalAudioSource {
             eprintln!("Audio stream error: {}", err);
         };
 
-        // Try i16 directly — works with PipeWire/PulseAudio which convert transparently
+        // Try i16/16kHz/mono — works with PipeWire/PulseAudio which convert transparently
         let buffer = Arc::clone(&self.buffer);
+        let counter = Arc::clone(&self.callback_count);
         if let Ok(stream) = self.device.build_input_stream(
-            &stream_config,
+            &preferred_config,
             move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                counter.fetch_add(1, Ordering::Relaxed);
                 if let Ok(mut buf) = buffer.lock() {
                     buf.extend_from_slice(data);
                 }
@@ -278,40 +289,163 @@ impl CpalAudioSource {
             return Ok(stream);
         }
 
-        // Fallback: capture as f32 and convert to i16 in software.
-        // This handles Bluetooth/ALSA devices that only expose float formats.
+        // Try f32/16kHz/mono — for devices that only expose float formats
         let buffer = Arc::clone(&self.buffer);
-        let stream = self
+        let counter = Arc::clone(&self.callback_count);
+        if let Ok(stream) = self.device.build_input_stream(
+            &preferred_config,
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                counter.fetch_add(1, Ordering::Relaxed);
+                if let Ok(mut buf) = buffer.lock() {
+                    buf.extend(
+                        data.iter()
+                            .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16),
+                    );
+                }
+            },
+            err_callback,
+            None,
+        ) {
+            return Ok(stream);
+        }
+
+        // Fallback: capture at device's native config, convert in software.
+        // Some PipeWire-ALSA setups accept non-native configs but never deliver data.
+        self.build_stream_native()
+    }
+
+    /// Build a stream using the device's default/native config, with software
+    /// channel mixing (stereo→mono) and resampling (native rate→16kHz).
+    fn build_stream_native(&self) -> Result<cpal::Stream> {
+        use cpal::SampleFormat;
+        use std::sync::atomic::Ordering;
+
+        let default_config = self
             .device
-            .build_input_stream(
-                &stream_config,
-                move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if let Ok(mut buf) = buffer.lock() {
-                        buf.extend(
-                            data.iter()
-                                .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16),
-                        );
-                    }
-                },
-                err_callback,
-                None,
-            )
+            .default_input_config()
             .map_err(|e| VoicshError::AudioCapture {
-                message: format!("Failed to build input stream (tried i16 and f32): {}", e),
+                message: format!("Failed to query default input config: {}", e),
             })?;
 
-        Ok(stream)
+        let native_rate = default_config.sample_rate().0;
+        let native_channels = default_config.channels() as usize;
+        let target_rate = self.sample_rate;
+
+        let stream_config: cpal::StreamConfig = default_config.clone().into();
+
+        eprintln!(
+            "voicsh: using native audio format ({}ch/{}Hz/{:?}), converting in software",
+            native_channels,
+            native_rate,
+            default_config.sample_format(),
+        );
+
+        let err_callback = |err| {
+            eprintln!("Audio stream error: {}", err);
+        };
+
+        let buffer = Arc::clone(&self.buffer);
+        let counter = Arc::clone(&self.callback_count);
+
+        match default_config.sample_format() {
+            SampleFormat::I16 => self
+                .device
+                .build_input_stream(
+                    &stream_config,
+                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                        counter.fetch_add(1, Ordering::Relaxed);
+                        let converted = convert_to_mono_16khz_i16(
+                            data,
+                            native_channels,
+                            native_rate,
+                            target_rate,
+                        );
+                        if let Ok(mut buf) = buffer.lock() {
+                            buf.extend_from_slice(&converted);
+                        }
+                    },
+                    err_callback,
+                    None,
+                )
+                .map_err(|e| VoicshError::AudioCapture {
+                    message: format!("Failed to build native i16 stream: {}", e),
+                }),
+            SampleFormat::F32 => self
+                .device
+                .build_input_stream(
+                    &stream_config,
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        counter.fetch_add(1, Ordering::Relaxed);
+                        let i16_data: Vec<i16> = data
+                            .iter()
+                            .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+                            .collect();
+                        let converted = convert_to_mono_16khz_i16(
+                            &i16_data,
+                            native_channels,
+                            native_rate,
+                            target_rate,
+                        );
+                        if let Ok(mut buf) = buffer.lock() {
+                            buf.extend_from_slice(&converted);
+                        }
+                    },
+                    err_callback,
+                    None,
+                )
+                .map_err(|e| VoicshError::AudioCapture {
+                    message: format!("Failed to build native f32 stream: {}", e),
+                }),
+            fmt => Err(VoicshError::AudioCapture {
+                message: format!(
+                    "Unsupported native sample format: {:?}. \
+                     Try specifying a device with --device.",
+                    fmt
+                ),
+            }),
+        }
+    }
+}
+
+/// Mix multi-channel audio to mono and resample to the target rate.
+fn convert_to_mono_16khz_i16(
+    samples: &[i16],
+    channels: usize,
+    source_rate: u32,
+    target_rate: u32,
+) -> Vec<i16> {
+    // Mix to mono by averaging channels
+    let mono: Vec<i16> = if channels == 1 {
+        samples.to_vec()
+    } else {
+        samples
+            .chunks_exact(channels)
+            .map(|frame| {
+                let sum: i32 = frame.iter().map(|&s| s as i32).sum();
+                (sum / channels as i32) as i16
+            })
+            .collect()
+    };
+
+    // Resample if needed
+    if source_rate == target_rate {
+        mono
+    } else {
+        crate::audio::wav::resample(&mono, source_rate, target_rate)
     }
 }
 
 impl AudioSource for CpalAudioSource {
     fn start(&mut self) -> Result<()> {
-        let mut stream_guard = self.stream.lock().map_err(|e| VoicshError::AudioCapture {
-            message: format!("Failed to lock stream: {}", e),
-        })?;
+        use std::sync::atomic::Ordering;
 
-        if stream_guard.is_some() {
-            return Ok(()); // Already started
+        {
+            let stream_guard = self.stream.lock().map_err(|e| VoicshError::AudioCapture {
+                message: format!("Failed to lock stream: {}", e),
+            })?;
+            if stream_guard.is_some() {
+                return Ok(()); // Already started
+            }
         }
 
         let stream = self.build_stream()?;
@@ -319,7 +453,32 @@ impl AudioSource for CpalAudioSource {
             message: format!("Failed to start audio stream: {}", e),
         })?;
 
-        *stream_guard = Some(SendableStream(stream));
+        // Wait briefly to check if the CPAL callback actually fires.
+        // Some PipeWire-ALSA setups accept non-native configs but never deliver data.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        let final_stream = if self.callback_count.load(Ordering::Relaxed) == 0 {
+            // Preferred config didn't deliver data — stop it, clear buffer, try native
+            drop(stream);
+            if let Ok(mut buf) = self.buffer.lock() {
+                buf.clear();
+            }
+
+            let native_stream = self.build_stream_native()?;
+            native_stream
+                .play()
+                .map_err(|e| VoicshError::AudioCapture {
+                    message: format!("Failed to start native audio stream: {}", e),
+                })?;
+            native_stream
+        } else {
+            stream
+        };
+
+        let mut stream_guard = self.stream.lock().map_err(|e| VoicshError::AudioCapture {
+            message: format!("Failed to lock stream: {}", e),
+        })?;
+        *stream_guard = Some(SendableStream(final_stream));
         Ok(())
     }
 

@@ -154,18 +154,29 @@ pub async fn run_record_command(
     }
 
     // Try to establish portal session for key injection (GNOME/KDE)
+    // Timeout after 5s — the portal D-Bus call can block the async runtime
+    // in non-interactive environments (tmux, CI, background processes).
     #[cfg(feature = "portal")]
-    let portal = match PortalSession::try_new().await {
-        Ok(session) => {
+    let portal = match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        PortalSession::try_new(),
+    )
+    .await
+    {
+        Ok(Ok(session)) => {
             if verbosity >= 1 {
                 eprintln!("Portal keyboard access granted.");
             }
             Some(Arc::new(session))
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             if verbosity >= 2 {
                 eprintln!("Portal unavailable ({}), using wtype/ydotool fallback.", e);
             }
+            None
+        }
+        Err(_) => {
+            eprintln!("Portal timed out, using wtype/ydotool fallback.");
             None
         }
     };

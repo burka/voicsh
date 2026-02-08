@@ -226,11 +226,13 @@ impl SystemInfo {
             "None".to_string()
         };
 
-        // Backend info
-        let backend_info = format!(
-            "{} ({} threads)",
-            self.whisper_backend, self.whisper_threads
-        );
+        // Backend info — show "17/20 threads" when not using all available
+        let thread_info = if self.whisper_threads < self.cpu_threads {
+            format!("{}/{} threads", self.whisper_threads, self.cpu_threads)
+        } else {
+            format!("{} threads", self.whisper_threads)
+        };
+        let backend_info = format!("{} ({})", self.whisper_backend, thread_info);
 
         // Print compact system info on one line
         println!(
