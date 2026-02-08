@@ -237,15 +237,11 @@ impl SystemInfo {
             if gpu.contains("NVIDIA") {
                 println!("Recommendation: GPU detected but not in use!");
                 println!("  Compile with --features cuda for 10-50x speedup:");
-                println!(
-                    "  cargo build --release --features cuda,benchmark,model-download,cli"
-                );
+                println!("  cargo build --release --features cuda,benchmark,model-download,cli");
             } else if gpu.contains("AMD") {
                 println!("Recommendation: AMD GPU detected but not in use!");
                 println!("  Compile with --features hipblas for GPU acceleration:");
-                println!(
-                    "  cargo build --release --features hipblas,benchmark,model-download,cli"
-                );
+                println!("  cargo build --release --features hipblas,benchmark,model-download,cli");
             }
         }
     }
