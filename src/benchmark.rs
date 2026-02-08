@@ -15,6 +15,17 @@ use crate::models::download::{list_installed_models, model_path};
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 
+/// Compute default thread count for whisper inference.
+///
+/// Uses most available threads while leaving headroom for the OS:
+/// `min(cpu_threads, max(4, floor((cpu_threads - 1) * 0.9)))`
+///
+/// This avoids whisper.cpp's conservative default of `min(4, n_processors)`.
+pub fn compute_default_threads(cpu_threads: usize) -> usize {
+    let headroom = ((cpu_threads.saturating_sub(1) as f64) * 0.9).floor() as usize;
+    cpu_threads.min(headroom.max(4))
+}
+
 /// Detect available GPU hardware.
 ///
 /// Returns GPU name if detected (NVIDIA or AMD), or None if no GPU found.
@@ -322,6 +333,7 @@ pub fn load_wav_file(path: &str) -> Result<(Vec<i16>, u64), Box<dyn std::error::
     Ok((samples, duration_ms))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn benchmark_model(
     model_name: &str,
     language: &str,
@@ -330,13 +342,14 @@ pub fn benchmark_model(
     monitor: &ResourceMonitor,
     iterations: usize,
     verbose: u8,
+    threads: usize,
 ) -> Result<BenchmarkResult, Box<dyn std::error::Error>> {
     let path = model_path(model_name);
 
     let config = WhisperConfig {
         model_path: path,
         language: language.to_string(),
-        threads: None,
+        threads: Some(threads),
     };
 
     let transcriber = WhisperTranscriber::new(config)?;
@@ -490,6 +503,15 @@ pub fn print_guidance(results: &[BenchmarkResult], system_info: &SystemInfo) {
         println!("  Try --buffer 5m to tolerate slow transcription, or enable GPU acceleration.");
     }
 
+    // Thread recommendation if not using all available threads
+    let default_threads = compute_default_threads(system_info.cpu_threads);
+    if system_info.whisper_threads < default_threads {
+        println!(
+            "  Tip: using {} of {} threads. Try --threads {} for better throughput.",
+            system_info.whisper_threads, system_info.cpu_threads, default_threads,
+        );
+    }
+
     // GPU recommendation if detected but not in use
     if let Some(ref gpu) = system_info.gpu_info
         && system_info.whisper_backend.contains("CPU")
@@ -515,5 +537,47 @@ pub fn print_json_report(report: &BenchmarkReport) {
     match serde_json::to_string_pretty(report) {
         Ok(json) => println!("{}", json),
         Err(e) => eprintln!("Error serializing to JSON: {}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_default_threads_single_core() {
+        // min(1, max(4, 0*0.9)) = min(1, 4) = 1
+        assert_eq!(compute_default_threads(1), 1);
+    }
+
+    #[test]
+    fn compute_default_threads_two_cores() {
+        // min(2, max(4, 1*0.9)) = min(2, 4) = 2
+        assert_eq!(compute_default_threads(2), 2);
+    }
+
+    #[test]
+    fn compute_default_threads_four_cores() {
+        // min(4, max(4, 3*0.9=2)) = min(4, 4) = 4
+        assert_eq!(compute_default_threads(4), 4);
+    }
+
+    #[test]
+    fn compute_default_threads_eight_cores() {
+        // min(8, max(4, 7*0.9=6)) = min(8, 6) = 6
+        assert_eq!(compute_default_threads(8), 6);
+    }
+
+    #[test]
+    fn compute_default_threads_twenty_cores() {
+        // min(20, max(4, 19*0.9=17)) = min(20, 17) = 17
+        assert_eq!(compute_default_threads(20), 17);
+    }
+
+    #[test]
+    fn compute_default_threads_zero() {
+        // Edge case: 0 threads (shouldn't happen, but be safe)
+        // min(0, max(4, 0*0.9=0)) = min(0, 4) = 0
+        assert_eq!(compute_default_threads(0), 0);
     }
 }

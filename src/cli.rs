@@ -142,6 +142,10 @@ pub enum Commands {
         /// Output format: table (default) or json
         #[arg(long, short = 'o', value_name = "FORMAT", default_value = "table")]
         output: String,
+
+        /// Number of CPU threads for inference (default: auto)
+        #[arg(long, short = 't', value_name = "THREADS")]
+        threads: Option<usize>,
     },
 
     /// Install systemd user service
@@ -488,11 +492,13 @@ mod tests {
                 models,
                 iterations,
                 output,
+                threads,
             }) => {
                 assert!(audio.is_none());
                 assert!(models.is_none());
                 assert_eq!(iterations, 1);
                 assert_eq!(output, "table");
+                assert!(threads.is_none());
             }
             _ => panic!("Expected Benchmark command"),
         }
@@ -512,6 +518,8 @@ mod tests {
             "3",
             "--output",
             "json",
+            "--threads",
+            "8",
         ])
         .unwrap();
         match cli.command {
@@ -520,11 +528,13 @@ mod tests {
                 models,
                 iterations,
                 output,
+                threads,
             }) => {
                 assert_eq!(audio, Some(PathBuf::from("test.wav")));
                 assert_eq!(models.as_deref(), Some("tiny.en,base.en"));
                 assert_eq!(iterations, 3);
                 assert_eq!(output, "json");
+                assert_eq!(threads, Some(8));
             }
             _ => panic!("Expected Benchmark command"),
         }

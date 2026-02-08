@@ -84,6 +84,7 @@ async fn main() -> Result<()> {
             models,
             iterations,
             output,
+            threads,
         }) => {
             handle_benchmark_command(
                 audio,
@@ -92,6 +93,7 @@ async fn main() -> Result<()> {
                 &output,
                 cli.no_download,
                 cli.verbose,
+                threads,
             )
             .await?;
         }
@@ -288,10 +290,11 @@ async fn handle_benchmark_command(
     output: &str,
     no_download: bool,
     verbose: u8,
+    threads_override: Option<usize>,
 ) -> Result<()> {
     use voicsh::benchmark::{
-        BenchmarkReport, ResourceMonitor, SystemInfo, benchmark_model, load_wav_file,
-        print_guidance, print_json_report, print_results,
+        BenchmarkReport, ResourceMonitor, SystemInfo, benchmark_model, compute_default_threads,
+        load_wav_file, print_guidance, print_json_report, print_results,
     };
     use voicsh::models::download::{list_installed_models, model_path};
 
@@ -354,7 +357,10 @@ async fn handle_benchmark_command(
     );
 
     // Print system information
-    let system_info = SystemInfo::detect();
+    let mut system_info = SystemInfo::detect();
+    let threads =
+        threads_override.unwrap_or_else(|| compute_default_threads(system_info.cpu_threads));
+    system_info.whisper_threads = threads;
     system_info.print_report(verbose);
     println!();
 
@@ -403,12 +409,21 @@ async fn handle_benchmark_command(
                 &monitor,
                 iterations,
                 verbose,
+                threads,
             )
         }));
 
         match bench_result {
             Ok(Ok(result)) => {
-                println!("{}ms", result.elapsed_ms);
+                let rtf_ok = result.realtime_factor < 1.0;
+                let indicator = if rtf_ok { "ok" } else { "SLOW" };
+                println!(
+                    "{}ms for {:.1}s audio -> RTF {:.2} ({})",
+                    result.elapsed_ms,
+                    audio_duration_ms as f64 / 1000.0,
+                    result.realtime_factor,
+                    indicator,
+                );
 
                 if verbose >= 1 {
                     println!(
