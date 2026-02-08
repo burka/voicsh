@@ -174,6 +174,51 @@ impl Config {
             .join("voicsh")
             .join("config.toml")
     }
+
+    /// Serialize this configuration to TOML and write it to `path`.
+    ///
+    /// Creates parent directories if they do not exist.
+    pub fn save(&self, path: &Path) -> crate::error::Result<()> {
+        let toml_str = toml::to_string_pretty(self).map_err(|e| {
+            crate::error::VoicshError::Other(format!("Failed to serialize config to TOML: {e}"))
+        })?;
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                crate::error::VoicshError::Io(std::io::Error::new(
+                    e.kind(),
+                    format!(
+                        "Failed to create config directory '{}': {e}",
+                        parent.display()
+                    ),
+                ))
+            })?;
+        }
+
+        fs::write(path, toml_str).map_err(|e| {
+            crate::error::VoicshError::Io(std::io::Error::new(
+                e.kind(),
+                format!("Failed to write config to '{}': {e}", path.display()),
+            ))
+        })?;
+
+        Ok(())
+    }
+
+    /// Load existing config from `path` (or defaults if missing), update
+    /// `stt.model` to `model`, and save back.
+    ///
+    /// This is used by `voicsh init` to update just the model without
+    /// clobbering other user settings.
+    pub fn update_model(path: &Path, model: &str) -> crate::error::Result<()> {
+        let mut config = match Self::load(path) {
+            Ok(cfg) => cfg,
+            Err(crate::error::VoicshError::ConfigFileNotFound { .. }) => Self::default(),
+            Err(e) => return Err(e),
+        };
+        config.stt.model = model.to_string();
+        config.save(path)
+    }
 }
 
 #[cfg(test)]
@@ -681,5 +726,82 @@ mod tests {
             config.voice_commands.commands.is_empty(),
             "Empty commands table should produce empty map"
         );
+    }
+
+    // ── save / update_model tests ────────────────────────────────────────
+
+    #[test]
+    fn test_save_and_reload() {
+        let config = Config {
+            stt: SttConfig {
+                model: "small".to_string(),
+                language: "de".to_string(),
+                fan_out: false,
+            },
+            ..Config::default()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        config.save(&path).unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded.stt.model, "small");
+        assert_eq!(reloaded.stt.language, "de");
+        assert_eq!(reloaded.audio.sample_rate, 16000); // default preserved
+    }
+
+    #[test]
+    fn test_update_model_preserves_other_settings() {
+        let config = Config {
+            stt: SttConfig {
+                model: "tiny".to_string(),
+                language: "fr".to_string(),
+                fan_out: true,
+            },
+            audio: AudioConfig {
+                vad_threshold: 0.05,
+                ..AudioConfig::default()
+            },
+            ..Config::default()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+
+        Config::update_model(&path, "medium").unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded.stt.model, "medium");
+        assert_eq!(reloaded.stt.language, "fr"); // preserved
+        assert!(reloaded.stt.fan_out); // preserved
+        assert_eq!(reloaded.audio.vad_threshold, 0.05); // preserved
+    }
+
+    #[test]
+    fn test_update_model_creates_config_if_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("subdir").join("config.toml");
+
+        Config::update_model(&path, "small.en").unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded.stt.model, "small.en");
+        assert_eq!(reloaded.stt.language, "auto"); // default
+    }
+
+    #[test]
+    fn test_save_creates_parent_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a").join("b").join("config.toml");
+
+        let config = Config::default();
+        config.save(&path).unwrap();
+
+        assert!(path.exists());
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded, Config::default());
     }
 }

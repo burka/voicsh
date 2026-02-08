@@ -35,6 +35,7 @@ voicsh --model small.en -v      # override model, show volume meter
 voicsh --fan-out                # run English + multilingual models, pick best
 cat file.wav | voicsh           # transcribe WAV from stdin → stdout
 
+voicsh init                     # auto-tune: benchmark, pick best model, configure
 voicsh devices                  # list audio input devices
 voicsh models list              # available models
 voicsh models install base.en   # download a model
@@ -137,17 +138,47 @@ voicsh check    # verify what's available
 
 Pipe mode (`cat file.wav | voicsh`) has no runtime dependencies beyond the binary.
 
+## Quick start: `voicsh init`
+
+The fastest way to get started. `voicsh init` benchmarks your hardware and picks the best model automatically:
+
+```bash
+voicsh init                     # auto-detect language, pick best multilingual model
+voicsh init --language en       # optimize for English (picks .en models)
+voicsh init --language de       # German — picks multilingual model
+```
+
+What it does:
+
+1. Detects your CPU, RAM, disk space, and GPU
+2. Downloads a tiny probe model (75 MB) and benchmarks it
+3. Fetches all available models from HuggingFace (including quantized variants)
+4. Estimates performance for every model using a size-ratio formula
+5. Picks the highest-quality model that runs faster than real-time on your hardware
+6. Downloads and verifies the recommended model
+7. Saves the choice to `~/.config/voicsh/config.toml`
+
+Run `voicsh init` again anytime to re-tune (e.g., after a hardware upgrade).
+
+### How the estimation works
+
+Speed scales linearly with model file size: `estimated_RTF = probe_RTF × (model_size / probe_size)`. This works because file size is proportional to parameter count, and compute is proportional to parameters. Quantized models (q4_0, q5_1, etc.) have smaller files and proportionally faster inference, so the formula handles them automatically.
+
+After downloading the recommended model, `init` runs a verification benchmark and falls back to a smaller model if the estimate was too optimistic.
+
 ## Models
 
 | Model | Size | Speed | Use case |
 |-------|------|-------|----------|
-| `tiny.en` | 75 MB | Fastest | Quick notes, low-end hardware |
-| `base.en` | 142 MB | Fast | **Default — good balance** |
-| `small.en` | 466 MB | Medium | When accuracy matters |
-| `medium.en` | 1.5 GB | Slow | Professional transcription |
-| `base` | 142 MB | Fast | Multilingual (auto-detect) |
+| `tiny` | 75 MB | Fastest | Quick notes, low-end hardware |
+| `base` | 142 MB | Fast | **Default — good balance** |
+| `small` | 466 MB | Medium | When accuracy matters |
+| `medium` | 1.5 GB | Slow | Professional transcription |
+| `large` | 1.6 GB | Slowest | Highest accuracy (large-v3-turbo) |
 
-English-only models (`.en`) are faster and more accurate for English. Use `--language auto` with multilingual models for other languages.
+All models support auto-language detection. English-only variants (`.en` suffix, e.g., `base.en`) are faster and more accurate for English.
+
+Quantized variants (`-q4_0`, `-q5_1`, etc.) are available via `voicsh models list` — smaller files, faster inference, slightly reduced accuracy. `voicsh init` considers all variants when picking the best model for your hardware.
 
 ## Configuration
 

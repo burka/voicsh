@@ -148,6 +148,14 @@ pub enum Commands {
         threads: Option<usize>,
     },
 
+    /// Auto-tune: benchmark hardware, download optimal model, configure
+    #[cfg(feature = "benchmark")]
+    Init {
+        /// Language for transcription (default: auto). Examples: auto, en, de, es, fr
+        #[arg(long, value_name = "LANG", default_value = "auto")]
+        language: String,
+    },
+
     /// Install systemd user service
     InstallService,
 }
@@ -537,6 +545,30 @@ mod tests {
                 assert_eq!(threads, Some(8));
             }
             _ => panic!("Expected Benchmark command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_parse_init() {
+        let cli = Cli::try_parse_from(["voicsh", "init"]).unwrap();
+        match cli.command {
+            Some(Commands::Init { language }) => {
+                assert_eq!(language, "auto");
+            }
+            _ => panic!("Expected Init command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_parse_init_with_language() {
+        let cli = Cli::try_parse_from(["voicsh", "init", "--language", "de"]).unwrap();
+        match cli.command {
+            Some(Commands::Init { language }) => {
+                assert_eq!(language, "de");
+            }
+            _ => panic!("Expected Init command"),
         }
     }
 
