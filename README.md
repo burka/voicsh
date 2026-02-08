@@ -2,6 +2,30 @@
 
 Offline, privacy-first voice typing. Speak into your mic, text appears in your focused app. Or pipe a WAV file and get text on stdout.
 
+> **Status: Early MVP (v0.0.1-dev)**
+>
+> This is a free-time side project developed on **Ubuntu + GNOME + Wayland**. The current goal is to make it work out of the box on that setup, including GPU acceleration. Other distros and desktops are welcome — I just can't test them or reproduce issues myself. Maintenance time is limited — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to make the most of it.
+>
+> **What works:**
+> - CPU transcription via whisper.cpp — functional, accuracy varies by model and environment
+> - Pipe mode (`cat file.wav | voicsh`) — most reliable path
+> - Daemon mode with IPC control
+> - Text injection on GNOME/KDE via xdg-desktop-portal
+> - Voice commands (punctuation, formatting)
+>
+> **What doesn't (yet):**
+> - GPU acceleration — feature-gated but largely untested; expect build or runtime issues
+> - Developed on Ubuntu + GNOME — other distros/compositors may need tweaks
+> - VAD tuning is basic; background noise or quiet speech may cause missed/false chunks
+>
+> **What I'd love help with:**
+> - Testing on different hardware, distros, and compositors
+> - GPU backend testing (CUDA, Vulkan, ROCm)
+> - Improving transcription accuracy (VAD tuning, chunking strategy)
+> - Bug reports — even "it didn't build" is valuable at this stage
+>
+> If any of this sounds interesting, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Usage
 
 ```bash
@@ -183,7 +207,9 @@ Add custom commands in `[voice_commands.commands]` — they take precedence over
 
 ## Wayland compatibility
 
-Tested on GNOME, KDE Plasma, Sway, Hyprland.
+**Primary target:** Ubuntu + GNOME + Wayland — this is what I develop and test on.
+
+Community-reported as working on KDE Plasma, Sway, and Hyprland. Other distros and compositors should work but are not tested by the author — reports and fixes are welcome.
 
 ## License
 
