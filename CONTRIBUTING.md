@@ -29,12 +29,12 @@ Open an issue. Include:
 
 "It didn't compile" or "it crashed immediately" are useful reports at this stage.
 
-### Test on your hardware
+### Test on your setup
 
-The project has only been tested on a single developer machine. Running voicsh on different hardware helps enormously:
+The project is developed and tested on Ubuntu + GNOME + Wayland. Other distros and desktops are welcome — I just can't test them or reproduce issues myself. Running voicsh on a different setup helps enormously:
+- Different distros and Wayland compositors (KDE, Sway, Hyprland, etc.)
 - Different audio devices / sample rates
 - GPU backends (CUDA, Vulkan, ROCm) — these are largely untested
-- Wayland compositors beyond GNOME and Sway
 - Non-English languages
 
 ### Improve accuracy

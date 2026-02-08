@@ -4,7 +4,7 @@ Offline, privacy-first voice typing. Speak into your mic, text appears in your f
 
 > **Status: Early MVP (v0.0.1-dev)**
 >
-> This is a free-time side project. It works on the author's machine and is shared in the hope that others find it useful or want to help improve it. Maintenance time is limited — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to make the most of it.
+> This is a free-time side project developed on **Ubuntu + GNOME + Wayland**. The current goal is to make it work out of the box on that setup, including GPU acceleration. Other distros and desktops are welcome — I just can't test them or reproduce issues myself. Maintenance time is limited — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to make the most of it.
 >
 > **What works:**
 > - CPU transcription via whisper.cpp — functional, accuracy varies by model and environment
@@ -15,7 +15,7 @@ Offline, privacy-first voice typing. Speak into your mic, text appears in your f
 >
 > **What doesn't (yet):**
 > - GPU acceleration — feature-gated but largely untested; expect build or runtime issues
-> - Only tested on a handful of Wayland setups — your compositor may need tweaks
+> - Developed on Ubuntu + GNOME — other distros/compositors may need tweaks
 > - VAD tuning is basic; background noise or quiet speech may cause missed/false chunks
 >
 > **What I'd love help with:**
@@ -207,7 +207,9 @@ Add custom commands in `[voice_commands.commands]` — they take precedence over
 
 ## Wayland compatibility
 
-Tested on GNOME, KDE Plasma, Sway, Hyprland.
+**Primary target:** Ubuntu + GNOME + Wayland — this is what I develop and test on.
+
+Community-reported as working on KDE Plasma, Sway, and Hyprland. Other distros and compositors should work but are not tested by the author — reports and fixes are welcome.
 
 ## License
 
