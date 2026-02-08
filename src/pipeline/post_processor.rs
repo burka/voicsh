@@ -34,19 +34,20 @@ impl Station for PostProcessorStation {
     type Input = TranscribedText;
     type Output = TranscribedText;
 
-    fn process(&mut self, input: TranscribedText) -> Result<Option<TranscribedText>, StationError> {
-        let mut text = input.text;
-
+    fn process(
+        &mut self,
+        mut input: TranscribedText,
+    ) -> Result<Option<TranscribedText>, StationError> {
         for processor in &mut self.processors {
-            text = processor.process(&text);
+            input.text = processor.process(&input.text);
         }
 
         // Filter out empty results after processing
-        if text.trim().is_empty() {
+        if input.text.trim().is_empty() {
             return Ok(None);
         }
 
-        Ok(Some(TranscribedText::new(text, input.timestamp)))
+        Ok(Some(input))
     }
 
     fn name(&self) -> &'static str {
@@ -121,11 +122,7 @@ impl CommandAction {
 
     /// Closing delimiter that attaches to the left (close paren, close quote)
     fn close(text: &str) -> Self {
-        Self::Insert {
-            text: text.into(),
-            attach_left: true,
-            attach_right: false,
-        }
+        Self::punct(text)
     }
 
     /// Text that attaches to both sides (hyphen)
@@ -139,11 +136,7 @@ impl CommandAction {
 
     /// Whitespace replacement (newline, tab) — eats surrounding spaces
     fn whitespace(text: &str) -> Self {
-        Self::Insert {
-            text: text.into(),
-            attach_left: true,
-            attach_right: true,
-        }
+        Self::tight(text)
     }
 
     /// Free-standing text (em-dash with its own spacing)
@@ -199,11 +192,11 @@ impl VoiceCommandProcessor {
     /// complexity for word-boundary validation, caps-lock state, and spacing
     /// rules without meaningful benefit at this scale.
     fn apply(&mut self, text: &str) -> String {
-        // Work on a mutable copy; scan case-insensitively.
+        // Work on a single char array; compare case-insensitively inline to
+        // avoid index misalignment when to_lowercase() changes char count
+        // (e.g. U+0130 İ → two chars "i\u{307}").
         let mut result = String::with_capacity(text.len());
-        let lower = text.to_lowercase();
         let chars: Vec<char> = text.chars().collect();
-        let lower_chars: Vec<char> = lower.chars().collect();
         let len = chars.len();
         let mut i = 0;
 
@@ -218,16 +211,19 @@ impl VoiceCommandProcessor {
                     continue;
                 }
 
-                // Check if the phrase matches at position i (case-insensitive)
-                let slice: String = lower_chars[i..i + plen].iter().collect();
-                if slice != *phrase {
+                // Case-insensitive char-by-char comparison, safe for all Unicode
+                let chars_match = chars[i..i + plen]
+                    .iter()
+                    .zip(phrase_chars.iter())
+                    .all(|(src, phr)| src.to_lowercase().eq(phr.to_lowercase()));
+                if !chars_match {
                     continue;
                 }
 
                 // Ensure word boundaries: the character before must be start-of-string
                 // or whitespace, and the character after must be end-of-string or whitespace.
-                let before_ok = i == 0 || lower_chars[i - 1].is_whitespace();
-                let after_ok = i + plen == len || lower_chars[i + plen].is_whitespace();
+                let before_ok = i == 0 || chars[i - 1].is_whitespace();
+                let after_ok = i + plen == len || chars[i + plen].is_whitespace();
 
                 if !before_ok || !after_ok {
                     continue;
@@ -259,7 +255,7 @@ impl VoiceCommandProcessor {
 
                 // Skip past the matched phrase.
                 i += plen;
-                if eat_trailing && i < len && lower_chars[i].is_whitespace() {
+                if eat_trailing && i < len && chars[i].is_whitespace() {
                     i += 1;
                 }
                 matched = true;
@@ -732,7 +728,7 @@ mod tests {
     #[test]
     fn test_station_passthrough_no_processors() {
         let mut station = PostProcessorStation::new(vec![]);
-        let input = TranscribedText::new("hello world".to_string(), Instant::now());
+        let input = TranscribedText::new("hello world".to_string());
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "hello world");
     }
@@ -741,7 +737,7 @@ mod tests {
     fn test_station_with_voice_commands() {
         let processor = Box::new(VoiceCommandProcessor::new("en", &HashMap::new()));
         let mut station = PostProcessorStation::new(vec![processor]);
-        let input = TranscribedText::new("hello comma world period".to_string(), Instant::now());
+        let input = TranscribedText::new("hello comma world period".to_string());
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "hello, world.");
     }
@@ -760,7 +756,7 @@ mod tests {
         }
 
         let mut station = PostProcessorStation::new(vec![Box::new(EmptyProcessor)]);
-        let input = TranscribedText::new("hello".to_string(), Instant::now());
+        let input = TranscribedText::new("hello".to_string());
         let result = station.process(input).unwrap();
         assert!(
             result.is_none(),
@@ -773,7 +769,11 @@ mod tests {
         let processor = Box::new(VoiceCommandProcessor::new("en", &HashMap::new()));
         let mut station = PostProcessorStation::new(vec![processor]);
         let ts = Instant::now();
-        let input = TranscribedText::new("hello period".to_string(), ts);
+        let input = TranscribedText {
+            text: "hello period".to_string(),
+            timestamp: ts,
+            timing: None,
+        };
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "hello.");
         assert_eq!(result.timestamp, ts);
@@ -795,7 +795,7 @@ mod tests {
         }
 
         let mut station = PostProcessorStation::new(vec![voice, Box::new(UpperProcessor)]);
-        let input = TranscribedText::new("hello period".to_string(), Instant::now());
+        let input = TranscribedText::new("hello period".to_string());
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "HELLO.");
     }
@@ -809,7 +809,7 @@ mod tests {
     #[test]
     fn test_station_whitespace_only_filtered() {
         let mut station = PostProcessorStation::new(vec![]);
-        let input = TranscribedText::new("   \n\t  ".to_string(), Instant::now());
+        let input = TranscribedText::new("   \n\t  ".to_string());
         let result = station.process(input).unwrap();
         assert!(
             result.is_none(),
@@ -973,6 +973,18 @@ mod tests {
     fn test_consecutive_commands() {
         let mut p = en_processor();
         assert_eq!(p.apply("hello period period period"), "hello...");
+    }
+
+    #[test]
+    fn test_case_insensitive_unicode_safe() {
+        // U+0130 (İ) lowercases to two chars in some locales.
+        // The char-by-char comparison must not panic or misalign.
+        let mut p = en_processor();
+        assert_eq!(
+            p.apply("hello İ world"),
+            "hello İ world",
+            "Non-command Unicode text should pass through unchanged"
+        );
     }
 
     // ── build_post_processors tests ─────────────────────────────────────
