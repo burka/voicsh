@@ -145,6 +145,35 @@ async fn handle_models_command(action: ModelsAction) -> Result<()> {
             for model in list_models() {
                 println!("  {}", format_model_info(model));
             }
+
+            // Show remote models (deduplicated against static catalog)
+            #[cfg(feature = "model-download")]
+            {
+                use std::collections::HashSet;
+                use voicsh::models::download::format_remote_model;
+                use voicsh::models::remote::fetch_remote_models;
+
+                let catalog_names: HashSet<&str> = list_models().iter().map(|m| m.name).collect();
+
+                match fetch_remote_models().await {
+                    Ok(remote) => {
+                        let extras: Vec<_> = remote
+                            .iter()
+                            .filter(|m| !catalog_names.contains(m.name.as_str()))
+                            .collect();
+                        if !extras.is_empty() {
+                            println!();
+                            println!("Remote models (from HuggingFace):");
+                            for m in extras {
+                                println!("  {}", format_remote_model(&m.name, m.size_mb));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("  (Could not fetch remote models: {e})");
+                    }
+                }
+            }
         }
         ModelsAction::Install { name } => {
             let path = download_model(&name, true).await?;
@@ -296,15 +325,8 @@ async fn handle_benchmark_command(
         // Use all installed models
         MODELS
             .iter()
-            .filter_map(|m| {
-                model_path(&m.name).and_then(|p| {
-                    if p.exists() {
-                        Some(m.name.to_string())
-                    } else {
-                        None
-                    }
-                })
-            })
+            .filter(|m| model_path(m.name).exists())
+            .map(|m| m.name.to_string())
             .collect()
     };
 
@@ -350,7 +372,7 @@ async fn handle_benchmark_command(
 
     for model_name in &model_list {
         // Check if model exists
-        let model_exists = model_path(model_name).map_or(false, |p| p.exists());
+        let model_exists = model_path(model_name).exists();
 
         if !model_exists {
             if no_download {

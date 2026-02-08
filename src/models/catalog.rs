@@ -81,9 +81,30 @@ pub const MODELS: &[ModelInfo] = &[
     },
     ModelInfo {
         name: "large",
+        size_mb: 1620,
+        sha1: "",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+        english_only: false,
+    },
+    ModelInfo {
+        name: "large-v1",
         size_mb: 3094,
-        sha1: "b1caaf735c4cc1429223d5a74f0f4d0b9b59a299",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large.bin",
+        sha1: "",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v1.bin",
+        english_only: false,
+    },
+    ModelInfo {
+        name: "large-v2",
+        size_mb: 3094,
+        sha1: "",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2.bin",
+        english_only: false,
+    },
+    ModelInfo {
+        name: "large-v3",
+        size_mb: 3095,
+        sha1: "",
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
         english_only: false,
     },
 ];
@@ -197,7 +218,7 @@ mod tests {
     fn test_list_models_not_empty() {
         let models = list_models();
         assert!(!models.is_empty());
-        assert_eq!(models.len(), 9);
+        assert_eq!(models.len(), 12);
     }
 
     #[test]
@@ -268,7 +289,10 @@ mod tests {
             ("small", 466),
             ("medium.en", 1533),
             ("medium", 1533),
-            ("large", 3094),
+            ("large", 1620),
+            ("large-v1", 3094),
+            ("large-v2", 3094),
+            ("large-v3", 3095),
         ];
 
         for (name, expected_size) in sizes {

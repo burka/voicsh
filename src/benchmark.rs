@@ -195,7 +195,7 @@ impl SystemInfo {
         ]
     }
 
-    pub fn print_report(&self, verbose: u8) {
+    pub fn print_report(&self, _verbose: u8) {
         // Compact CPU info
         let cpu_info = format!(
             "{} ({}c/{}t)",
@@ -332,8 +332,7 @@ pub fn benchmark_model(
     iterations: usize,
     verbose: u8,
 ) -> Result<BenchmarkResult, Box<dyn std::error::Error>> {
-    let path = model_path(model_name)
-        .ok_or_else(|| format!("Model path not found for: {}", model_name))?;
+    let path = model_path(model_name);
 
     let config = WhisperConfig {
         model_path: path,
@@ -488,17 +487,17 @@ pub fn print_guidance(results: &[BenchmarkResult], system_info: &SystemInfo) {
     }
 
     // GPU recommendation if detected but not in use
-    if let Some(ref gpu) = system_info.gpu_info {
-        if system_info.whisper_backend.contains("CPU") {
-            if gpu.contains("NVIDIA") {
-                println!("\n  GPU detected ({}) but not in use.", gpu);
-                println!("  Compile with CUDA for 10-50x speedup:");
-                println!("    cargo build --release --features cuda");
-            } else if gpu.contains("AMD") {
-                println!("\n  GPU detected ({}) but not in use.", gpu);
-                println!("  Compile with HipBLAS for GPU acceleration:");
-                println!("    cargo build --release --features hipblas");
-            }
+    if let Some(ref gpu) = system_info.gpu_info
+        && system_info.whisper_backend.contains("CPU")
+    {
+        if gpu.contains("NVIDIA") {
+            println!("\n  GPU detected ({}) but not in use.", gpu);
+            println!("  Compile with CUDA for 10-50x speedup:");
+            println!("    cargo build --release --features cuda");
+        } else if gpu.contains("AMD") {
+            println!("\n  GPU detected ({}) but not in use.", gpu);
+            println!("  Compile with HipBLAS for GPU acceleration:");
+            println!("    cargo build --release --features hipblas");
         }
     }
 }

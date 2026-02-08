@@ -443,12 +443,7 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
 
     if get_model(model).is_some() {
         if is_model_installed(model) {
-            return model_path(model).ok_or_else(|| VoicshError::Transcription {
-                message: format!(
-                    "Model '{}' is in catalog but path could not be resolved",
-                    model
-                ),
-            });
+            return Ok(model_path(model));
         }
 
         return Err(VoicshError::Transcription {

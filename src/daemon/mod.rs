@@ -231,13 +231,8 @@ async fn create_transcriber(
         }
     }
 
-    // Get model path
-    let path = model_path(&resolved_model);
-
     // Get model path (must exist after download check above)
-    let path = path.ok_or_else(|| VoicshError::TranscriptionModelNotFound {
-        path: resolved_model.clone(),
-    })?;
+    let path = model_path(&resolved_model);
 
     // Create transcriber
     if config.stt.fan_out {
@@ -247,10 +242,7 @@ async fn create_transcriber(
                 path: format!("{}.en (English variant)", resolved_model),
             }
         })?;
-        let en_path =
-            model_path(en_model).ok_or_else(|| VoicshError::TranscriptionModelNotFound {
-                path: en_model.to_string(),
-            })?;
+        let en_path = model_path(en_model);
 
         if !is_model_installed(en_model) && !no_download {
             if !quiet {
