@@ -210,6 +210,35 @@ pub fn find_any_installed_model() -> Option<String> {
         .map(|m| m.name.to_string())
 }
 
+/// List all installed model names by scanning the models directory.
+///
+/// Discovers every `ggml-*.bin` file, not just catalog models.
+/// Returns model names (with the `ggml-` prefix and `.bin` suffix stripped).
+pub fn list_installed_models() -> Vec<String> {
+    let dir = models_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut names: Vec<String> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            let model = name.strip_prefix("ggml-")?.strip_suffix(".bin")?;
+            if entry.path().is_file() {
+                Some(model.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    names.sort();
+    names
+}
+
 /// Format model information for display.
 pub fn format_model_info(model: &ModelInfo) -> String {
     let status = if is_model_installed(model.name) {
@@ -319,5 +348,42 @@ mod tests {
         assert!(formatted.contains("1080"));
         assert!(formatted.contains("MB"));
         assert!(formatted.contains("installed"));
+    }
+
+    #[test]
+    fn test_list_installed_models_returns_sorted_names() {
+        let installed = list_installed_models();
+        // Verify sorted order
+        let mut sorted = installed.clone();
+        sorted.sort();
+        assert_eq!(
+            installed, sorted,
+            "list_installed_models should return sorted names"
+        );
+        // Every returned name should correspond to an existing file
+        for name in &installed {
+            assert!(
+                model_path(name).exists(),
+                "Listed model '{}' should exist on disk",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_list_installed_models_strips_prefix_and_suffix() {
+        // If any models are installed, their names should not contain ggml- or .bin
+        for name in list_installed_models() {
+            assert!(
+                !name.starts_with("ggml-"),
+                "Model name '{}' should not have ggml- prefix",
+                name
+            );
+            assert!(
+                !name.ends_with(".bin"),
+                "Model name '{}' should not have .bin suffix",
+                name
+            );
+        }
     }
 }

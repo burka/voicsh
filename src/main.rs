@@ -293,8 +293,7 @@ async fn handle_benchmark_command(
         BenchmarkReport, ResourceMonitor, SystemInfo, benchmark_model, load_wav_file,
         print_guidance, print_json_report, print_results,
     };
-    use voicsh::models::catalog::MODELS;
-    use voicsh::models::download::model_path;
+    use voicsh::models::download::{list_installed_models, model_path};
 
     // Determine audio file
     let wav_file = if let Some(path) = audio {
@@ -322,12 +321,8 @@ async fn handle_benchmark_command(
             .map(|s| s.trim().to_string())
             .collect()
     } else {
-        // Use all installed models
-        MODELS
-            .iter()
-            .filter(|m| model_path(m.name).exists())
-            .map(|m| m.name.to_string())
-            .collect()
+        // Use all installed models (catalog + any extras like quantized variants)
+        list_installed_models()
     };
 
     if model_list.is_empty() {
@@ -336,10 +331,7 @@ async fn handle_benchmark_command(
         eprintln!("Install models with:");
         eprintln!("  voicsh models install <model-name>");
         eprintln!();
-        eprintln!("Available models:");
-        for model in MODELS.iter() {
-            eprintln!("  {} ({}MB)", model.name, model.size_mb);
-        }
+        eprintln!("Run 'voicsh models list' to see available models.");
         std::process::exit(1);
     }
 
@@ -402,20 +394,22 @@ async fn handle_benchmark_command(
         print!("Running {}... ", model_name);
         std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
 
-        match benchmark_model(
-            model_name,
-            "auto", // Use auto language detection
-            &audio_samples,
-            audio_duration_ms,
-            &monitor,
-            iterations,
-            verbose,
-        ) {
-            Ok(result) => {
-                // Print time on the same line
+        let bench_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            benchmark_model(
+                model_name,
+                "auto", // Use auto language detection
+                &audio_samples,
+                audio_duration_ms,
+                &monitor,
+                iterations,
+                verbose,
+            )
+        }));
+
+        match bench_result {
+            Ok(Ok(result)) => {
                 println!("{}ms", result.elapsed_ms);
 
-                // Only show transcription with verbose >= 1
                 if verbose >= 1 {
                     println!(
                         "  \"{}\" [confidence: {:.2}]",
@@ -426,9 +420,13 @@ async fn handle_benchmark_command(
 
                 results.push(result);
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 println!("FAILED");
                 eprintln!("  Error: {}", e);
+            }
+            Err(_) => {
+                println!("CRASHED");
+                eprintln!("  Model panicked during benchmark, skipping.");
             }
         }
     }

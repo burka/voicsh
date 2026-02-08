@@ -11,8 +11,7 @@ use sysinfo::{Pid, System};
 
 use crate::audio::wav::WavAudioSource;
 use crate::defaults;
-use crate::models::catalog::MODELS;
-use crate::models::download::model_path;
+use crate::models::download::{list_installed_models, model_path};
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 
@@ -387,10 +386,15 @@ pub fn benchmark_model(
         0.0
     };
 
-    let model_info = MODELS
-        .iter()
-        .find(|m| m.name == model_name)
-        .ok_or_else(|| format!("Model not found in catalog: {}", model_name))?;
+    // Get model size: try catalog first, fall back to file size on disk
+    let model_size_mb = crate::models::catalog::get_model(model_name)
+        .map(|m| m.size_mb as u64)
+        .unwrap_or_else(|| {
+            let path = model_path(model_name);
+            path.metadata()
+                .map(|m| m.len() / (1024 * 1024))
+                .unwrap_or(0)
+        });
 
     let result = last_result.ok_or("No transcription result after iterations")?;
     let backend = defaults::gpu_backend().to_string();
@@ -409,7 +413,7 @@ pub fn benchmark_model(
         cpu_usage_total: avg_cpu_total,
         cpu_usage_per_core: avg_cpu_per_core,
         memory_usage_mb: avg_memory,
-        model_size_mb: model_info.size_mb as u64,
+        model_size_mb,
     })
 }
 
@@ -499,6 +503,11 @@ pub fn print_guidance(results: &[BenchmarkResult], system_info: &SystemInfo) {
             println!("  Compile with HipBLAS for GPU acceleration:");
             println!("    cargo build --release --features hipblas");
         }
+    }
+
+    // Suggest more models when few are installed
+    if list_installed_models().len() <= 2 {
+        println!("\n  Run 'voicsh models list' to discover more models to compare.");
     }
 }
 
