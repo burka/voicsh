@@ -83,7 +83,15 @@ async fn main() -> Result<()> {
             iterations,
             output,
         }) => {
-            handle_benchmark_command(audio, models, iterations, &output, cli.no_download).await?;
+            handle_benchmark_command(
+                audio,
+                models,
+                iterations,
+                &output,
+                cli.no_download,
+                cli.verbose,
+            )
+            .await?;
         }
     }
 
@@ -248,6 +256,7 @@ async fn handle_benchmark_command(
     iterations: usize,
     output: &str,
     no_download: bool,
+    verbose: u8,
 ) -> Result<()> {
     use voicsh::benchmark::{
         BenchmarkReport, ResourceMonitor, SystemInfo, benchmark_model, load_wav_file,
@@ -310,13 +319,6 @@ async fn handle_benchmark_command(
         std::process::exit(1);
     }
 
-    // Print system information
-    let system_info = SystemInfo::detect();
-    system_info.print_report(false); // Don't show backend comparison by default
-
-    println!("\nWAV Transcription Benchmark");
-    println!("{}", "=".repeat(120));
-
     // Load audio file
     let (audio_samples, audio_duration_ms) = match load_wav_file(&wav_file) {
         Ok(data) => data,
@@ -327,16 +329,17 @@ async fn handle_benchmark_command(
         }
     };
 
-    println!("Audio file:     {}", wav_file);
-    println!("Samples:        {}", audio_samples.len());
+    // Print compact benchmark header
     println!(
-        "Duration:       {}ms ({:.2}s)",
-        audio_duration_ms,
-        audio_duration_ms as f64 / 1000.0
+        "Benchmarking: {} ({:.1}s, {} samples)",
+        wav_file,
+        audio_duration_ms as f64 / 1000.0,
+        audio_samples.len()
     );
-    println!("Sample rate:    16000 Hz");
-    println!("Iterations:     {}", iterations);
-    println!("{}", "=".repeat(120));
+
+    // Print system information
+    let system_info = SystemInfo::detect();
+    system_info.print_report(verbose);
     println!();
 
     // Run benchmarks
@@ -371,6 +374,10 @@ async fn handle_benchmark_command(
             }
         }
 
+        // Print "Running {model}..." without newline
+        print!("Running {}... ", model_name);
+        std::io::Write::flush(&mut std::io::stdout()).unwrap_or(());
+
         match benchmark_model(
             model_name,
             "auto", // Use auto language detection
@@ -378,16 +385,26 @@ async fn handle_benchmark_command(
             audio_duration_ms,
             &monitor,
             iterations,
+            verbose,
         ) {
             Ok(result) => {
-                println!("Result: \"{}\"", result.transcription.trim());
-                println!("Confidence: {:.2}", result.confidence);
-                println!();
+                // Print time on the same line
+                println!("{}ms", result.elapsed_ms);
+
+                // Only show transcription with verbose >= 1
+                if verbose >= 1 {
+                    println!(
+                        "  \"{}\" [confidence: {:.2}]",
+                        result.transcription.trim(),
+                        result.confidence
+                    );
+                }
+
                 results.push(result);
             }
             Err(e) => {
-                eprintln!("Failed to benchmark {}: {}", model_name, e);
-                println!();
+                println!("FAILED");
+                eprintln!("  Error: {}", e);
             }
         }
     }
@@ -409,7 +426,7 @@ async fn handle_benchmark_command(
         };
         print_json_report(&report);
     } else {
-        print_results(&results, false); // Don't compare languages by default
+        print_results(&results, verbose);
     }
 
     Ok(())

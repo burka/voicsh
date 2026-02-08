@@ -201,19 +201,19 @@ fn check_gpu_nvidia(compiled: &str) {
     #[cfg(feature = "benchmark")]
     {
         // Use shared GPU detection when benchmark feature is available
-        if let Some(gpu_name) = detect_gpu() {
-            if gpu_name.starts_with("NVIDIA") {
-                let name = gpu_name.strip_prefix("NVIDIA ").unwrap_or(&gpu_name);
-                if compiled == "CUDA" {
-                    println!("✓ Active ({})", name);
-                } else {
-                    println!(
-                        "✓ {} found → rebuild with: cargo build --release --features cuda",
-                        name
-                    );
-                }
-                return;
+        if let Some(gpu_name) = detect_gpu()
+            && gpu_name.starts_with("NVIDIA")
+        {
+            let name = gpu_name.strip_prefix("NVIDIA ").unwrap_or(&gpu_name);
+            if compiled == "CUDA" {
+                println!("✓ Active ({})", name);
+            } else {
+                println!(
+                    "✓ {} found → rebuild with: cargo build --release --features cuda",
+                    name
+                );
             }
+            return;
         }
         println!("- not detected");
     }
