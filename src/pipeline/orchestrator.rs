@@ -85,12 +85,29 @@ impl PipelineHandle {
             .as_ref()
             .and_then(|rx| rx.recv_timeout(Duration::from_secs(5)).ok().flatten());
 
-        // Wait up to 1s more for threads to finish
+        // Wait up to 1s more for threads to finish, joining completed ones
+        // to detect panics (CLAUDE.md: "Cleanup/shutdown errors → eprintln! with context").
         let deadline = Instant::now() + Duration::from_secs(1);
         let poll_interval = Duration::from_millis(50);
 
         loop {
-            self.threads.retain(|h| !h.is_finished());
+            // Drain finished threads, joining each to catch panics
+            let mut remaining = Vec::new();
+            for handle in self.threads.drain(..) {
+                if handle.is_finished() {
+                    if let Err(panic_info) = handle.join() {
+                        let msg = panic_info
+                            .downcast_ref::<&str>()
+                            .copied()
+                            .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+                            .unwrap_or("unknown panic");
+                        eprintln!("voicsh: pipeline thread panicked: {msg}");
+                    }
+                } else {
+                    remaining.push(handle);
+                }
+            }
+            self.threads = remaining;
 
             if self.threads.is_empty() {
                 break;

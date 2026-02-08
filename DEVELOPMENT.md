@@ -39,12 +39,4 @@ All external dependencies are behind traits with test doubles:
 
 ## Quality Checks
 
-```bash
-cargo fmt
-cargo build --release                                        # catches daemon + feature-gated code
-cargo clippy --lib --no-default-features --features portal -- -D warnings
-cargo test --lib --no-default-features --features portal
-cargo test --lib --no-default-features
-```
-
-Run all five before every commit. The `--release` build is essential — fast tests use `--no-default-features` which skips the daemon module and whisper integration. See [CLAUDE.md](CLAUDE.md) for quality gates.
+See [CLAUDE.md](CLAUDE.md) for the canonical quality gate commands to run before every commit.
