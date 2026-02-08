@@ -74,6 +74,35 @@ impl CommandExecutor for SystemCommandExecutor {
     }
 }
 
+/// Enhance ydotool errors with actionable guidance.
+///
+/// Handles two failure modes:
+/// - **Not installed**: suggests installing wtype instead
+/// - **Crashed** (e.g. SIGABRT / exit 134): ydotoold daemon not running
+fn ydotool_helpful_error(e: VoicshError) -> VoicshError {
+    match &e {
+        VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
+            VoicshError::InjectionFailed {
+                message: "Neither wtype nor ydotool found for text injection.\n\
+                    Install wtype (recommended, no daemon needed):\n  \
+                    Ubuntu/Debian: sudo apt install wtype\n  \
+                    Arch: sudo pacman -S wtype"
+                    .to_string(),
+            }
+        }
+        VoicshError::InjectionFailed { .. } => VoicshError::InjectionFailed {
+            message: format!(
+                "{e}\n\
+                Hint: ydotool requires the ydotoold daemon running.\n  \
+                Start it with: sudo systemctl start ydotoold\n  \
+                Or install wtype instead (no daemon needed):\n  \
+                sudo apt install wtype"
+            ),
+        },
+        _ => e,
+    }
+}
+
 /// Text injector that uses CommandExecutor for system interaction.
 pub struct TextInjector<E: CommandExecutor> {
     executor: E,
@@ -154,18 +183,7 @@ impl<E: CommandExecutor> TextInjector<E> {
         // Fall back to ydotool (small delay for reliability)
         self.executor
             .execute("ydotool", &["key", "--delay", "10", paste_key])
-            .map_err(|e| match &e {
-                VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
-                    VoicshError::InjectionFailed {
-                        message: "Neither wtype nor ydotool available for paste simulation.\n\
-                            Install wtype (recommended, no daemon needed):\n\
-                            Ubuntu/Debian: sudo apt install wtype\n\
-                            Arch: sudo pacman -S wtype"
-                            .to_string(),
-                    }
-                }
-                _ => e,
-            })?;
+            .map_err(ydotool_helpful_error)?;
 
         Ok(())
     }
@@ -189,18 +207,7 @@ impl<E: CommandExecutor> TextInjector<E> {
         // Fall back to ydotool (small delay for reliability)
         self.executor
             .execute("ydotool", &["type", "--delay", "10", text])
-            .map_err(|e| match &e {
-                VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
-                    VoicshError::InjectionFailed {
-                        message: "Neither wtype nor ydotool available for text injection.\n\
-                            Install wtype (recommended, no daemon needed):\n\
-                            Ubuntu/Debian: sudo apt install wtype\n\
-                            Arch: sudo pacman -S wtype"
-                            .to_string(),
-                    }
-                }
-                _ => e,
-            })?;
+            .map_err(ydotool_helpful_error)?;
         Ok(())
     }
 }
@@ -545,6 +552,92 @@ mod tests {
         match result {
             Err(VoicshError::InjectionFailed { message }) => {
                 assert!(message.contains("wtype"));
+            }
+            _ => panic!("Expected InjectionFailed error"),
+        }
+    }
+
+    #[test]
+    fn test_ydotool_crash_shows_ydotoold_hint() {
+        // Simulate ydotool crashing (e.g. SIGABRT when ydotoold not running)
+        let mock = MockCommandExecutor::new()
+            .with_error(VoicshError::InjectionToolNotFound {
+                tool: "wtype".to_string(),
+            })
+            .with_error(VoicshError::InjectionFailed {
+                message: "ydotool failed with status ExitStatus(unix_wait_status(134))".to_string(),
+            });
+        let injector = TextInjector::new(mock);
+
+        let result = injector.inject_direct("test");
+        assert!(result.is_err());
+
+        match result {
+            Err(VoicshError::InjectionFailed { message }) => {
+                assert!(
+                    message.contains("ydotoold"),
+                    "Error should mention ydotoold daemon: {message}"
+                );
+                assert!(
+                    message.contains("wtype"),
+                    "Error should suggest wtype alternative: {message}"
+                );
+            }
+            _ => panic!("Expected InjectionFailed error"),
+        }
+    }
+
+    #[test]
+    fn test_ydotool_not_found_shows_install_hint() {
+        let mock = MockCommandExecutor::new()
+            .with_error(VoicshError::InjectionToolNotFound {
+                tool: "wtype".to_string(),
+            })
+            .with_error(VoicshError::InjectionToolNotFound {
+                tool: "ydotool".to_string(),
+            });
+        let injector = TextInjector::new(mock);
+
+        let result = injector.inject_direct("test");
+        assert!(result.is_err());
+
+        match result {
+            Err(VoicshError::InjectionFailed { message }) => {
+                assert!(
+                    message.contains("wtype"),
+                    "Error should suggest installing wtype: {message}"
+                );
+                assert!(
+                    message.contains("apt install"),
+                    "Error should include install command: {message}"
+                );
+            }
+            _ => panic!("Expected InjectionFailed error"),
+        }
+    }
+
+    #[test]
+    fn test_clipboard_ydotool_crash_shows_ydotoold_hint() {
+        // wl-copy ok, wtype missing, ydotool crashes
+        let mock = MockCommandExecutor::new()
+            .with_success() // wl-copy
+            .with_error(VoicshError::InjectionToolNotFound {
+                tool: "wtype".to_string(),
+            })
+            .with_error(VoicshError::InjectionFailed {
+                message: "ydotool failed with status ExitStatus(unix_wait_status(134))".to_string(),
+            });
+        let injector = TextInjector::new(mock);
+
+        let result = injector.inject_via_clipboard("test", "ctrl+v");
+        assert!(result.is_err());
+
+        match result {
+            Err(VoicshError::InjectionFailed { message }) => {
+                assert!(
+                    message.contains("ydotoold"),
+                    "Error should mention ydotoold daemon: {message}"
+                );
             }
             _ => panic!("Expected InjectionFailed error"),
         }
