@@ -5,6 +5,7 @@ use crate::audio::vad::{Clock, SystemClock, VadConfig};
 use crate::error::Result;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::error::{ErrorReporter, LogReporter};
+use crate::pipeline::latency::SessionContext;
 use crate::pipeline::post_processor::{PostProcessor, PostProcessorStation};
 use crate::pipeline::sink::{SinkStation, TextSink};
 use crate::pipeline::station::StationRunner;
@@ -210,12 +211,17 @@ impl Pipeline {
             .with_flush_tx(chunk_tx.clone());
 
         let transcriber_station =
-            TranscriberStation::new(transcriber).with_verbose(self.config.verbosity >= 2);
+            TranscriberStation::new(transcriber.clone()).with_verbose(self.config.verbosity >= 2);
 
-        // Create sink station with result channel
+        // Create sink station with result channel and session context
         let (result_tx, result_rx) = bounded(1);
-        let sink_station =
+        let mut sink_station =
             SinkStation::new(sink, self.config.quiet, self.config.verbosity, result_tx);
+        if self.config.verbosity >= 1 {
+            let context =
+                SessionContext::detect(transcriber.model_name(), crate::defaults::gpu_backend());
+            sink_station = sink_station.with_session_context(context);
+        }
 
         // Spawn station runners
         let vad_runner =
