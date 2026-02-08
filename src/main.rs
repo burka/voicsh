@@ -33,6 +33,7 @@ async fn main() -> Result<()> {
                     cli.once,
                     cli.fan_out,
                     cli.chunk_size,
+                    cli.buffer,
                 )
                 .await?;
             } else {
@@ -44,6 +45,7 @@ async fn main() -> Result<()> {
                     cli.quiet,
                     cli.verbose,
                     cli.no_download,
+                    cli.buffer,
                 )
                 .await?;
             }
