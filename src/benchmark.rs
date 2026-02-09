@@ -330,7 +330,7 @@ impl Default for ResourceMonitor {
     }
 }
 
-pub fn load_wav_file(path: &str) -> Result<(Vec<i16>, u64), Box<dyn std::error::Error>> {
+pub fn load_wav_file(path: &str) -> anyhow::Result<(Vec<i16>, u64)> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
@@ -352,7 +352,7 @@ pub fn benchmark_model(
     iterations: usize,
     verbose: u8,
     threads: usize,
-) -> Result<BenchmarkResult, Box<dyn std::error::Error>> {
+) -> anyhow::Result<BenchmarkResult> {
     let path = model_path(model_name);
 
     let config = WhisperConfig {
@@ -418,7 +418,8 @@ pub fn benchmark_model(
                 .unwrap_or(0)
         });
 
-    let result = last_result.ok_or("No transcription result after iterations")?;
+    let result =
+        last_result.ok_or_else(|| anyhow::anyhow!("No transcription result after iterations"))?;
     let backend = defaults::gpu_backend().to_string();
 
     Ok(BenchmarkResult {

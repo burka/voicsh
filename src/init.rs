@@ -318,7 +318,7 @@ async fn verify_or_fallback(
     recommended: &ModelCandidate,
     alternatives: &[&ModelCandidate],
     ctx: &VerifyContext<'_>,
-) -> Result<String, Box<dyn std::error::Error>> {
+) -> anyhow::Result<String> {
     // Download recommended model
     if is_model_installed(&recommended.name) {
         println!("Model {} already installed", recommended.name);
@@ -424,7 +424,7 @@ async fn verify_or_fallback(
 /// Benchmarks a small probe model, estimates performance for all available
 /// models, picks the highest-quality model that runs faster than real-time,
 /// downloads it, verifies the estimate, and saves the configuration.
-pub async fn run_init(language: &str, verbose: u8) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_init(language: &str, verbose: u8) -> anyhow::Result<()> {
     println!("voicsh init: Auto-tuning for your hardware...");
     println!();
 
@@ -456,7 +456,7 @@ pub async fn run_init(language: &str, verbose: u8) -> Result<(), Box<dyn std::er
         PROBE_MODEL
     };
     let probe_info = catalog::get_model(probe_name).ok_or_else(|| {
-        format!("Probe model '{probe_name}' not found in catalog. This is a bug \u{2014} please report it.")
+        anyhow::anyhow!("Probe model '{probe_name}' not found in catalog. This is a bug \u{2014} please report it.")
     })?;
     let probe_size = probe_info.size_mb;
 
@@ -587,11 +587,7 @@ pub async fn run_init(language: &str, verbose: u8) -> Result<(), Box<dyn std::er
 }
 
 /// Save the chosen model to config and print a summary.
-fn save_and_summarize(
-    model: &str,
-    size_mb: u32,
-    speed_multiplier: f64,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn save_and_summarize(model: &str, size_mb: u32, speed_multiplier: f64) -> anyhow::Result<()> {
     let config_path = Config::default_path();
     println!("Saving configuration to {}...", config_path.display());
     Config::update_model(&config_path, model)?;

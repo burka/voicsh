@@ -39,7 +39,7 @@ fn load_wav_fixture() -> (Vec<i16>, u64) {
 
 /// Test if a model is installed
 fn is_model_installed(model_name: &str) -> bool {
-    model_path(model_name).map_or(false, |p| p.exists())
+    model_path(model_name).exists()
 }
 
 /// Benchmark a single model
@@ -56,7 +56,7 @@ fn benchmark_model(
     println!("Benchmarking model: {}", model_name);
 
     let config = WhisperConfig {
-        model_path: model_path(model_name).expect("Model path not found"),
+        model_path: model_path(model_name),
         language: "auto".to_string(),
         threads: None,
     };
