@@ -447,7 +447,7 @@ mod tests {
         "small",
         "tiny",
         "medium",
-        "large",
+        "large-v3-turbo",
     ];
 
     /// Look for a model file in the cache dir and local `models/` dir.

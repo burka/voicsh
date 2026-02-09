@@ -76,7 +76,7 @@ pub async fn fetch_remote_models() -> Result<Vec<RemoteModel>> {
         // English-only models have ".en" before any version suffix
         let english_only = name.contains(".en");
 
-        let url = format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{path}");
+        let url = format!("{}/{path}", crate::models::catalog::HF_BASE_URL);
 
         models.push(RemoteModel {
             name: name.to_string(),

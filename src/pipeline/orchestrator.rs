@@ -1360,7 +1360,7 @@ mod tests {
         "small",
         "tiny",
         "medium",
-        "large",
+        "large-v3-turbo",
     ];
 
     #[cfg(feature = "whisper")]

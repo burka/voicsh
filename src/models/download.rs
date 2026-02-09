@@ -27,7 +27,8 @@ pub fn models_dir() -> PathBuf {
 /// Always returns a path regardless of whether the model is in the catalog.
 /// The file may or may not exist on disk.
 pub fn model_path(name: &str) -> PathBuf {
-    let filename = format!("ggml-{name}.bin");
+    let resolved = crate::models::catalog::resolve_name(name);
+    let filename = format!("ggml-{resolved}.bin");
     models_dir().join(filename)
 }
 
@@ -162,7 +163,7 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
 
     // Try static catalog first
     if let Some(info) = get_model(name) {
-        download_to_path(name, info.url, info.sha1, info.size_mb, &path, progress).await?;
+        download_to_path(name, &info.url(), info.sha1, info.size_mb, &path, progress).await?;
         return Ok(path);
     }
 
@@ -284,6 +285,17 @@ mod tests {
     }
 
     #[test]
+    fn test_model_path_resolves_alias() {
+        let path = model_path("large");
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.contains("large-v3-turbo"),
+            "model_path(\"large\") should resolve to large-v3-turbo, got: {}",
+            path_str
+        );
+    }
+
+    #[test]
     fn test_is_model_installed_returns_false_for_invalid_model() {
         let installed = is_model_installed("nonexistent_model_xyz");
         assert!(!installed);
@@ -360,12 +372,16 @@ mod tests {
             installed, sorted,
             "list_installed_models should return sorted names"
         );
-        // Every returned name should correspond to an existing file
+        // Every returned name should correspond to an existing file.
+        // Note: we check the literal filename here, not model_path() which may resolve aliases.
+        let dir = models_dir();
         for name in &installed {
+            let literal_path = dir.join(format!("ggml-{}.bin", name));
             assert!(
-                model_path(name).exists(),
-                "Listed model '{}' should exist on disk",
-                name
+                literal_path.exists(),
+                "Listed model '{}' should exist on disk at {}",
+                name,
+                literal_path.display()
             );
         }
     }

@@ -3,19 +3,32 @@
 //! This module provides a catalog of available Whisper models from OpenAI,
 //! including model information, availability checks, and defaults.
 
+/// Base URL for downloading Whisper GGML models from HuggingFace.
+pub const HF_BASE_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
+
 /// Metadata for a Whisper model.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelInfo {
-    /// Model identifier (e.g., "tiny.en", "base", "large")
+    /// Model identifier (e.g., "tiny.en", "base", "large-v3-turbo")
     pub name: &'static str,
     /// Model size in megabytes
     pub size_mb: u32,
     /// SHA-1 checksum for integrity verification
     pub sha1: &'static str,
-    /// Download URL from HuggingFace
-    pub url: &'static str,
     /// Whether this model supports English only
     pub english_only: bool,
+}
+
+impl ModelInfo {
+    /// Filename for the model binary: `ggml-{name}.bin`.
+    pub fn filename(&self) -> String {
+        format!("ggml-{}.bin", self.name)
+    }
+
+    /// Full download URL derived from [`HF_BASE_URL`] and [`Self::filename`].
+    pub fn url(&self) -> String {
+        format!("{HF_BASE_URL}/{}", self.filename())
+    }
 }
 
 /// Catalog of available Whisper models.
@@ -27,89 +40,90 @@ pub const MODELS: &[ModelInfo] = &[
         name: "tiny.en",
         size_mb: 75,
         sha1: "c78c86eb1a8faa21b369bcd33207cc90d64ae9df",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
         english_only: true,
     },
     ModelInfo {
         name: "tiny",
         size_mb: 75,
         sha1: "bd577a113a864445d4c299885e0cb97d4ba92b5f",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
         english_only: false,
     },
     ModelInfo {
         name: "base.en",
         size_mb: 142,
         sha1: "137c40403d78fd54d454da0f9bd998f78703390c",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
         english_only: true,
     },
     ModelInfo {
         name: "base",
         size_mb: 142,
         sha1: "465707469ff3a37a2b9b8d8f89f2f99de7299dac",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
         english_only: false,
     },
     ModelInfo {
         name: "small.en",
         size_mb: 466,
         sha1: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
         english_only: true,
     },
     ModelInfo {
         name: "small",
         size_mb: 466,
         sha1: "55356645c2b361a969dfd0ef2c5a50d530afd8d5",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
         english_only: false,
     },
     ModelInfo {
         name: "medium.en",
         size_mb: 1533,
         sha1: "8c30f0e44ce9560643ebd10bbe50cd20eafd3723",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
         english_only: true,
     },
     ModelInfo {
         name: "medium",
         size_mb: 1533,
         sha1: "fd9727b6e1217c2f614f9b698455c4ffd82463b4",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
         english_only: false,
     },
     ModelInfo {
-        name: "large",
+        name: "large-v3-turbo",
         size_mb: 1620,
         sha1: "",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
         english_only: false,
     },
     ModelInfo {
         name: "large-v1",
         size_mb: 3094,
         sha1: "",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v1.bin",
         english_only: false,
     },
     ModelInfo {
         name: "large-v2",
         size_mb: 3094,
         sha1: "",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2.bin",
         english_only: false,
     },
     ModelInfo {
         name: "large-v3",
         size_mb: 3095,
         sha1: "",
-        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
         english_only: false,
     },
 ];
 
+/// Resolve legacy model name aliases.
+///
+/// Maps `"large"` → `"large-v3-turbo"` for backwards compatibility with
+/// existing `config.toml` files. All other names pass through unchanged.
+pub fn resolve_name(name: &str) -> &str {
+    match name {
+        "large" => "large-v3-turbo",
+        other => other,
+    }
+}
+
 /// Find a model by name.
+///
+/// Resolves aliases (e.g., `"large"` → `"large-v3-turbo"`) before lookup.
 ///
 /// # Arguments
 ///
@@ -119,7 +133,8 @@ pub const MODELS: &[ModelInfo] = &[
 ///
 /// Returns `Some(&ModelInfo)` if the model exists, `None` otherwise.
 pub fn get_model(name: &str) -> Option<&'static ModelInfo> {
-    MODELS.iter().find(|m| m.name == name)
+    let resolved = resolve_name(name);
+    MODELS.iter().find(|m| m.name == resolved)
 }
 
 /// Get all available models.
@@ -148,7 +163,7 @@ pub fn default_model() -> &'static ModelInfo {
 ///
 /// - `"base.en"` → `Some("base")`
 /// - `"base"` → `Some("base")` (already multilingual)
-/// - `"large"` → `Some("large")` (only multilingual exists)
+/// - `"large"` → `Some("large-v3-turbo")` (alias resolved)
 /// - `"unknown"` → `None`
 pub fn multilingual_variant(name: &str) -> Option<&'static str> {
     let base = name
@@ -234,7 +249,7 @@ mod tests {
         assert_eq!(multilingual_variant("base.en"), Some("base"));
         assert_eq!(multilingual_variant("base"), Some("base"));
         assert_eq!(multilingual_variant("small.en"), Some("small"));
-        assert_eq!(multilingual_variant("large"), Some("large"));
+        assert_eq!(multilingual_variant("large"), Some("large-v3-turbo"));
         assert_eq!(multilingual_variant("unknown"), None);
     }
 
@@ -250,17 +265,18 @@ mod tests {
     #[test]
     fn test_all_models_have_valid_url() {
         for model in list_models() {
+            let url = model.url();
             assert!(
-                model.url.starts_with("https://"),
+                url.starts_with("https://"),
                 "Model {} has invalid URL: {}",
                 model.name,
-                model.url
+                url
             );
             assert!(
-                model.url.contains("huggingface.co"),
+                url.contains("huggingface.co"),
                 "Model {} URL not from HuggingFace: {}",
                 model.name,
-                model.url
+                url
             );
         }
     }
@@ -362,5 +378,31 @@ mod tests {
         let result = resolve_model_for_language("custom-model.en", "auto", true);
         // Unknown model, no catalog entry, keep as-is
         assert_eq!(result, "custom-model.en");
+    }
+
+    #[test]
+    fn test_resolve_name_alias() {
+        assert_eq!(resolve_name("large"), "large-v3-turbo");
+    }
+
+    #[test]
+    fn test_resolve_name_passthrough() {
+        assert_eq!(resolve_name("tiny"), "tiny");
+        assert_eq!(resolve_name("base.en"), "base.en");
+        assert_eq!(resolve_name("large-v3-turbo"), "large-v3-turbo");
+        assert_eq!(resolve_name("unknown"), "unknown");
+    }
+
+    #[test]
+    fn test_url_derived_from_name() {
+        for model in list_models() {
+            let expected = format!("{HF_BASE_URL}/ggml-{}.bin", model.name);
+            assert_eq!(
+                model.url(),
+                expected,
+                "Model {} URL should be derived from name",
+                model.name
+            );
+        }
     }
 }
