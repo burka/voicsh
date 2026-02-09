@@ -26,23 +26,40 @@ pub fn compute_default_threads(cpu_threads: usize) -> usize {
     cpu_threads.min(headroom.max(4))
 }
 
+/// GPU hardware information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuInfo {
+    pub name: String,
+    pub vram_mb: Option<u64>,
+}
+
+impl GpuInfo {
+    /// Format as display string, e.g. "NVIDIA GeForce RTX 5060 Ti (16 GB)".
+    pub fn display(&self) -> String {
+        match self.vram_mb {
+            Some(mb) => format!("{} ({} GB)", self.name, mb / 1024),
+            None => self.name.clone(),
+        }
+    }
+}
+
 /// Detect available GPU hardware.
 ///
-/// Returns GPU name if detected (NVIDIA or AMD), or None if no GPU found.
-pub fn detect_gpu() -> Option<String> {
-    // Try to detect NVIDIA GPU
+/// Returns GPU name and VRAM if detected (NVIDIA or AMD), or None if no GPU found.
+pub fn detect_gpu() -> Option<GpuInfo> {
+    // Try to detect NVIDIA GPU with VRAM
     let nvidia_result = std::process::Command::new("nvidia-smi")
-        .arg("--query-gpu=name")
+        .arg("--query-gpu=name,memory.total")
         .arg("--format=csv,noheader")
         .output();
 
     if let Ok(output) = nvidia_result
         && output.status.success()
-        && let Ok(gpu_name) = String::from_utf8(output.stdout)
+        && let Ok(gpu_line) = String::from_utf8(output.stdout)
     {
-        let gpu_name = gpu_name.trim();
-        if !gpu_name.is_empty() {
-            return Some(format!("NVIDIA {}", gpu_name));
+        let gpu_line = gpu_line.trim();
+        if !gpu_line.is_empty() {
+            return Some(parse_nvidia_gpu(gpu_line));
         }
     }
 
@@ -60,12 +77,32 @@ pub fn detect_gpu() -> Option<String> {
                 && is_amd
                 && let Some(gpu_part) = line.split(':').nth(2)
             {
-                return Some(format!("AMD {}", gpu_part.trim()));
+                return Some(GpuInfo {
+                    name: format!("AMD {}", gpu_part.trim()),
+                    vram_mb: None,
+                });
             }
         }
     }
 
     None
+}
+
+/// Parse nvidia-smi CSV output like "GeForce RTX 5060 Ti, 16384 MiB".
+fn parse_nvidia_gpu(line: &str) -> GpuInfo {
+    let parts: Vec<&str> = line.splitn(2, ',').collect();
+    let name = format!("NVIDIA {}", parts[0].trim());
+
+    let vram_mb = parts.get(1).and_then(|mem_str| {
+        let mem_str = mem_str.trim();
+        // nvidia-smi reports "16384 MiB" — parse the number
+        mem_str
+            .split_whitespace()
+            .next()
+            .and_then(|n| n.parse::<u64>().ok())
+    });
+
+    GpuInfo { name, vram_mb }
 }
 
 /// Backend availability information
@@ -86,7 +123,7 @@ pub struct SystemInfo {
     pub cpu_frequency: Option<f32>,
     pub total_memory_mb: u64,
     pub available_memory_mb: u64,
-    pub gpu_info: Option<String>,
+    pub gpu_info: Option<GpuInfo>,
     pub whisper_backend: String,
     pub whisper_threads: usize,
     pub available_backends: Vec<BackendInfo>,
@@ -225,9 +262,9 @@ impl SystemInfo {
         // GPU info
         let gpu_info = if let Some(ref gpu) = self.gpu_info {
             if self.whisper_backend.contains("CPU") {
-                format!("{} (not in use)", gpu)
+                format!("{} (not in use)", gpu.display())
             } else {
-                gpu.clone()
+                gpu.display()
             }
         } else {
             "None".to_string()
@@ -526,12 +563,13 @@ pub fn print_guidance(results: &[BenchmarkResult], system_info: &SystemInfo) {
     if let Some(ref gpu) = system_info.gpu_info
         && system_info.whisper_backend.contains("CPU")
     {
-        if gpu.contains("NVIDIA") {
-            println!("\n  GPU detected ({}) but not in use.", gpu);
+        let display = gpu.display();
+        if gpu.name.contains("NVIDIA") {
+            println!("\n  GPU detected ({}) but not in use.", display);
             println!("  Compile with CUDA for 10-50x speedup:");
             println!("    cargo build --release --features cuda");
-        } else if gpu.contains("AMD") {
-            println!("\n  GPU detected ({}) but not in use.", gpu);
+        } else if gpu.name.contains("AMD") {
+            println!("\n  GPU detected ({}) but not in use.", display);
             println!("  Compile with HipBLAS for GPU acceleration:");
             println!("    cargo build --release --features hipblas");
         }
@@ -589,5 +627,37 @@ mod tests {
         // Edge case: 0 threads (shouldn't happen, but be safe)
         // min(0, max(4, 0*0.9=0)) = min(0, 4) = 0
         assert_eq!(compute_default_threads(0), 0);
+    }
+
+    #[test]
+    fn parse_nvidia_gpu_with_vram() {
+        let info = parse_nvidia_gpu("GeForce RTX 5060 Ti, 16384 MiB");
+        assert_eq!(info.name, "NVIDIA GeForce RTX 5060 Ti");
+        assert_eq!(info.vram_mb, Some(16384));
+    }
+
+    #[test]
+    fn parse_nvidia_gpu_name_only() {
+        let info = parse_nvidia_gpu("GeForce RTX 4090");
+        assert_eq!(info.name, "NVIDIA GeForce RTX 4090");
+        assert_eq!(info.vram_mb, None);
+    }
+
+    #[test]
+    fn gpu_info_display_with_vram() {
+        let info = GpuInfo {
+            name: "NVIDIA GeForce RTX 5060 Ti".to_string(),
+            vram_mb: Some(16384),
+        };
+        assert_eq!(info.display(), "NVIDIA GeForce RTX 5060 Ti (16 GB)");
+    }
+
+    #[test]
+    fn gpu_info_display_without_vram() {
+        let info = GpuInfo {
+            name: "AMD Radeon RX 7900 XTX".to_string(),
+            vram_mb: None,
+        };
+        assert_eq!(info.display(), "AMD Radeon RX 7900 XTX");
     }
 }

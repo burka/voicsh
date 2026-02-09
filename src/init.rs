@@ -260,6 +260,10 @@ async fn collect_all_candidates(probe_rtf: f64, probe_size: u32) -> Vec<ModelCan
         }
     }
     for m in &remote_models {
+        // Skip quantized models — only full-precision models are trustworthy
+        if !parse_quantization(&m.name).is_empty() {
+            continue;
+        }
         if seen.insert(m.name.clone()) {
             candidates.push(ModelCandidate {
                 name: m.name.clone(),
@@ -433,7 +437,11 @@ pub async fn run_init(language: &str, verbose: u8) -> anyhow::Result<()> {
     let cache_dir = models_dir();
     let disk_mb = available_disk_mb(&cache_dir);
 
-    let gpu_str = sys_info.gpu_info.as_deref().unwrap_or("None");
+    let gpu_str = sys_info
+        .gpu_info
+        .as_ref()
+        .map(|g| g.display())
+        .unwrap_or_else(|| "None".to_string());
     println!(
         "System: {} ({}c/{}t) | GPU: {} | RAM: {} GB",
         sys_info.cpu_model,
@@ -441,6 +449,11 @@ pub async fn run_init(language: &str, verbose: u8) -> anyhow::Result<()> {
         sys_info.cpu_threads,
         gpu_str,
         sys_info.total_memory_mb / 1024,
+    );
+    let threads = compute_default_threads(sys_info.cpu_threads);
+    println!(
+        "Backend: {} | Threads: {}/{}",
+        sys_info.whisper_backend, threads, sys_info.cpu_threads,
     );
     println!(
         "Disk: {} GB available on {}",
@@ -477,7 +490,6 @@ pub async fn run_init(language: &str, verbose: u8) -> anyhow::Result<()> {
 
     // ── Step 3: Benchmark probe model ───────────────────────────────────
     let audio = generate_reference_audio();
-    let threads = compute_default_threads(sys_info.cpu_threads);
     let monitor = ResourceMonitor::new();
 
     println!("Benchmarking probe model...");

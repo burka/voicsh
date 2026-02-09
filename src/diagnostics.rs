@@ -201,10 +201,10 @@ fn check_gpu_nvidia(compiled: &str) {
     #[cfg(feature = "benchmark")]
     {
         // Use shared GPU detection when benchmark feature is available
-        if let Some(gpu_name) = detect_gpu()
-            && gpu_name.starts_with("NVIDIA")
+        if let Some(gpu) = detect_gpu()
+            && gpu.name.starts_with("NVIDIA")
         {
-            let name = gpu_name.strip_prefix("NVIDIA ").unwrap_or(&gpu_name);
+            let name = gpu.name.strip_prefix("NVIDIA ").unwrap_or(&gpu.name);
             if compiled == "CUDA" {
                 println!("✓ Active ({})", name);
             } else {
