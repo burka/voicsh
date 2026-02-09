@@ -7,25 +7,65 @@ use crate::stt::transcriber::Transcriber;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// Filters common Whisper markers and noise indicators from transcribed text.
+/// Strips Whisper non-speech annotations in any language.
+///
+/// Whisper wraps annotations in `[…]`, `*…*`, or `(…)` — these never contain
+/// real speech. Unmatched opening delimiters are kept as-is.
 fn clean_transcription(text: &str) -> String {
-    let markers = [
-        "[BLANK_AUDIO]",
-        "[INAUDIBLE]",
-        "[MUSIC]",
-        "[APPLAUSE]",
-        "[LAUGHTER]",
-        "(BLANK_AUDIO)",
-        "(inaudible)",
-        "[silence]",
-        "[noise]",
-    ];
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
 
-    let mut cleaned = text.to_string();
-    for marker in markers {
-        cleaned = cleaned.replace(marker, "");
+    while let Some(&ch) = chars.peek() {
+        match ch {
+            '[' | '(' | '*' => {
+                let close = match ch {
+                    '[' => ']',
+                    '(' => ')',
+                    '*' => '*',
+                    _ => unreachable!(),
+                };
+                chars.next(); // consume opener
+                let mut buf = String::new();
+                let mut found_close = false;
+                while let Some(&inner) = chars.peek() {
+                    if inner == close {
+                        chars.next(); // consume closer
+                        found_close = true;
+                        break;
+                    }
+                    buf.push(inner);
+                    chars.next();
+                }
+                if !found_close {
+                    // Unmatched opener — keep original characters
+                    result.push(ch);
+                    result.push_str(&buf);
+                }
+            }
+            _ => {
+                result.push(ch);
+                chars.next();
+            }
+        }
     }
-    cleaned.trim().to_string()
+
+    // Collapse multiple spaces into one, then trim
+    let mut prev_space = false;
+    let collapsed: String = result
+        .chars()
+        .filter(|&c| {
+            if c == ' ' {
+                if prev_space {
+                    return false;
+                }
+                prev_space = true;
+            } else {
+                prev_space = false;
+            }
+            true
+        })
+        .collect();
+    collapsed.trim().to_string()
 }
 
 /// Station that transcribes audio chunks using a Whisper transcriber.
@@ -173,7 +213,7 @@ mod tests {
         let output = result.unwrap();
         assert!(output.is_some());
         let text = output.unwrap();
-        assert_eq!(text.text, "Hello  world  test");
+        assert_eq!(text.text, "Hello world test");
     }
 
     #[test]
@@ -192,7 +232,7 @@ mod tests {
         let output = result.unwrap();
         assert!(output.is_some());
         let text = output.unwrap();
-        assert_eq!(text.text, "Speech here  more speech");
+        assert_eq!(text.text, "Speech here more speech");
     }
 
     #[test]
@@ -240,7 +280,7 @@ mod tests {
     fn test_clean_transcription_removes_all_markers() {
         let input = "[BLANK_AUDIO] text [INAUDIBLE] more [MUSIC] [APPLAUSE] [LAUGHTER] (BLANK_AUDIO) (inaudible) [silence] [noise]";
         let result = clean_transcription(input);
-        assert_eq!(result, "text  more");
+        assert_eq!(result, "text more");
     }
 
     #[test]
@@ -261,6 +301,46 @@ mod tests {
         let input = "  text with spaces  ";
         let result = clean_transcription(input);
         assert_eq!(result, "text with spaces");
+    }
+
+    #[test]
+    fn test_clean_transcription_german_annotations() {
+        assert_eq!(clean_transcription("[Musik]"), "");
+        assert_eq!(clean_transcription("*Klappern*"), "");
+        assert_eq!(clean_transcription("[Lautes Klicken]"), "");
+        assert_eq!(clean_transcription("[Lautes Lachen]"), "");
+        assert_eq!(clean_transcription("*Klingeln*"), "");
+    }
+
+    #[test]
+    fn test_clean_transcription_mixed_speech_and_annotations() {
+        assert_eq!(clean_transcription("Hello [Musik] world"), "Hello world");
+        assert_eq!(
+            clean_transcription("Start *Klappern* middle (inaudible) end"),
+            "Start middle end"
+        );
+    }
+
+    #[test]
+    fn test_clean_transcription_empty_annotations() {
+        assert_eq!(clean_transcription("text [] more"), "text more");
+        assert_eq!(clean_transcription("text ** more"), "text more");
+        assert_eq!(clean_transcription("text () more"), "text more");
+    }
+
+    #[test]
+    fn test_clean_transcription_unmatched_delimiters_pass_through() {
+        assert_eq!(clean_transcription("price is 5["), "price is 5[");
+        assert_eq!(clean_transcription("note (incomplete"), "note (incomplete");
+        assert_eq!(
+            clean_transcription("a * single asterisk"),
+            "a * single asterisk"
+        );
+    }
+
+    #[test]
+    fn test_clean_transcription_collapses_multiple_spaces() {
+        assert_eq!(clean_transcription("word [x] [y] [z] end"), "word end");
     }
 
     #[test]
