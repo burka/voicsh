@@ -119,7 +119,10 @@ impl WhisperTranscriber {
             .to_string();
 
         // Load the Whisper model
-        let context_params = WhisperContextParameters::default();
+        let mut context_params = WhisperContextParameters::default();
+        // Enable flash attention: uses fused attention kernels that avoid the standalone
+        // softmax CUDA kernel, which crashes on Blackwell GPUs (sm_120) with ggml <= 1.7.6
+        context_params.flash_attn(true);
         let context = WhisperContext::new_with_params(
             config.model_path.to_str().ok_or_else(|| {
                 VoicshError::TranscriptionInferenceFailed {

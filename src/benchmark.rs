@@ -179,27 +179,18 @@ impl SystemInfo {
     }
 
     fn detect_whisper_backend() -> String {
-        #[cfg(feature = "cuda")]
-        {
-            return "whisper.cpp (CUDA)".to_string();
+        if cfg!(feature = "cuda") {
+            "whisper.cpp (CUDA)"
+        } else if cfg!(feature = "vulkan") {
+            "whisper.cpp (Vulkan)"
+        } else if cfg!(feature = "hipblas") {
+            "whisper.cpp (HIP/ROCm)"
+        } else if cfg!(feature = "openblas") {
+            "whisper.cpp (OpenBLAS)"
+        } else {
+            "whisper.cpp (CPU)"
         }
-
-        #[cfg(feature = "vulkan")]
-        {
-            return "whisper.cpp (Vulkan)".to_string();
-        }
-
-        #[cfg(feature = "hipblas")]
-        {
-            return "whisper.cpp (HIP/ROCm)".to_string();
-        }
-
-        #[cfg(feature = "openblas")]
-        {
-            return "whisper.cpp (OpenBLAS)".to_string();
-        }
-
-        "whisper.cpp (CPU)".to_string()
+        .to_string()
     }
 
     fn detect_available_backends() -> Vec<BackendInfo> {

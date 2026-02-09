@@ -72,8 +72,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn gpu_backend_returns_cpu_by_default() {
-        // In default test builds (no GPU feature enabled), should return "CPU"
-        assert_eq!(gpu_backend(), "CPU");
+    fn gpu_backend_matches_compiled_feature() {
+        let expected = if cfg!(feature = "cuda") {
+            "CUDA"
+        } else if cfg!(feature = "vulkan") {
+            "Vulkan"
+        } else if cfg!(feature = "hipblas") {
+            "HipBLAS (AMD)"
+        } else if cfg!(feature = "openblas") {
+            "OpenBLAS"
+        } else {
+            "CPU"
+        };
+        assert_eq!(gpu_backend(), expected);
     }
 }
