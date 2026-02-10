@@ -1,7 +1,7 @@
 //! Async Unix socket IPC server for daemon control.
 
 use crate::error::{Result, VoicshError};
-use crate::ipc::protocol::{Command, Response};
+use crate::ipc::protocol::{Command, DaemonEvent, Response};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -13,6 +13,12 @@ use tokio::sync::Mutex;
 pub trait CommandHandler: Send + Sync {
     /// Handle a command and return a response.
     async fn handle(&self, command: Command) -> Response;
+
+    /// Subscribe to daemon events for follow mode.
+    /// Returns None if follow is not supported (default).
+    fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<DaemonEvent>> {
+        None
+    }
 }
 
 /// State for managing server shutdown.
@@ -159,7 +165,12 @@ where
         message: format!("Failed to parse command: {}", e),
     })?;
 
-    // Handle command
+    // Follow command gets special streaming treatment
+    if matches!(command, Command::Follow) {
+        return handle_follow_client(writer, handler).await;
+    }
+
+    // Handle regular command
     let response = handler.handle(command).await;
 
     // Send response
@@ -191,6 +202,74 @@ where
     Ok(())
 }
 
+/// Handle a follow client: subscribe to events and stream them as newline-delimited JSON.
+async fn handle_follow_client<H>(
+    mut writer: tokio::net::unix::OwnedWriteHalf,
+    handler: Arc<H>,
+) -> Result<()>
+where
+    H: CommandHandler,
+{
+    let mut rx = match handler.subscribe() {
+        Some(rx) => rx,
+        None => {
+            // Follow not supported — send error and close
+            let err = Response::Error {
+                message: "Follow not supported".to_string(),
+            };
+            let json = err.to_json().map_err(|e| VoicshError::IpcProtocol {
+                message: format!("Failed to serialize error: {}", e),
+            })?;
+            writer.write_all(json.as_bytes()).await.ok();
+            writer.write_all(b"\n").await.ok();
+            writer.flush().await.ok();
+            return Ok(());
+        }
+    };
+
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                let json = match event.to_json() {
+                    Ok(j) => j,
+                    Err(_) => continue,
+                };
+                if writer.write_all(json.as_bytes()).await.is_err() {
+                    break; // Client disconnected
+                }
+                if writer.write_all(b"\n").await.is_err() {
+                    break;
+                }
+                if writer.flush().await.is_err() {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                // Skipped n events — log and continue
+                let log_event = DaemonEvent::Log {
+                    message: format!("Skipped {} events (slow reader)", n),
+                };
+                if let Ok(json) = log_event.to_json() {
+                    if writer.write_all(json.as_bytes()).await.is_err() {
+                        break;
+                    }
+                    if writer.write_all(b"\n").await.is_err() {
+                        break;
+                    }
+                    if writer.flush().await.is_err() {
+                        break;
+                    }
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                break; // Channel closed, daemon shutting down
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,6 +296,7 @@ mod tests {
                 },
                 Command::Cancel => Response::Ok,
                 Command::Shutdown => Response::Ok,
+                Command::Follow => Response::Ok,
             }
         }
     }

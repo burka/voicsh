@@ -1,5 +1,6 @@
 use crate::config::InputMethod;
 use crate::input::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
+use crate::ipc::protocol::DaemonEvent;
 use crate::pipeline::error::{StationError, eprintln_clear};
 use crate::pipeline::latency::{LatencyTracker, SessionContext, TranscriptionTiming};
 use crate::pipeline::station::Station;
@@ -35,6 +36,7 @@ pub(crate) struct SinkStation {
     result_tx: Option<crossbeam_channel::Sender<Option<String>>>,
     latency_tracker: LatencyTracker,
     transcription_count: usize,
+    event_tx: Option<crossbeam_channel::Sender<DaemonEvent>>,
 }
 
 #[allow(dead_code)]
@@ -52,11 +54,17 @@ impl SinkStation {
             result_tx: Some(result_tx),
             latency_tracker: LatencyTracker::new(),
             transcription_count: 0,
+            event_tx: None,
         }
     }
 
     pub(crate) fn with_session_context(mut self, context: SessionContext) -> Self {
         self.latency_tracker = LatencyTracker::with_context(context);
+        self
+    }
+
+    pub(crate) fn with_event_sender(mut self, tx: crossbeam_channel::Sender<DaemonEvent>) -> Self {
+        self.event_tx = Some(tx);
         self
     }
 }
@@ -78,6 +86,17 @@ impl Station for SinkStation {
             Ok(()) => {
                 let output_done = Instant::now();
                 self.transcription_count += 1;
+
+                // Emit transcription event for follow clients
+                if let Some(ref tx) = self.event_tx
+                    && tx
+                        .try_send(DaemonEvent::Transcription {
+                            text: text.text.clone(),
+                        })
+                        .is_err()
+                {
+                    // Channel full or closed - OK to ignore in sink
+                }
 
                 // Record timing if available
                 if let Some(chunk_timing) = text.timing {

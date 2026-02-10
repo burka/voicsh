@@ -1,7 +1,7 @@
 //! IPC client for sending commands to the daemon.
 
 use crate::error::{Result, VoicshError};
-use crate::ipc::protocol::{Command, Response};
+use crate::ipc::protocol::{Command, DaemonEvent, Response};
 use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -84,6 +84,63 @@ async fn send_command_inner(socket_path: &Path, command: Command) -> Result<Resp
     Ok(response)
 }
 
+/// Connect to daemon and stream events via Follow command.
+/// Calls `on_event` for each received event. Returns when connection closes.
+pub async fn follow<F>(socket_path: &Path, mut on_event: F) -> Result<()>
+where
+    F: FnMut(DaemonEvent),
+{
+    // Connect to daemon socket
+    let stream = UnixStream::connect(socket_path)
+        .await
+        .map_err(|e| ipc_io_error("Failed to connect to daemon", e))?;
+
+    let (reader, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(reader);
+
+    // Send Follow command
+    let command_json = Command::Follow
+        .to_json()
+        .map_err(|e| VoicshError::IpcProtocol {
+            message: format!("Failed to serialize command: {}", e),
+        })?;
+    writer
+        .write_all(command_json.as_bytes())
+        .await
+        .map_err(|e| ipc_io_error("Failed to write command", e))?;
+    writer
+        .write_all(b"\n")
+        .await
+        .map_err(|e| ipc_io_error("Failed to write newline", e))?;
+    writer
+        .flush()
+        .await
+        .map_err(|e| ipc_io_error("Failed to flush writer", e))?;
+
+    // Read events in a loop (newline-delimited JSON)
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| ipc_io_error("Failed to read event", e))?;
+        if n == 0 {
+            break; // Connection closed
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Try to parse as DaemonEvent, skip if it's a Response::Error
+        if let Ok(event) = DaemonEvent::from_json(trimmed) {
+            on_event(event);
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +167,7 @@ mod tests {
                 },
                 Command::Cancel => Response::Ok,
                 Command::Shutdown => Response::Ok,
+                Command::Follow => Response::Ok,
             }
         }
     }

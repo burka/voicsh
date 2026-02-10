@@ -1,6 +1,7 @@
 //! VAD station that detects voice activity in audio frames.
 
 use crate::audio::vad::{Clock, SystemClock, Vad, VadConfig};
+use crate::ipc::protocol::DaemonEvent;
 use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::{AudioFrame, VadFrame};
@@ -15,6 +16,40 @@ const NO_AUDIO_THRESHOLD: f32 = 0.0001;
 
 /// Returns (current_len, capacity) for a pipeline buffer channel.
 pub type BufferGauge = Box<dyn Fn() -> (usize, usize) + Send + Sync>;
+
+/// Format a visual level bar for display.
+/// Returns a string like `[██████████████████░░░░░░░░░░│░░] 0.150`
+pub fn format_level_bar(level: f32, threshold: f32) -> String {
+    const BAR_WIDTH: usize = 30;
+
+    let log_level = if level > 0.001 {
+        ((level.log10() + 3.0) / 2.7 * BAR_WIDTH as f32).clamp(0.0, BAR_WIDTH as f32)
+    } else {
+        0.0
+    };
+    let filled = log_level as usize;
+
+    let log_threshold = if threshold > 0.001 {
+        ((threshold.log10() + 3.0) / 2.7 * BAR_WIDTH as f32).clamp(0.0, BAR_WIDTH as f32)
+    } else {
+        0.0
+    };
+    let threshold_pos = log_threshold as usize;
+
+    let bar: String = (0..BAR_WIDTH)
+        .map(|i| {
+            if i < filled {
+                if level > threshold { '█' } else { '▓' }
+            } else if i == threshold_pos {
+                '│'
+            } else {
+                '░'
+            }
+        })
+        .collect();
+
+    format!("[{}] {:.3}", bar, level)
+}
 
 /// VAD station that processes audio frames and annotates them with speech detection.
 pub struct VadStation {
@@ -32,6 +67,10 @@ pub struct VadStation {
     zero_audio_frames: u64,
     /// Optional gauge to read chunk buffer occupancy.
     buffer_gauge: Option<BufferGauge>,
+    /// Optional event sender for daemon event streaming
+    event_tx: Option<crossbeam_channel::Sender<DaemonEvent>>,
+    /// Throttle counter for level events (emit every 4th frame)
+    level_event_counter: u64,
 }
 
 impl VadStation {
@@ -53,6 +92,8 @@ impl VadStation {
             no_audio_warning_shown: false,
             zero_audio_frames: 0,
             buffer_gauge: None,
+            event_tx: None,
+            level_event_counter: 0,
         }
     }
 
@@ -77,6 +118,12 @@ impl VadStation {
     /// Sets a buffer gauge for displaying chunk queue depth on the meter line.
     pub fn with_buffer_gauge(mut self, gauge: BufferGauge) -> Self {
         self.buffer_gauge = Some(gauge);
+        self
+    }
+
+    /// Sets an event sender for daemon event streaming.
+    pub fn with_event_sender(mut self, tx: crossbeam_channel::Sender<DaemonEvent>) -> Self {
+        self.event_tx = Some(tx);
         self
     }
 
@@ -121,44 +168,12 @@ impl VadStation {
 
     /// Displays a visual level meter to stderr, with optional buffer gauge.
     fn display_level(&self, level: f32, threshold: f32) {
-        const BAR_WIDTH: usize = 30;
-
-        // Use logarithmic scale for better visibility at low levels
-        // Map level 0.001-0.5 to 0-30 bars using log scale
-        let log_level = if level > 0.001 {
-            ((level.log10() + 3.0) / 2.7 * BAR_WIDTH as f32).clamp(0.0, BAR_WIDTH as f32)
-        } else {
-            0.0
-        };
-        let filled = log_level as usize;
-
-        // Calculate threshold position on same scale
-        let log_threshold = if threshold > 0.001 {
-            ((threshold.log10() + 3.0) / 2.7 * BAR_WIDTH as f32).clamp(0.0, BAR_WIDTH as f32)
-        } else {
-            0.0
-        };
-        let threshold_pos = log_threshold as usize;
-
-        // Build the bar with threshold marker
-        let bar: String = (0..BAR_WIDTH)
-            .map(|i| {
-                if i < filled {
-                    if level > threshold { '█' } else { '▓' }
-                } else if i == threshold_pos {
-                    '│'
-                } else {
-                    '░'
-                }
-            })
-            .collect();
-
-        // Use \r to overwrite the line, clear to end
+        let bar = format_level_bar(level, threshold);
         if let Some(gauge) = &self.buffer_gauge {
             let (len, cap) = gauge();
-            eprint!("\r[{}] {:.3}  buf {}/{}  ", bar, level, len, cap);
+            eprint!("\r{}  buf {}/{}  ", bar, len, cap);
         } else {
-            eprint!("\r[{}] {:.3}  ", bar, level);
+            eprint!("\r{}  ", bar);
         }
         io::stderr().flush().ok();
     }
@@ -207,6 +222,19 @@ impl Station for VadStation {
             result.event,
             crate::audio::vad::VadEvent::SpeechStart | crate::audio::vad::VadEvent::Speech
         );
+
+        // Emit level event for follow clients (throttled to every 4th frame ≈ 15Hz)
+        if let Some(ref tx) = self.event_tx {
+            self.level_event_counter += 1;
+            if self.level_event_counter.is_multiple_of(4) {
+                tx.try_send(DaemonEvent::Level {
+                    level: result.level,
+                    threshold: result.threshold,
+                    is_speech,
+                })
+                .ok();
+            }
+        }
 
         // Always return a VadFrame - never filter
         // Populate timing when show_levels is enabled (verbosity >= 1)
@@ -499,5 +527,38 @@ mod tests {
             station.process(frame).unwrap();
         }
         assert!(station.no_audio_warning_shown);
+    }
+
+    #[test]
+    fn test_format_level_bar_zero() {
+        let bar = format_level_bar(0.0, 0.02);
+        assert!(bar.contains("["), "Bar should start with [");
+        assert!(bar.contains("]"), "Bar should contain ]");
+        assert!(bar.contains("0.000"), "Zero level should show 0.000");
+    }
+
+    #[test]
+    fn test_format_level_bar_high_level() {
+        let bar = format_level_bar(0.3, 0.05);
+        assert!(bar.contains('█'), "High level should show filled blocks");
+        assert!(bar.contains("0.300"), "Should show level value");
+    }
+
+    #[test]
+    fn test_format_level_bar_below_threshold() {
+        let bar = format_level_bar(0.01, 0.05);
+        // Below threshold, filled blocks use ▓
+        assert!(
+            !bar.contains('█'),
+            "Below threshold should not use full blocks"
+        );
+    }
+
+    #[test]
+    fn test_event_sender_builder() {
+        let (tx, _rx) = crossbeam_channel::bounded(16);
+        let config = VadConfig::default();
+        let station = VadStation::new(config).with_event_sender(tx);
+        assert!(station.event_tx.is_some());
     }
 }

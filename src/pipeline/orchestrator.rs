@@ -3,6 +3,7 @@
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::{Clock, SystemClock, VadConfig};
 use crate::error::Result;
+use crate::ipc::protocol::DaemonEvent;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::error::{ErrorReporter, LogReporter};
 use crate::pipeline::latency::SessionContext;
@@ -41,6 +42,8 @@ pub struct PipelineConfig {
     pub chunk_buffer: usize,
     pub transcribe_buffer: usize,
     pub post_process_buffer: usize,
+    /// Optional event sender for daemon event streaming (crossbeam, non-blocking)
+    pub event_tx: Option<crossbeam_channel::Sender<DaemonEvent>>,
 }
 
 impl Default for PipelineConfig {
@@ -58,6 +61,7 @@ impl Default for PipelineConfig {
             chunk_buffer: 16,
             transcribe_buffer: 16,
             post_process_buffer: 16,
+            event_tx: None,
         }
     }
 }

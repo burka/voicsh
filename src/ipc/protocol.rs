@@ -18,6 +18,8 @@ pub enum Command {
     Status,
     /// Shutdown the daemon
     Shutdown,
+    /// Follow daemon events (live streaming)
+    Follow,
 }
 
 impl Command {
@@ -63,6 +65,36 @@ impl Response {
     }
 }
 
+/// Events streamed from daemon to follow clients.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DaemonEvent {
+    /// Audio level update (throttled to ~15 Hz)
+    Level {
+        level: f32,
+        threshold: f32,
+        is_speech: bool,
+    },
+    /// Recording state changed
+    RecordingStateChanged { recording: bool },
+    /// Transcription result
+    Transcription { text: String },
+    /// Log message from daemon
+    Log { message: String },
+}
+
+impl DaemonEvent {
+    /// Serialize event to JSON string.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    /// Deserialize event from JSON string.
+    pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +118,7 @@ mod tests {
             Command::Cancel,
             Command::Status,
             Command::Shutdown,
+            Command::Follow,
         ];
 
         for cmd in commands {
@@ -472,6 +505,127 @@ mod tests {
                 );
             }
             _ => panic!("Expected Transcription response"),
+        }
+    }
+
+    // DaemonEvent tests
+
+    #[test]
+    fn test_daemon_event_level_json_roundtrip() {
+        let event = DaemonEvent::Level {
+            level: 0.15,
+            threshold: 0.08,
+            is_speech: true,
+        };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+        assert!(json.contains("\"type\":\"level\""));
+        assert!(json.contains("\"is_speech\":true"));
+    }
+
+    #[test]
+    fn test_daemon_event_recording_state_changed_json_roundtrip() {
+        let event = DaemonEvent::RecordingStateChanged { recording: true };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+        assert!(json.contains("\"type\":\"recording_state_changed\""));
+        assert!(json.contains("\"recording\":true"));
+    }
+
+    #[test]
+    fn test_daemon_event_transcription_json_roundtrip() {
+        let event = DaemonEvent::Transcription {
+            text: "hello world".to_string(),
+        };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+        assert!(json.contains("\"type\":\"transcription\""));
+        assert!(json.contains("\"text\":\"hello world\""));
+    }
+
+    #[test]
+    fn test_daemon_event_log_json_roundtrip() {
+        let event = DaemonEvent::Log {
+            message: "Model loaded".to_string(),
+        };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+        assert!(json.contains("\"type\":\"log\""));
+    }
+
+    #[test]
+    fn test_daemon_event_all_variants_roundtrip() {
+        let events = vec![
+            DaemonEvent::Level {
+                level: 0.0,
+                threshold: 0.02,
+                is_speech: false,
+            },
+            DaemonEvent::Level {
+                level: 0.5,
+                threshold: 0.1,
+                is_speech: true,
+            },
+            DaemonEvent::RecordingStateChanged { recording: false },
+            DaemonEvent::RecordingStateChanged { recording: true },
+            DaemonEvent::Transcription {
+                text: String::new(),
+            },
+            DaemonEvent::Transcription {
+                text: "Hello 👋 World".to_string(),
+            },
+            DaemonEvent::Log {
+                message: "test".to_string(),
+            },
+        ];
+
+        for event in events {
+            let json = event.to_json().expect("should serialize");
+            let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+            assert_eq!(event, deserialized, "roundtrip failed for {:?}", event);
+        }
+    }
+
+    #[test]
+    fn test_command_follow_json_roundtrip() {
+        let cmd = Command::Follow;
+        let json = cmd.to_json().expect("should serialize");
+        let deserialized = Command::from_json(&json).expect("should deserialize");
+        assert_eq!(cmd, deserialized);
+        assert_eq!(json, r#"{"type":"follow"}"#);
+    }
+
+    #[test]
+    fn test_daemon_event_level_float_precision() {
+        let event = DaemonEvent::Level {
+            level: 0.123456789,
+            threshold: 0.001,
+            is_speech: false,
+        };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        // Float values should survive roundtrip (serde_json preserves f32 precision)
+        match deserialized {
+            DaemonEvent::Level {
+                level,
+                threshold,
+                is_speech,
+            } => {
+                assert!(
+                    (level - 0.123456789_f32).abs() < 1e-6,
+                    "level should be close"
+                );
+                assert!(
+                    (threshold - 0.001_f32).abs() < 1e-6,
+                    "threshold should be close"
+                );
+                assert!(!is_speech);
+            }
+            _ => panic!("Expected Level event"),
         }
     }
 }

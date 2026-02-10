@@ -124,6 +124,13 @@ pub enum Commands {
         socket: Option<PathBuf>,
     },
 
+    /// Follow daemon events (live volume meter, recording state, transcriptions)
+    Follow {
+        /// Path to Unix socket (default: $XDG_RUNTIME_DIR/voicsh.sock)
+        #[arg(long, value_name = "PATH")]
+        socket: Option<PathBuf>,
+    },
+
     /// Benchmark transcription performance across models
     #[cfg(feature = "benchmark")]
     Benchmark {
@@ -682,6 +689,28 @@ mod tests {
                 assert_eq!(socket, Some(PathBuf::from("/tmp/test.sock")));
             }
             _ => panic!("Expected Status command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_follow() {
+        let cli = Cli::try_parse_from(["voicsh", "follow"]).unwrap();
+        match cli.command {
+            Some(Commands::Follow { socket }) => {
+                assert!(socket.is_none());
+            }
+            _ => panic!("Expected Follow command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_follow_with_socket() {
+        let cli = Cli::try_parse_from(["voicsh", "follow", "--socket", "/tmp/test.sock"]).unwrap();
+        match cli.command {
+            Some(Commands::Follow { socket }) => {
+                assert_eq!(socket, Some(PathBuf::from("/tmp/test.sock")));
+            }
+            _ => panic!("Expected Follow command"),
         }
     }
 

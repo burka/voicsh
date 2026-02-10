@@ -5,6 +5,7 @@ pub mod handler;
 use crate::audio::capture::suppress_audio_warnings;
 use crate::config::Config;
 use crate::error::{Result, VoicshError};
+use crate::ipc::protocol::DaemonEvent;
 use crate::ipc::server::IpcServer;
 use crate::pipeline::orchestrator::PipelineHandle;
 use crate::stt::transcriber::Transcriber;
@@ -26,6 +27,12 @@ pub struct DaemonState {
     /// Portal session for input injection (if available)
     #[cfg(feature = "portal")]
     pub portal: Option<Arc<PortalSession>>,
+    /// Broadcast sender for daemon events (follow clients subscribe here)
+    pub event_tx: tokio::sync::broadcast::Sender<DaemonEvent>,
+    /// Crossbeam sender for pipeline threads to emit events (non-blocking)
+    pub pipeline_event_tx: crossbeam_channel::Sender<DaemonEvent>,
+    /// Crossbeam receiver (held to keep channel alive; bridge thread clones it)
+    pipeline_event_rx: crossbeam_channel::Receiver<DaemonEvent>,
 }
 
 impl DaemonState {
@@ -40,12 +47,17 @@ impl DaemonState {
         transcriber: Arc<dyn Transcriber>,
         #[cfg(feature = "portal")] portal: Option<Arc<PortalSession>>,
     ) -> Self {
+        let (event_tx, _) = tokio::sync::broadcast::channel(256);
+        let (pipeline_event_tx, pipeline_event_rx) = crossbeam_channel::bounded(256);
         Self {
             config: Arc::new(Mutex::new(config)),
             transcriber,
             pipeline: Arc::new(Mutex::new(None)),
             #[cfg(feature = "portal")]
             portal,
+            event_tx,
+            pipeline_event_tx,
+            pipeline_event_rx,
         }
     }
 
@@ -62,6 +74,17 @@ impl DaemonState {
     /// Returns language setting from config.
     pub async fn language(&self) -> String {
         self.config.lock().await.stt.language.clone()
+    }
+
+    /// Subscribe to daemon events.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<DaemonEvent> {
+        self.event_tx.subscribe()
+    }
+
+    /// Emit an event to all follow clients (for async/handler code).
+    pub fn emit(&self, event: DaemonEvent) {
+        // Ignore send errors (no subscribers = ok)
+        let _ = self.event_tx.send(event);
     }
 }
 
@@ -121,6 +144,16 @@ pub async fn run_daemon(
         #[cfg(feature = "portal")]
         portal,
     );
+
+    // Spawn bridge thread: crossbeam (pipeline OS threads) → tokio broadcast (follow clients)
+    let bridge_event_rx = state.pipeline_event_rx.clone();
+    let bridge_event_tx = state.event_tx.clone();
+    std::thread::spawn(move || {
+        while let Ok(event) = bridge_event_rx.recv() {
+            // Ignore send errors (no subscribers = ok)
+            let _ = bridge_event_tx.send(event);
+        }
+    });
 
     // Determine socket path
     let socket_path = socket_path.unwrap_or_else(IpcServer::default_socket_path);

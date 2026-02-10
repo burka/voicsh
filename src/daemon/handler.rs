@@ -6,7 +6,7 @@ use crate::audio::vad::VadConfig;
 use crate::config::{Config, resolve_hallucination_filters};
 use crate::daemon::DaemonState;
 use crate::input::focused_window::reset_detection_cache;
-use crate::ipc::protocol::{Command, Response};
+use crate::ipc::protocol::{Command, DaemonEvent, Response};
 use crate::ipc::server::CommandHandler;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
@@ -29,6 +29,11 @@ impl DaemonCommandHandler {
             quiet,
             verbosity,
         }
+    }
+
+    /// Subscribe to daemon events.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<DaemonEvent> {
+        self.state.subscribe()
     }
 
     /// Start recording.
@@ -72,6 +77,8 @@ impl DaemonCommandHandler {
         {
             Ok(handle) => {
                 *pipeline_guard = Some(handle);
+                self.state
+                    .emit(DaemonEvent::RecordingStateChanged { recording: true });
                 Response::Ok
             }
             Err(e) => Response::Error {
@@ -116,6 +123,7 @@ impl DaemonCommandHandler {
             quiet: self.quiet,
             sample_rate: WHISPER_SAMPLE_RATE,
             hallucination_filters,
+            event_tx: Some(self.state.pipeline_event_tx.clone()),
             ..Default::default()
         }
     }
@@ -151,7 +159,11 @@ impl DaemonCommandHandler {
             // Stop pipeline and get result
             let result = handle.stop();
 
+            self.state
+                .emit(DaemonEvent::RecordingStateChanged { recording: false });
             if let Some(text) = result {
+                self.state
+                    .emit(DaemonEvent::Transcription { text: text.clone() });
                 Response::Transcription { text }
             } else {
                 Response::Ok
@@ -171,6 +183,8 @@ impl DaemonCommandHandler {
         if let Some(handle) = pipeline_guard.take() {
             // Just drop the handle to stop pipeline
             drop(handle);
+            self.state
+                .emit(DaemonEvent::RecordingStateChanged { recording: false });
             Response::Ok
         } else {
             Response::Error {
@@ -216,6 +230,13 @@ impl CommandHandler for DaemonCommandHandler {
                 // Shutdown is handled by stopping the IPC server
                 // Just return Ok here
                 Response::Ok
+            }
+            Command::Follow => {
+                // Follow is handled separately via streaming, not request-response
+                Response::Error {
+                    message: "Follow command not supported via request-response handler"
+                        .to_string(),
+                }
             }
         }
     }

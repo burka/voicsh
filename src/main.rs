@@ -75,6 +75,9 @@ async fn main() -> Result<()> {
         Some(voicsh::cli::Commands::Status { socket }) => {
             handle_ipc_command(socket, Command::Status).await?;
         }
+        Some(voicsh::cli::Commands::Follow { socket }) => {
+            handle_follow(socket).await?;
+        }
         Some(voicsh::cli::Commands::InstallService) => {
             install_systemd_service()?;
         }
@@ -281,6 +284,62 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
         },
         Err(e) => {
             eprintln!("Failed to communicate with daemon: {}", e);
+            eprintln!("Is the daemon running? Start it with: voicsh daemon");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+/// Follow daemon events and render live output.
+async fn handle_follow(socket: Option<std::path::PathBuf>) -> Result<()> {
+    use voicsh::pipeline::vad_station::format_level_bar;
+
+    let socket_path = socket.unwrap_or_else(IpcServer::default_socket_path);
+
+    println!("Following daemon events... (Ctrl+C to stop)");
+
+    match voicsh::ipc::client::follow(&socket_path, |event| {
+        use voicsh::ipc::protocol::DaemonEvent;
+        match event {
+            DaemonEvent::Level {
+                level,
+                threshold,
+                is_speech,
+            } => {
+                let bar = format_level_bar(level, threshold);
+                let speech_indicator = if is_speech { " SPEECH" } else { "" };
+                eprint!("\r{}{}", bar, speech_indicator);
+                // Pad to clear previous longer lines
+                eprint!("          ");
+            }
+            DaemonEvent::RecordingStateChanged { recording } => {
+                eprintln!();
+                if recording {
+                    println!("Recording started");
+                } else {
+                    println!("Recording stopped");
+                }
+            }
+            DaemonEvent::Transcription { text } => {
+                eprintln!();
+                println!("{}", text);
+            }
+            DaemonEvent::Log { message } => {
+                eprintln!();
+                eprintln!("[log] {}", message);
+            }
+        }
+    })
+    .await
+    {
+        Ok(()) => {
+            eprintln!();
+            println!("Daemon connection closed");
+        }
+        Err(e) => {
+            eprintln!("Failed to follow daemon: {}", e);
             eprintln!("Is the daemon running? Start it with: voicsh daemon");
             std::process::exit(1);
         }
