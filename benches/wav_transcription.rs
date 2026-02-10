@@ -116,7 +116,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         audio_duration_ms
     );
 
-    let monitor = ResourceMonitor::new();
+    let _monitor = ResourceMonitor::new();
     let mut group = c.benchmark_group("whisper_models");
     group.sample_size(10); // Reduce sample size due to long transcription times
     group.measurement_time(Duration::from_secs(60)); // Allow up to 60s per benchmark
@@ -132,7 +132,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             &audio,
             |b, audio| {
                 let config = WhisperConfig {
-                    model_path: model_path(model.name).expect("Model path not found"),
+                    model_path: model_path(model.name),
                     language: "auto".to_string(),
                     threads: None,
                 };
@@ -238,11 +238,9 @@ criterion_main!(benches);
 // Add a test that runs the comparison benchmark
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     #[ignore] // Run with: cargo test --benches -- --ignored
     fn test_comparison_benchmark() {
-        run_comparison_benchmark();
+        super::run_comparison_benchmark();
     }
 }

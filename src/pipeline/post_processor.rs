@@ -84,6 +84,23 @@ pub struct VoiceCommandProcessor {
     caps_active: bool,
 }
 
+/// Characters that Whisper may append to command words as inferred punctuation.
+/// For example, if you say "period" with falling intonation, Whisper may
+/// transcribe it as "Period." — we consume the trailing punctuation to prevent
+/// double output (e.g., ".." instead of ".").
+fn is_whisper_trailing_punct(ch: char) -> bool {
+    matches!(ch, '.' | ',' | '?' | '!' | ':' | ';')
+}
+
+/// Count consecutive trailing punctuation characters.
+/// Handles sequences like "..." (three dots for ellipsis).
+fn count_trailing_punct(chars: &[char]) -> usize {
+    chars
+        .iter()
+        .take_while(|ch| is_whisper_trailing_punct(**ch))
+        .count()
+}
+
 /// What a voice command does when matched.
 #[derive(Debug, Clone, PartialEq)]
 enum CommandAction {
@@ -221,9 +238,26 @@ impl VoiceCommandProcessor {
                 }
 
                 // Ensure word boundaries: the character before must be start-of-string
-                // or whitespace, and the character after must be end-of-string or whitespace.
+                // or whitespace, and the character after must be end-of-string,
+                // whitespace, or Whisper-inferred trailing punctuation.
                 let before_ok = i == 0 || chars[i - 1].is_whitespace();
-                let after_ok = i + plen == len || chars[i + plen].is_whitespace();
+                let after_pos = i + plen;
+                let (after_ok, trailing_punct_len) =
+                    if after_pos == len || chars[after_pos].is_whitespace() {
+                        (true, 0)
+                    } else {
+                        // Accept trailing punctuation Whisper may have appended
+                        // (e.g., "Enter." → match "enter", consume ".")
+                        let punct_len = count_trailing_punct(&chars[after_pos..]);
+                        if punct_len > 0
+                            && (after_pos + punct_len == len
+                                || chars[after_pos + punct_len].is_whitespace())
+                        {
+                            (true, punct_len)
+                        } else {
+                            (false, 0)
+                        }
+                    };
 
                 if !before_ok || !after_ok {
                     continue;
@@ -253,8 +287,8 @@ impl VoiceCommandProcessor {
                     }
                 };
 
-                // Skip past the matched phrase.
-                i += plen;
+                // Skip past the matched phrase and any trailing punctuation.
+                i += plen + trailing_punct_len;
                 if eat_trailing && i < len && chars[i].is_whitespace() {
                     i += 1;
                 }
@@ -317,6 +351,7 @@ fn english_commands() -> Vec<(String, CommandAction)> {
         // Punctuation (attach left: no space before)
         ("period".into(), CommandAction::punct(".")),
         ("full stop".into(), CommandAction::punct(".")),
+        ("dot".into(), CommandAction::punct(".")),
         ("comma".into(), CommandAction::punct(",")),
         ("question mark".into(), CommandAction::punct("?")),
         ("exclamation mark".into(), CommandAction::punct("!")),
@@ -338,6 +373,7 @@ fn english_commands() -> Vec<(String, CommandAction)> {
         // Whitespace / formatting
         ("new line".into(), CommandAction::whitespace("\n")),
         ("new paragraph".into(), CommandAction::whitespace("\n\n")),
+        ("enter".into(), CommandAction::whitespace("\n")),
         ("tab".into(), CommandAction::whitespace("\t")),
         // Caps toggle
         ("all caps".into(), CommandAction::CapsOn),
@@ -357,6 +393,7 @@ fn german_commands() -> Vec<(String, CommandAction)> {
         ("semikolon".into(), CommandAction::punct(";")),
         ("neue zeile".into(), CommandAction::whitespace("\n")),
         ("neuer absatz".into(), CommandAction::whitespace("\n\n")),
+        ("enter".into(), CommandAction::whitespace("\n")),
         ("großbuchstaben".into(), CommandAction::CapsOn),
         ("ende großbuchstaben".into(), CommandAction::CapsOff),
     ]
@@ -1011,5 +1048,133 @@ mod tests {
             processors.is_empty(),
             "Disabled voice commands should produce no processors"
         );
+    }
+
+    // ── New alias tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_dot_alias() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello dot"), "hello.");
+    }
+
+    #[test]
+    fn test_enter_produces_newline() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("first enter second"), "first\nsecond");
+    }
+
+    #[test]
+    fn test_enter_at_end() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello enter"), "hello\n");
+    }
+
+    #[test]
+    fn test_double_enter() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello enter enter world"), "hello\n\nworld");
+    }
+
+    #[test]
+    fn test_german_enter() {
+        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        assert_eq!(p.apply("hallo enter welt"), "hallo\nwelt");
+    }
+
+    // ── Whisper trailing punctuation tests ───────────────────────────────
+
+    #[test]
+    fn test_whisper_enter_with_trailing_period() {
+        // Whisper transcribes "Enter." when user says "enter" with falling intonation
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello Enter."), "hello\n");
+    }
+
+    #[test]
+    fn test_whisper_period_with_trailing_period() {
+        // Whisper outputs "Period." — should not double the dot
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello Period."), "hello.");
+    }
+
+    #[test]
+    fn test_whisper_comma_with_trailing_comma() {
+        // Whisper outputs "Comma," — should produce single comma
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello Comma, world"), "hello, world");
+    }
+
+    #[test]
+    fn test_whisper_punkt_with_trailing_period() {
+        // German: Whisper outputs "Punkt."
+        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        assert_eq!(p.apply("hallo Punkt."), "hallo.");
+    }
+
+    #[test]
+    fn test_whisper_punkt_with_trailing_ellipsis() {
+        // German: Whisper outputs "Punkt..."
+        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        assert_eq!(p.apply("hallo Punkt..."), "hallo.");
+    }
+
+    #[test]
+    fn test_whisper_komma_with_trailing_comma() {
+        // German: Whisper outputs "Komma,"
+        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        assert_eq!(p.apply("hallo Komma, welt"), "hallo, welt");
+    }
+
+    #[test]
+    fn test_whisper_fragezeichen_with_trailing_question() {
+        // German: Whisper outputs "Fragezeichen?"
+        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        assert_eq!(p.apply("was Fragezeichen?"), "was?");
+    }
+
+    #[test]
+    fn test_whisper_question_mark_with_trailing_question() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("really Question Mark?"), "really?");
+    }
+
+    #[test]
+    fn test_whisper_exclamation_mark_with_trailing_bang() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("wow Exclamation Mark!"), "wow!");
+    }
+
+    #[test]
+    fn test_whisper_trailing_punct_mid_sentence() {
+        // "Enter." followed by more text
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello Enter. world"), "hello\nworld");
+    }
+
+    #[test]
+    fn test_whisper_trailing_punct_does_not_match_partial_word() {
+        // "periodic." should NOT trigger "period" — the "ic" before "." prevents it
+        let mut p = en_processor();
+        assert_eq!(p.apply("periodic."), "periodic.");
+    }
+
+    #[test]
+    fn test_whisper_dot_with_trailing_period() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello Dot."), "hello.");
+    }
+
+    #[test]
+    fn test_whisper_new_line_with_trailing_period() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello New Line. world"), "hello\nworld");
+    }
+
+    #[test]
+    fn test_trailing_punct_only_consumed_at_word_boundary() {
+        // Random punctuation in the middle of a non-command word should not be consumed
+        let mut p = en_processor();
+        assert_eq!(p.apply("U.S.A. is great"), "U.S.A. is great");
     }
 }
