@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use voicsh::app::run_record_command;
@@ -90,6 +90,14 @@ async fn main() -> Result<()> {
         }
         Some(voicsh::cli::Commands::Config { action }) => {
             handle_config_command(action, cli.config.as_deref())?;
+        }
+        Some(voicsh::cli::Commands::Completions { shell }) => {
+            clap_complete::generate(
+                shell,
+                &mut voicsh::cli::Cli::command(),
+                "voicsh",
+                &mut std::io::stdout(),
+            );
         }
         #[cfg(feature = "benchmark")]
         Some(voicsh::cli::Commands::Benchmark {

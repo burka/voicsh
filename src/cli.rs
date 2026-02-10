@@ -3,6 +3,7 @@
 //! Provides argument parsing using clap derive macros.
 
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 use std::path::PathBuf;
 
 /// Voice typing for Wayland Linux
@@ -180,6 +181,12 @@ pub enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        shell: Shell,
     },
 }
 
