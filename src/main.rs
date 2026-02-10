@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
+use owo_colors::OwoColorize;
 use std::io::IsTerminal;
 use voicsh::app::run_record_command;
 use voicsh::audio::capture::list_devices;
@@ -252,8 +253,8 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
 
     match send_command(&socket_path, command).await {
         Ok(response) => match response {
-            Response::Ok => {
-                println!("OK");
+            Response::Ok { message } => {
+                println!("{}", message.green());
             }
             Response::Transcription { text } => {
                 println!("{}", text);
@@ -263,27 +264,52 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                 model_loaded,
                 model_name,
                 language,
+                daemon_version,
+                backend,
+                device,
             } => {
-                println!("Daemon status:");
-                println!("  Recording: {}", if recording { "yes" } else { "no" });
-                println!(
-                    "  Model loaded: {}",
-                    if model_loaded { "yes" } else { "no" }
-                );
-                if let Some(name) = model_name {
-                    println!("  Model: {}", name);
+                let client_version = voicsh::version_string();
+
+                println!("Status:");
+                // Version info
+                println!("  {}    {}", "Client:".dimmed(), client_version);
+                print!("  {}    {}", "Daemon:".dimmed(), daemon_version);
+                if client_version != daemon_version {
+                    print!(" {}", "(version mismatch!)".yellow());
                 }
+                println!();
+                // Backend + device
+                match device {
+                    Some(dev) => println!("  {}   {} — {}", "Backend:".dimmed(), backend, dev),
+                    None => println!("  {}   {}", "Backend:".dimmed(), backend),
+                }
+                // Recording
+                println!(
+                    "  {} {}",
+                    "Recording:".dimmed(),
+                    if recording { "yes" } else { "no" }
+                );
+                // Model
+                if model_loaded {
+                    if let Some(name) = model_name {
+                        println!("  {}     {}", "Model:".dimmed(), name);
+                    }
+                }
+                // Language
                 if let Some(lang) = language {
-                    println!("  Language: {}", lang);
+                    println!("  {}  {}", "Language:".dimmed(), lang);
                 }
             }
             Response::Error { message } => {
-                eprintln!("Error: {}", message);
+                eprintln!("{}", format!("Error: {}", message).red());
                 std::process::exit(1);
             }
         },
         Err(e) => {
-            eprintln!("Failed to communicate with daemon: {}", e);
+            eprintln!(
+                "{}",
+                format!("Failed to communicate with daemon: {}", e).red()
+            );
             eprintln!("Is the daemon running? Start it with: voicsh daemon");
             std::process::exit(1);
         }

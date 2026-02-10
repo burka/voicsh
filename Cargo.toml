@@ -35,6 +35,7 @@ dirs = { version = "5", optional = true }
 
 # System
 libc = "0.2"
+owo-colors = { version = "4", optional = true }
 
 # Audio
 cpal = { version = "0.15", optional = true }
@@ -60,7 +61,7 @@ full = ["whisper", "cpal-audio", "model-download", "cli", "portal", "benchmark"]
 whisper = ["whisper-rs"]
 cpal-audio = ["dep:cpal"]
 model-download = ["dep:reqwest", "dep:sha1", "dep:indicatif", "dep:futures-util", "dep:dirs"]
-cli = ["dep:clap", "dep:dirs", "dep:humantime"]
+cli = ["dep:clap", "dep:dirs", "dep:humantime", "dep:owo-colors"]
 portal = ["dep:ashpd", "dep:dirs"]
 benchmark = ["dep:sysinfo", "dep:flate2", "whisper", "model-download", "cli"]
 cuda = ["whisper-rs/cuda"]

@@ -39,7 +39,7 @@ impl Command {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     /// Command succeeded
-    Ok,
+    Ok { message: String },
     /// Command succeeded with transcription result
     Transcription { text: String },
     /// Current daemon status
@@ -48,6 +48,9 @@ pub enum Response {
         model_loaded: bool,
         model_name: Option<String>,
         language: Option<String>,
+        daemon_version: String,
+        backend: String,
+        device: Option<String>,
     },
     /// Error occurred
     Error { message: String },
@@ -151,7 +154,9 @@ mod tests {
 
     #[test]
     fn test_response_ok_json_roundtrip() {
-        let resp = Response::Ok;
+        let resp = Response::Ok {
+            message: "Done".to_string(),
+        };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
         assert_eq!(resp, deserialized);
@@ -176,6 +181,9 @@ mod tests {
             model_loaded: true,
             model_name: Some("base.en".to_string()),
             language: Some("en".to_string()),
+            daemon_version: "0.0.1+test".to_string(),
+            backend: "CPU".to_string(),
+            device: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -193,6 +201,9 @@ mod tests {
             model_loaded: false,
             model_name: None,
             language: None,
+            daemon_version: "0.0.1".to_string(),
+            backend: "CPU".to_string(),
+            device: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -206,6 +217,9 @@ mod tests {
             model_loaded: true,
             model_name: Some("base.en".to_string()),
             language: Some("en".to_string()),
+            daemon_version: "0.0.1+test".to_string(),
+            backend: "CUDA".to_string(),
+            device: Some("RTX 5060 Ti".to_string()),
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -220,6 +234,9 @@ mod tests {
             model_loaded: false,
             model_name: None,
             language: None,
+            daemon_version: "0.0.1".to_string(),
+            backend: "CPU".to_string(),
+            device: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -268,8 +285,13 @@ mod tests {
 
     #[test]
     fn test_response_json_format_examples() {
-        let ok = Response::Ok.to_json().unwrap();
-        assert_eq!(ok, r#"{"type":"ok"}"#);
+        let ok = Response::Ok {
+            message: "Done".to_string(),
+        }
+        .to_json()
+        .unwrap();
+        assert!(ok.contains(r#""type":"ok""#));
+        assert!(ok.contains(r#""message":"Done""#));
 
         let error = Response::Error {
             message: "test error".to_string(),

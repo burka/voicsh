@@ -288,15 +288,28 @@ mod tests {
                     model_loaded: true,
                     model_name: Some("test-model".to_string()),
                     language: Some("auto".to_string()),
+                    daemon_version: "0.0.1+test".to_string(),
+                    backend: "CPU".to_string(),
+                    device: None,
                 },
-                Command::Toggle => Response::Ok,
-                Command::Start => Response::Ok,
+                Command::Toggle => Response::Ok {
+                    message: "Recording started".to_string(),
+                },
+                Command::Start => Response::Ok {
+                    message: "Recording started".to_string(),
+                },
                 Command::Stop => Response::Transcription {
                     text: "test transcription".to_string(),
                 },
-                Command::Cancel => Response::Ok,
-                Command::Shutdown => Response::Ok,
-                Command::Follow => Response::Ok,
+                Command::Cancel => Response::Ok {
+                    message: "Recording cancelled".to_string(),
+                },
+                Command::Shutdown => Response::Ok {
+                    message: "Daemon shutdown initiated".to_string(),
+                },
+                Command::Follow => Response::Ok {
+                    message: "Following".to_string(),
+                },
             }
         }
     }
@@ -402,11 +415,17 @@ mod tests {
                 model_loaded,
                 model_name,
                 language,
+                daemon_version,
+                backend,
+                device,
             } => {
                 assert!(!recording);
                 assert!(model_loaded);
                 assert_eq!(model_name, Some("test-model".to_string()));
                 assert_eq!(language, Some("auto".to_string()));
+                assert_eq!(daemon_version, "0.0.1+test");
+                assert_eq!(backend, "CPU");
+                assert_eq!(device, None);
             }
             _ => panic!("Expected Status response"),
         }
@@ -457,7 +476,10 @@ mod tests {
         // Wait for all clients to complete
         for handle in client_handles {
             let response = handle.await.unwrap();
-            assert!(matches!(response, Response::Status { .. } | Response::Ok));
+            assert!(matches!(
+                response,
+                Response::Status { .. } | Response::Ok { .. }
+            ));
         }
 
         // Cleanup
@@ -554,7 +576,7 @@ mod tests {
             let response = Response::from_json(response_str.trim()).unwrap();
 
             match expected_type {
-                "Ok" => assert!(matches!(response, Response::Ok)),
+                "Ok" => assert!(matches!(response, Response::Ok { .. })),
                 _ => panic!("Unexpected expected type"),
             }
         }

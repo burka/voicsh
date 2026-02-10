@@ -8,6 +8,18 @@
 use std::process::Command;
 
 fn main() {
+    // Embed git short hash for version string
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--short=7", "HEAD"])
+        .output()
+        && output.status.success()
+    {
+        let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        println!("cargo:rustc-env=GIT_HASH={}", hash);
+    }
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/refs/heads/");
+
     if cfg!(feature = "cuda") {
         check_cuda();
     }

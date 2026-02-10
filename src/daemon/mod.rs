@@ -33,6 +33,44 @@ pub struct DaemonState {
     pub pipeline_event_tx: crossbeam_channel::Sender<DaemonEvent>,
     /// Crossbeam receiver (held to keep channel alive; bridge thread clones it)
     pipeline_event_rx: crossbeam_channel::Receiver<DaemonEvent>,
+    /// GPU/CPU backend name (e.g., "CUDA", "CPU")
+    pub backend: String,
+    /// GPU or CPU device description (e.g., "RTX 5060 Ti (16 GB)")
+    pub device: Option<String>,
+}
+
+/// Detect GPU device name and memory from nvidia-smi.
+fn detect_gpu_device() -> Option<String> {
+    let output = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let mut parts = text.splitn(2, ", ");
+    let name = parts.next()?;
+    let name = name.strip_prefix("NVIDIA ").unwrap_or(name);
+    let memory_mb: u64 = parts.next()?.trim().parse().ok()?;
+    let memory_gb = memory_mb / 1024;
+    Some(format!("{name} ({memory_gb} GB)"))
+}
+
+/// Detect CPU model name from /proc/cpuinfo.
+fn detect_cpu_device() -> Option<String> {
+    let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+    let model = cpuinfo
+        .lines()
+        .find(|l| l.starts_with("model name"))?
+        .split(':')
+        .nth(1)?
+        .trim()
+        .to_string();
+    Some(model)
 }
 
 impl DaemonState {
@@ -47,6 +85,9 @@ impl DaemonState {
         transcriber: Arc<dyn Transcriber>,
         #[cfg(feature = "portal")] portal: Option<Arc<PortalSession>>,
     ) -> Self {
+        let backend = crate::defaults::gpu_backend().to_string();
+        let device = detect_gpu_device().or_else(detect_cpu_device);
+
         let (event_tx, _) = tokio::sync::broadcast::channel(256);
         let (pipeline_event_tx, pipeline_event_rx) = crossbeam_channel::bounded(256);
         Self {
@@ -58,6 +99,8 @@ impl DaemonState {
             event_tx,
             pipeline_event_tx,
             pipeline_event_rx,
+            backend,
+            device,
         }
     }
 
