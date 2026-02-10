@@ -106,13 +106,16 @@ The indicator shows three states: disconnected (grey mic), idle (default mic), a
 
 ## Install
 
-### Build from source
+### From source (via cargo)
 
 ```bash
-git clone https://github.com/burka/voicsh.git
-cd voicsh
-cargo build --release
-cp target/release/voicsh ~/.local/bin/
+cargo install --git https://github.com/burka/voicsh.git
+```
+
+With GPU acceleration:
+
+```bash
+cargo install --git https://github.com/burka/voicsh.git --features cuda
 ```
 
 ### GPU acceleration
@@ -150,6 +153,19 @@ voicsh check    # verify what's available
 ```
 
 Pipe mode (`cat file.wav | voicsh`) has no runtime dependencies beyond the binary.
+
+### Shell completions
+
+```bash
+# Bash
+voicsh completions bash > ~/.local/share/bash-completion/completions/voicsh
+
+# Zsh
+voicsh completions zsh > ~/.local/share/zsh/site-functions/_voicsh
+
+# Fish
+voicsh completions fish > ~/.config/fish/completions/voicsh.fish
+```
 
 ## Quick start: `voicsh init`
 

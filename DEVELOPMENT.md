@@ -4,6 +4,16 @@
 
 Requires Rust (via rustup), cmake, pkg-config, and ALSA development headers. On Debian/Ubuntu: `sudo apt install cmake pkg-config libasound2-dev`. On Fedora: `sudo dnf install cmake pkg-config alsa-lib-devel`. For runtime text injection, install `wl-clipboard` plus either `wtype` (wlroots) or `ydotool` (fallback).
 
+## Local Install
+
+```bash
+cargo install --path=.                   # CPU only
+cargo install --features=cuda --path=.   # NVIDIA GPU
+cargo install --features=vulkan --path=. # Vulkan GPU
+```
+
+Installs to `~/.cargo/bin/voicsh`.
+
 ## Testing
 
 ### Commands
