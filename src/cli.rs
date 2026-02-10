@@ -154,6 +154,10 @@ pub enum Commands {
         /// Language for transcription (default: auto). Examples: auto, en, de, es, fr
         #[arg(long, value_name = "LANG", default_value = "auto")]
         language: String,
+
+        /// Include quantized models as candidates (smaller/faster but lower precision)
+        #[arg(long)]
+        allow_quantized: bool,
     },
 
     /// Install systemd user service
@@ -553,8 +557,12 @@ mod tests {
     fn test_parse_init() {
         let cli = Cli::try_parse_from(["voicsh", "init"]).unwrap();
         match cli.command {
-            Some(Commands::Init { language }) => {
+            Some(Commands::Init {
+                language,
+                allow_quantized,
+            }) => {
                 assert_eq!(language, "auto");
+                assert!(!allow_quantized);
             }
             _ => panic!("Expected Init command"),
         }
@@ -565,8 +573,29 @@ mod tests {
     fn test_parse_init_with_language() {
         let cli = Cli::try_parse_from(["voicsh", "init", "--language", "de"]).unwrap();
         match cli.command {
-            Some(Commands::Init { language }) => {
+            Some(Commands::Init {
+                language,
+                allow_quantized,
+            }) => {
                 assert_eq!(language, "de");
+                assert!(!allow_quantized);
+            }
+            _ => panic!("Expected Init command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_parse_init_allow_quantized() {
+        let cli = Cli::try_parse_from(["voicsh", "init", "--allow-quantized", "--language", "en"])
+            .unwrap();
+        match cli.command {
+            Some(Commands::Init {
+                language,
+                allow_quantized,
+            }) => {
+                assert_eq!(language, "en");
+                assert!(allow_quantized);
             }
             _ => panic!("Expected Init command"),
         }

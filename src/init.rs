@@ -233,7 +233,11 @@ pub fn filter_candidates<'a>(
 }
 
 /// Collect models from catalog and HuggingFace, deduplicate, and estimate RTF.
-async fn collect_all_candidates(probe_rtf: f64, probe_size: u32) -> Vec<ModelCandidate> {
+async fn collect_all_candidates(
+    probe_rtf: f64,
+    probe_size: u32,
+    allow_quantized: bool,
+) -> Vec<ModelCandidate> {
     println!("Fetching available models from HuggingFace...");
     let remote_models = match fetch_remote_models().await {
         Ok(models) => models,
@@ -260,8 +264,7 @@ async fn collect_all_candidates(probe_rtf: f64, probe_size: u32) -> Vec<ModelCan
         }
     }
     for m in &remote_models {
-        // Skip quantized models — only full-precision models are trustworthy
-        if !parse_quantization(&m.name).is_empty() {
+        if !allow_quantized && !parse_quantization(&m.name).is_empty() {
             continue;
         }
         if seen.insert(m.name.clone()) {
@@ -428,7 +431,7 @@ async fn verify_or_fallback(
 /// Benchmarks a small probe model, estimates performance for all available
 /// models, picks the highest-quality model that runs faster than real-time,
 /// downloads it, verifies the estimate, and saves the configuration.
-pub async fn run_init(language: &str, verbose: u8) -> anyhow::Result<()> {
+pub async fn run_init(language: &str, verbose: u8, allow_quantized: bool) -> anyhow::Result<()> {
     println!("voicsh init: Auto-tuning for your hardware...");
     println!();
 
@@ -514,7 +517,8 @@ pub async fn run_init(language: &str, verbose: u8) -> anyhow::Result<()> {
     println!();
 
     // ── Step 4: Discover models and estimate performance ────────────────
-    let candidates = collect_all_candidates(probe_result.realtime_factor, probe_size).await;
+    let candidates =
+        collect_all_candidates(probe_result.realtime_factor, probe_size, allow_quantized).await;
 
     println!("Estimating performance for {} models...", candidates.len());
     let viable = filter_candidates(&candidates, sys_info.available_memory_mb, disk_mb, language);

@@ -98,8 +98,11 @@ async fn main() -> Result<()> {
             .await?;
         }
         #[cfg(feature = "benchmark")]
-        Some(voicsh::cli::Commands::Init { language }) => {
-            voicsh::init::run_init(&language, cli.verbose).await?;
+        Some(voicsh::cli::Commands::Init {
+            language,
+            allow_quantized,
+        }) => {
+            voicsh::init::run_init(&language, cli.verbose, allow_quantized).await?;
         }
     }
 
