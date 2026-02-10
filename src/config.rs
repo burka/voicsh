@@ -1,5 +1,6 @@
 use crate::defaults;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 #[cfg(feature = "cli")]
@@ -13,6 +14,7 @@ pub struct Config {
     pub stt: SttConfig,
     pub input: InputConfig,
     pub voice_commands: VoiceCommandConfig,
+    pub transcription: TranscriptionConfig,
 }
 
 /// Audio capture configuration
@@ -59,6 +61,31 @@ impl Default for VoiceCommandConfig {
             commands: std::collections::HashMap::new(),
         }
     }
+}
+
+/// Transcription post-processing configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct TranscriptionConfig {
+    pub hallucination_filters: HallucinationFilterConfig,
+}
+
+/// Hallucination filter configuration.
+///
+/// All built-in defaults from all languages are always active (Whisper sometimes
+/// returns text in the wrong language, so filtering by configured language is unreliable).
+///
+/// Users can add extra phrases or override specific language defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct HallucinationFilterConfig {
+    /// Extra phrases to filter, merged on top of built-in defaults.
+    pub add: Vec<String>,
+    /// Per-language overrides. If a language key is present, it REPLACES
+    /// that language's built-in defaults. Empty vec = disable that language.
+    /// Languages not listed here keep their built-in defaults.
+    #[serde(flatten)]
+    pub overrides: HashMap<String, Vec<String>>,
 }
 
 /// Input method enumeration
@@ -215,6 +242,348 @@ impl Config {
         };
         config.stt.model = model.to_string();
         config.save(path)
+    }
+
+    /// Get a config value by dotted path (e.g. "stt.model").
+    pub fn get_value_by_path(&self, key: &str) -> crate::error::Result<String> {
+        let value = toml::Value::try_from(self).map_err(|e| {
+            crate::error::VoicshError::Other(format!("Failed to serialize config: {e}"))
+        })?;
+        let leaf = navigate_toml_path(&value, key)?;
+        Ok(format_toml_value(leaf))
+    }
+
+    /// Set a config value by dotted path and save.
+    ///
+    /// Loads the existing config (or defaults), sets the value, validates
+    /// by deserializing back, then saves.
+    pub fn set_value_by_path(path: &Path, key: &str, value_str: &str) -> crate::error::Result<()> {
+        let config = match Self::load(path) {
+            Ok(cfg) => cfg,
+            Err(crate::error::VoicshError::ConfigFileNotFound { .. }) => Self::default(),
+            Err(e) => return Err(e),
+        };
+
+        let mut root = toml::Value::try_from(&config).map_err(|e| {
+            crate::error::VoicshError::Other(format!("Failed to serialize config: {e}"))
+        })?;
+
+        let new_value = parse_toml_value(value_str);
+        set_toml_path(&mut root, key, new_value)?;
+
+        // Validate by deserializing back
+        let toml_str = toml::to_string_pretty(&root).map_err(|e| {
+            crate::error::VoicshError::Other(format!("Failed to serialize config: {e}"))
+        })?;
+        let _validated: Config = toml::from_str(&toml_str)?;
+
+        // Save the validated config
+        _validated.save(path)
+    }
+
+    /// Serialize this configuration to pretty TOML for display.
+    pub fn to_display_toml(&self) -> crate::error::Result<String> {
+        toml::to_string_pretty(self).map_err(|e| {
+            crate::error::VoicshError::Other(format!("Failed to serialize config to TOML: {e}"))
+        })
+    }
+
+    /// Generate a commented TOML template documenting all fields and defaults.
+    pub fn dump_template() -> String {
+        let defaults = default_hallucination_filters();
+        let mut lang_keys: Vec<&String> = defaults.keys().collect();
+        lang_keys.sort();
+
+        let mut out = String::new();
+        out.push_str("# voicsh configuration\n");
+        out.push_str("# Save to: ~/.config/voicsh/config.toml\n");
+        out.push('\n');
+
+        out.push_str("[audio]\n");
+        out.push_str("# device = \"hw:0,0\"  # Audio input device (default: system default)\n");
+        out.push_str(&format!(
+            "# sample_rate = {}  # Sample rate in Hz\n",
+            defaults::SAMPLE_RATE
+        ));
+        out.push_str(&format!(
+            "# vad_threshold = {}  # Voice activity detection threshold (0.0-1.0)\n",
+            defaults::VAD_THRESHOLD
+        ));
+        out.push_str(&format!(
+            "# silence_duration_ms = {}  # Silence before speech end (ms)\n",
+            defaults::SILENCE_DURATION_MS
+        ));
+        out.push('\n');
+
+        out.push_str("[stt]\n");
+        out.push_str(&format!(
+            "# model = \"{}\"  # Whisper model name\n",
+            defaults::DEFAULT_MODEL
+        ));
+        out.push_str(&format!(
+            "# language = \"{}\"  # Language code (auto, en, de, es, fr, ...)\n",
+            defaults::DEFAULT_LANGUAGE
+        ));
+        out.push_str("# fan_out = false  # Run multilingual + English models in parallel\n");
+        out.push('\n');
+
+        out.push_str("[input]\n");
+        out.push_str("# method = \"Clipboard\"  # Input method: Clipboard or Direct\n");
+        out.push_str("# paste_key = \"auto\"  # Paste key combo (auto, ctrl+v, ctrl+shift+v)\n");
+        out.push('\n');
+
+        out.push_str("[voice_commands]\n");
+        out.push_str("# enabled = true  # Enable voice command processing\n");
+        out.push_str("# [voice_commands.commands]\n");
+        out.push_str("# \"smiley\" = \":)\"  # Custom voice command mappings\n");
+        out.push('\n');
+
+        out.push_str("[transcription.hallucination_filters]\n");
+        out.push_str("# Extra phrases to filter (added on top of all built-in defaults):\n");
+        out.push_str("# add = [\"my custom phrase\", \"another artifact\"]\n");
+        out.push_str("#\n");
+        out.push_str(
+            "# Override a specific language's built-in defaults (replaces, not merges):\n",
+        );
+        out.push_str("# en = [\"Only these for English\"]  # replaces English defaults\n");
+        out.push_str("# ko = []  # disables Korean defaults entirely\n");
+        out.push_str("#\n");
+        out.push_str("# Built-in defaults per language (always active unless overridden):\n");
+
+        for lang in &lang_keys {
+            let phrases = &defaults[lang.as_str()];
+            let quoted: Vec<String> = phrases.iter().map(|p| format!("\"{}\"", p)).collect();
+            out.push_str(&format!("# {} = [{}]\n", lang, quoted.join(", ")));
+        }
+
+        out
+    }
+}
+
+/// Built-in hallucination filter defaults keyed by language.
+pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
+    let mut m = HashMap::new();
+    m.insert(
+        "en".into(),
+        vec![
+            "Thank you.".into(),
+            "Thanks for watching!".into(),
+            "Thanks for watching.".into(),
+            "Thank you for watching.".into(),
+            "Thank you for watching!".into(),
+            "Bye.".into(),
+            "Bye!".into(),
+            "Goodbye.".into(),
+            "you".into(),
+        ],
+    );
+    m.insert(
+        "de".into(),
+        vec![
+            "Vielen Dank.".into(),
+            "Vielen Dank!".into(),
+            "Danke.".into(),
+            "Danke!".into(),
+            "Danke fürs Zuschauen!".into(),
+            "Danke fürs Zuschauen.".into(),
+            "Tschüss.".into(),
+            "Tschüss!".into(),
+            "Untertitel von Stephanie Geiges".into(),
+        ],
+    );
+    m.insert(
+        "es".into(),
+        vec![
+            "Gracias.".into(),
+            "Gracias!".into(),
+            "Gracias por ver.".into(),
+            "Gracias por ver!".into(),
+            "Adiós.".into(),
+        ],
+    );
+    m.insert(
+        "fr".into(),
+        vec![
+            "Merci.".into(),
+            "Merci !".into(),
+            "Merci d'avoir regardé.".into(),
+            "Merci d'avoir regardé !".into(),
+            "Au revoir.".into(),
+            "Sous-titrage ST' 501".into(),
+        ],
+    );
+    m.insert(
+        "pt".into(),
+        vec![
+            "Obrigado.".into(),
+            "Obrigado!".into(),
+            "Obrigada.".into(),
+            "Obrigada!".into(),
+            "Tchau.".into(),
+            "Legendas pela comunidade Amara.org".into(),
+        ],
+    );
+    m.insert(
+        "it".into(),
+        vec![
+            "Grazie.".into(),
+            "Grazie!".into(),
+            "Grazie per aver guardato.".into(),
+            "Grazie per aver guardato!".into(),
+            "Arrivederci.".into(),
+            "Sottotitoli creati dalla comunità Amara.org".into(),
+        ],
+    );
+    m.insert(
+        "ru".into(),
+        vec![
+            "Спасибо.".into(),
+            "Спасибо!".into(),
+            "Спасибо за просмотр.".into(),
+            "Спасибо за просмотр!".into(),
+            "До свидания.".into(),
+            "Субтитры сделал DimaTorzworworworworworworworworworworworwor".into(),
+        ],
+    );
+    m.insert(
+        "ja".into(),
+        vec![
+            "ありがとうございました。".into(),
+            "ありがとうございます。".into(),
+            "ご視聴ありがとうございました。".into(),
+            "おやすみなさい。".into(),
+        ],
+    );
+    m.insert(
+        "zh".into(),
+        vec![
+            "谢谢。".into(),
+            "谢谢！".into(),
+            "谢谢观看。".into(),
+            "谢谢观看！".into(),
+            "再见。".into(),
+        ],
+    );
+    m.insert(
+        "ko".into(),
+        vec![
+            "감사합니다.".into(),
+            "감사합니다!".into(),
+            "시청해 주셔서 감사합니다.".into(),
+            "안녕히 가세요.".into(),
+        ],
+    );
+    m
+}
+
+/// Resolve the active hallucination filter list from config.
+///
+/// 1. Start with built-in defaults per language
+/// 2. For each language key in overrides, replace that language's defaults
+/// 3. Flatten all languages into a single list
+/// 4. Append all entries from `add`
+/// 5. Return combined list (lowercased for case-insensitive matching)
+pub fn resolve_hallucination_filters(config: &HallucinationFilterConfig) -> Vec<String> {
+    let mut defaults = default_hallucination_filters();
+
+    // Apply per-language overrides
+    for (lang, phrases) in &config.overrides {
+        defaults.insert(lang.clone(), phrases.clone());
+    }
+
+    // Flatten all languages + add custom phrases
+    let mut result: Vec<String> = defaults
+        .into_values()
+        .flat_map(|phrases| phrases.into_iter())
+        .collect();
+    result.extend(config.add.iter().cloned());
+
+    // Lowercase for case-insensitive matching at runtime
+    result.iter().map(|s| s.to_lowercase()).collect()
+}
+
+/// Navigate a TOML value by dotted path.
+fn navigate_toml_path<'a>(
+    value: &'a toml::Value,
+    path: &str,
+) -> crate::error::Result<&'a toml::Value> {
+    let parts: Vec<&str> = path.split('.').collect();
+    let mut current = value;
+    for part in &parts {
+        current =
+            current
+                .get(part)
+                .ok_or_else(|| crate::error::VoicshError::ConfigInvalidValue {
+                    key: path.to_string(),
+                    message: format!("key '{}' not found", part),
+                })?;
+    }
+    Ok(current)
+}
+
+/// Set a value in a TOML tree at a dotted path, creating intermediate tables as needed.
+fn set_toml_path(
+    root: &mut toml::Value,
+    path: &str,
+    value: toml::Value,
+) -> crate::error::Result<()> {
+    let parts: Vec<&str> = path.split('.').collect();
+    let mut current = root;
+    for (i, part) in parts.iter().enumerate() {
+        if i == parts.len() - 1 {
+            // Set the leaf value
+            if let toml::Value::Table(table) = current {
+                table.insert(part.to_string(), value);
+                return Ok(());
+            }
+            return Err(crate::error::VoicshError::ConfigInvalidValue {
+                key: path.to_string(),
+                message: format!("'{}' is not a table", parts[..i].join(".")),
+            });
+        }
+        // Navigate or create intermediate table
+        if let toml::Value::Table(table) = current {
+            current = table
+                .entry(part.to_string())
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+        } else {
+            return Err(crate::error::VoicshError::ConfigInvalidValue {
+                key: path.to_string(),
+                message: format!("'{}' is not a table", parts[..i].join(".")),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Parse a string into a TOML value, trying integer, float, bool, then string.
+fn parse_toml_value(s: &str) -> toml::Value {
+    if let Ok(i) = s.parse::<i64>() {
+        return toml::Value::Integer(i);
+    }
+    if let Ok(f) = s.parse::<f64>() {
+        return toml::Value::Float(f);
+    }
+    match s {
+        "true" => return toml::Value::Boolean(true),
+        "false" => return toml::Value::Boolean(false),
+        _ => {}
+    }
+    toml::Value::String(s.to_string())
+}
+
+/// Format a TOML value for display. Strings are unwrapped (no quotes),
+/// tables and arrays are pretty-printed.
+fn format_toml_value(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(s) => s.clone(),
+        toml::Value::Integer(i) => i.to_string(),
+        toml::Value::Float(f) => f.to_string(),
+        toml::Value::Boolean(b) => b.to_string(),
+        toml::Value::Table(_) | toml::Value::Array(_) => {
+            toml::to_string_pretty(value).unwrap_or_else(|_| format!("{value:?}"))
+        }
+        toml::Value::Datetime(dt) => dt.to_string(),
     }
 }
 
@@ -800,5 +1169,210 @@ mod tests {
         assert!(path.exists());
         let reloaded = Config::load(&path).unwrap();
         assert_eq!(reloaded, Config::default());
+    }
+
+    // ── Hallucination filter tests ──────────────────────────────────────
+
+    #[test]
+    fn test_default_hallucination_filters_has_expected_languages() {
+        let defaults = default_hallucination_filters();
+        let expected_langs = ["en", "de", "es", "fr", "pt", "it", "ru", "ja", "zh", "ko"];
+        for lang in &expected_langs {
+            assert!(
+                defaults.contains_key(*lang),
+                "Missing language key: {}",
+                lang
+            );
+            assert!(
+                !defaults[*lang].is_empty(),
+                "Language {} has no defaults",
+                lang
+            );
+        }
+        assert_eq!(defaults.len(), expected_langs.len());
+    }
+
+    #[test]
+    fn test_transcription_config_omitted_uses_empty_defaults() {
+        let toml_content = r#"
+            [stt]
+            model = "small.en"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert!(config.transcription.hallucination_filters.add.is_empty());
+        assert!(
+            config
+                .transcription
+                .hallucination_filters
+                .overrides
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_resolve_filters_no_overrides() {
+        let config = HallucinationFilterConfig::default();
+        let resolved = resolve_hallucination_filters(&config);
+        // Should contain all built-in defaults from all languages
+        assert!(!resolved.is_empty());
+        // Verify at least one phrase from each of several languages
+        assert!(resolved.contains(&"thank you.".to_string()));
+        assert!(resolved.contains(&"vielen dank.".to_string()));
+        assert!(resolved.contains(&"gracias.".to_string()));
+        assert!(resolved.contains(&"merci.".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_filters_add_merges() {
+        let config = HallucinationFilterConfig {
+            add: vec!["Custom Phrase".to_string()],
+            overrides: HashMap::new(),
+        };
+        let resolved = resolve_hallucination_filters(&config);
+        assert!(resolved.contains(&"custom phrase".to_string()));
+        // Built-in defaults should still be present
+        assert!(resolved.contains(&"thank you.".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_filters_override_replaces_language() {
+        let mut overrides = HashMap::new();
+        overrides.insert("en".to_string(), vec!["Only This".to_string()]);
+        let config = HallucinationFilterConfig {
+            add: vec![],
+            overrides,
+        };
+        let resolved = resolve_hallucination_filters(&config);
+        // Should have the override
+        assert!(resolved.contains(&"only this".to_string()));
+        // Should NOT have the original English defaults
+        assert!(!resolved.contains(&"thank you.".to_string()));
+        // Other languages still present
+        assert!(resolved.contains(&"vielen dank.".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_filters_override_empty_disables_language() {
+        let mut overrides = HashMap::new();
+        overrides.insert("ko".to_string(), vec![]);
+        let config = HallucinationFilterConfig {
+            add: vec![],
+            overrides,
+        };
+        let resolved = resolve_hallucination_filters(&config);
+        // Korean defaults should be gone
+        assert!(!resolved.contains(&"감사합니다.".to_string()));
+        // Others still present
+        assert!(resolved.contains(&"thank you.".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_filters_add_plus_override() {
+        let mut overrides = HashMap::new();
+        overrides.insert("en".to_string(), vec!["Custom English".to_string()]);
+        let config = HallucinationFilterConfig {
+            add: vec!["Extra".to_string()],
+            overrides,
+        };
+        let resolved = resolve_hallucination_filters(&config);
+        assert!(resolved.contains(&"custom english".to_string()));
+        assert!(resolved.contains(&"extra".to_string()));
+        assert!(!resolved.contains(&"thank you.".to_string()));
+        assert!(resolved.contains(&"vielen dank.".to_string()));
+    }
+
+    #[test]
+    fn test_get_value_by_path_string() {
+        let config = Config::default();
+        let value = config.get_value_by_path("stt.model").unwrap();
+        assert_eq!(value, "base");
+    }
+
+    #[test]
+    fn test_get_value_by_path_integer() {
+        let config = Config::default();
+        let value = config.get_value_by_path("audio.sample_rate").unwrap();
+        assert_eq!(value, "16000");
+    }
+
+    #[test]
+    fn test_get_value_by_path_invalid() {
+        let config = Config::default();
+        let result = config.get_value_by_path("nonexistent.key");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not found"),
+            "Error should mention 'not found': {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_set_value_by_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        // Create a config file first
+        let config = Config::default();
+        config.save(&path).unwrap();
+
+        // Set a value
+        Config::set_value_by_path(&path, "stt.model", "small.en").unwrap();
+
+        // Verify it was set
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(reloaded.stt.model, "small.en");
+        // Other values preserved
+        assert_eq!(reloaded.audio.sample_rate, 16000);
+    }
+
+    #[test]
+    fn test_to_display_toml_roundtrip() {
+        let config = Config::default();
+        let toml_str = config.to_display_toml().unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed, config);
+    }
+
+    #[test]
+    fn test_dump_template_contains_sections() {
+        let template = Config::dump_template();
+        assert!(template.contains("[audio]"), "Missing [audio] section");
+        assert!(template.contains("[stt]"), "Missing [stt] section");
+        assert!(template.contains("[input]"), "Missing [input] section");
+        assert!(
+            template.contains("[voice_commands]"),
+            "Missing [voice_commands] section"
+        );
+        assert!(
+            template.contains("[transcription.hallucination_filters]"),
+            "Missing [transcription.hallucination_filters] section"
+        );
+    }
+
+    #[test]
+    fn test_dump_template_contains_hallucination_defaults() {
+        let template = Config::dump_template();
+        assert!(
+            template.contains("Thank you."),
+            "Missing English hallucination default"
+        );
+        assert!(
+            template.contains("Vielen Dank."),
+            "Missing German hallucination default"
+        );
+        assert!(
+            template.contains("Gracias."),
+            "Missing Spanish hallucination default"
+        );
+        assert!(
+            template.contains("Merci."),
+            "Missing French hallucination default"
+        );
     }
 }

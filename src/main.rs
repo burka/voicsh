@@ -3,7 +3,7 @@ use clap::Parser;
 use std::io::IsTerminal;
 use voicsh::app::run_record_command;
 use voicsh::audio::capture::list_devices;
-use voicsh::cli::{Cli, ModelsAction};
+use voicsh::cli::{Cli, ConfigAction, ModelsAction};
 use voicsh::config::Config;
 use voicsh::daemon::run_daemon;
 use voicsh::diagnostics::check_dependencies;
@@ -77,6 +77,9 @@ async fn main() -> Result<()> {
         }
         Some(voicsh::cli::Commands::InstallService) => {
             install_systemd_service()?;
+        }
+        Some(voicsh::cli::Commands::Config { action }) => {
+            handle_config_command(action, cli.config.as_deref())?;
         }
         #[cfg(feature = "benchmark")]
         Some(voicsh::cli::Commands::Benchmark {
@@ -188,6 +191,47 @@ async fn handle_models_command(action: ModelsAction) -> Result<()> {
             let path = download_model(&name, true).await?;
             println!("Model '{}' installed successfully", name);
             println!("Location: {}", path.display());
+        }
+    }
+    Ok(())
+}
+
+/// Handle configuration commands.
+fn handle_config_command(
+    action: ConfigAction,
+    custom_path: Option<&std::path::Path>,
+) -> Result<()> {
+    let config_path = custom_path
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(Config::default_path);
+
+    match action {
+        ConfigAction::Get { key } => {
+            let config = Config::load_or_default(&config_path).with_env_overrides();
+            match config.get_value_by_path(&key) {
+                Ok(value) => println!("{}", value),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ConfigAction::Set { key, value } => {
+            Config::set_value_by_path(&config_path, &key, &value)?;
+            println!("Set {} = {}", key, value);
+        }
+        ConfigAction::List => {
+            let config = Config::load_or_default(&config_path).with_env_overrides();
+            match config.to_display_toml() {
+                Ok(toml) => print!("{}", toml),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        ConfigAction::Dump => {
+            print!("{}", Config::dump_template());
         }
     }
     Ok(())

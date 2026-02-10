@@ -33,6 +33,8 @@ pub struct PipelineConfig {
     pub quiet: bool,
     /// Sample rate
     pub sample_rate: u32,
+    /// Pre-resolved hallucination filter phrases (lowercased)
+    pub hallucination_filters: Vec<String>,
     /// Channel buffer sizes
     pub audio_buffer: usize,
     pub vad_buffer: usize,
@@ -50,6 +52,7 @@ impl Default for PipelineConfig {
             auto_level: true,
             quiet: false,
             sample_rate: 16000,
+            hallucination_filters: Vec::new(),
             audio_buffer: 1024,
             vad_buffer: 1024,
             chunk_buffer: 16,
@@ -217,8 +220,9 @@ impl Pipeline {
             .with_verbosity(self.config.verbosity)
             .with_flush_tx(chunk_tx.clone());
 
-        let transcriber_station =
-            TranscriberStation::new(transcriber.clone()).with_verbose(self.config.verbosity >= 2);
+        let transcriber_station = TranscriberStation::new(transcriber.clone())
+            .with_verbose(self.config.verbosity >= 2)
+            .with_hallucination_filters(self.config.hallucination_filters.clone());
 
         // Create sink station with result channel and session context
         let (result_tx, result_rx) = bounded(1);

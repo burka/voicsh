@@ -46,7 +46,7 @@ pub use pipeline::orchestrator::{Pipeline, PipelineConfig, PipelineHandle};
 pub use error::{Result, VoicshError};
 
 // Config
-pub use config::{Config, InputMethod};
+pub use config::{Config, InputMethod, resolve_hallucination_filters};
 
 // Station framework (for advanced users)
 pub use pipeline::error::{ErrorReporter, StationError};

@@ -3,7 +3,7 @@
 use crate::audio::capture::CpalAudioSource;
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
-use crate::config::Config;
+use crate::config::{Config, resolve_hallucination_filters};
 use crate::daemon::DaemonState;
 use crate::input::focused_window::reset_detection_cache;
 use crate::ipc::protocol::{Command, Response};
@@ -102,6 +102,8 @@ impl DaemonCommandHandler {
         // Whisper models require 16kHz sample rate
         const WHISPER_SAMPLE_RATE: u32 = 16000;
 
+        let hallucination_filters =
+            resolve_hallucination_filters(&config.transcription.hallucination_filters);
         PipelineConfig {
             vad: VadConfig {
                 speech_threshold: config.audio.vad_threshold,
@@ -113,6 +115,7 @@ impl DaemonCommandHandler {
             auto_level: true,
             quiet: self.quiet,
             sample_rate: WHISPER_SAMPLE_RATE,
+            hallucination_filters,
             ..Default::default()
         }
     }

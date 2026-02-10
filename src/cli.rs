@@ -162,6 +162,33 @@ pub enum Commands {
 
     /// Install systemd user service
     InstallService,
+
+    /// View and modify configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+/// Configuration management actions
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Get a configuration value by key (e.g., stt.model)
+    Get {
+        /// Dotted key path (e.g., stt.model, audio.sample_rate)
+        key: String,
+    },
+    /// Set a configuration value by key
+    Set {
+        /// Dotted key path (e.g., stt.model, audio.sample_rate)
+        key: String,
+        /// Value to set
+        value: String,
+    },
+    /// List all current configuration values
+    List,
+    /// Dump a commented configuration template
+    Dump,
 }
 
 /// Model management actions
@@ -707,5 +734,81 @@ mod tests {
     fn test_buffer_cli_arg_bare_number() {
         let cli = Cli::try_parse_from(["voicsh", "-b", "30"]).unwrap();
         assert_eq!(cli.buffer, 30);
+    }
+
+    // ── Config command tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_config_get() {
+        let cli = Cli::try_parse_from(["voicsh", "config", "get", "stt.model"]).unwrap();
+        match cli.command {
+            Some(Commands::Config { action }) => match action {
+                ConfigAction::Get { key } => {
+                    assert_eq!(key, "stt.model");
+                }
+                _ => panic!("Expected Get action"),
+            },
+            _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_set() {
+        let cli =
+            Cli::try_parse_from(["voicsh", "config", "set", "stt.model", "small.en"]).unwrap();
+        match cli.command {
+            Some(Commands::Config { action }) => match action {
+                ConfigAction::Set { key, value } => {
+                    assert_eq!(key, "stt.model");
+                    assert_eq!(value, "small.en");
+                }
+                _ => panic!("Expected Set action"),
+            },
+            _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_list() {
+        let cli = Cli::try_parse_from(["voicsh", "config", "list"]).unwrap();
+        match cli.command {
+            Some(Commands::Config { action }) => match action {
+                ConfigAction::List => {}
+                _ => panic!("Expected List action"),
+            },
+            _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_dump() {
+        let cli = Cli::try_parse_from(["voicsh", "config", "dump"]).unwrap();
+        match cli.command {
+            Some(Commands::Config { action }) => match action {
+                ConfigAction::Dump => {}
+                _ => panic!("Expected Dump action"),
+            },
+            _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_config_requires_subcommand() {
+        let result = Cli::try_parse_from(["voicsh", "config"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_get_requires_key() {
+        let result = Cli::try_parse_from(["voicsh", "config", "get"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_set_requires_key_and_value() {
+        let result = Cli::try_parse_from(["voicsh", "config", "set"]);
+        assert!(result.is_err());
+        let result = Cli::try_parse_from(["voicsh", "config", "set", "stt.model"]);
+        assert!(result.is_err());
     }
 }

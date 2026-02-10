@@ -7,7 +7,7 @@ use crate::audio::capture::{CpalAudioSource, suppress_audio_warnings};
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::audio::wav::WavAudioSource;
-use crate::config::Config;
+use crate::config::{Config, resolve_hallucination_filters};
 use crate::defaults;
 use crate::error::{Result, VoicshError};
 use crate::input::injector::SystemCommandExecutor;
@@ -79,6 +79,8 @@ pub async fn run_pipe_command(
     // Read WAV from stdin
     let audio_source: Box<dyn AudioSource> = Box::new(WavAudioSource::from_stdin()?);
 
+    let hallucination_filters =
+        resolve_hallucination_filters(&config.transcription.hallucination_filters);
     let pipeline_config = PipelineConfig {
         vad: VadConfig {
             speech_threshold: config.audio.vad_threshold,
@@ -91,6 +93,7 @@ pub async fn run_pipe_command(
         quiet: true,       // No meter display for pipe mode
         sample_rate: 16000,
         chunk_buffer: chunk_buffer_from_secs(buffer_secs),
+        hallucination_filters,
         ..Default::default()
     };
 
@@ -246,6 +249,8 @@ async fn run_continuous(
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
 
+    let hallucination_filters =
+        resolve_hallucination_filters(&config.transcription.hallucination_filters);
     let pipeline_config = PipelineConfig {
         vad: VadConfig {
             speech_threshold: config.audio.vad_threshold,
@@ -258,6 +263,7 @@ async fn run_continuous(
         quiet,
         sample_rate: 16000,
         chunk_buffer: chunk_buffer_from_secs(buffer_secs),
+        hallucination_filters,
         ..Default::default()
     };
 
@@ -299,6 +305,8 @@ async fn run_single_session(
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
 
+    let hallucination_filters =
+        resolve_hallucination_filters(&config.transcription.hallucination_filters);
     let pipeline_config = PipelineConfig {
         vad: VadConfig {
             speech_threshold: config.audio.vad_threshold,
@@ -311,6 +319,7 @@ async fn run_single_session(
         quiet,
         sample_rate: 16000,
         chunk_buffer: chunk_buffer_from_secs(buffer_secs),
+        hallucination_filters,
         ..Default::default()
     };
 

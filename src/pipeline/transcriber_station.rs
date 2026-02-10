@@ -73,6 +73,7 @@ pub struct TranscriberStation {
     transcriber: Arc<dyn Transcriber>,
     verbose: bool,
     warned_backpressure: bool,
+    hallucination_filters: Vec<String>,
 }
 
 impl TranscriberStation {
@@ -82,6 +83,7 @@ impl TranscriberStation {
             transcriber,
             verbose: false,
             warned_backpressure: false,
+            hallucination_filters: Vec::new(),
         }
     }
 
@@ -90,6 +92,12 @@ impl TranscriberStation {
     /// When verbose is true, diagnostic info is logged during transcription.
     pub fn with_verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
+        self
+    }
+
+    /// Set hallucination filter phrases (pre-lowercased for O(1) runtime comparison).
+    pub fn with_hallucination_filters(mut self, filters: Vec<String>) -> Self {
+        self.hallucination_filters = filters.into_iter().map(|f| f.to_lowercase()).collect();
         self
     }
 }
@@ -146,6 +154,14 @@ impl Station for TranscriberStation {
         // Skip empty results
         if cleaned_text.is_empty() {
             return Ok(None);
+        }
+
+        // Filter hallucinated phrases (exact match, case-insensitive)
+        if !self.hallucination_filters.is_empty() {
+            let lower = cleaned_text.to_lowercase();
+            if self.hallucination_filters.iter().any(|f| f == &lower) {
+                return Ok(None);
+            }
         }
 
         // Return transcribed text with timing information from chunk (if available)
@@ -440,6 +456,79 @@ mod tests {
         assert!(
             !station.warned_backpressure,
             "Should start with no backpressure warning"
+        );
+    }
+
+    // ── Hallucination filter tests ──────────────────────────────────────
+
+    #[test]
+    fn test_hallucination_filter_discards_match() {
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Thank you."));
+        let mut station = TranscriberStation::new(transcriber)
+            .with_hallucination_filters(vec!["Thank you.".to_string()]);
+        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_none(), "Hallucinated phrase should be discarded");
+    }
+
+    #[test]
+    fn test_hallucination_filter_case_insensitive() {
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("THANK YOU."));
+        let mut station = TranscriberStation::new(transcriber)
+            .with_hallucination_filters(vec!["Thank you.".to_string()]);
+        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_none(), "Filter should be case-insensitive");
+    }
+
+    #[test]
+    fn test_hallucination_filter_allows_non_match() {
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Hello world"));
+        let mut station = TranscriberStation::new(transcriber)
+            .with_hallucination_filters(vec!["Thank you.".to_string()]);
+        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_some(), "Non-matching text should pass through");
+        assert_eq!(result.unwrap().text, "Hello world");
+    }
+
+    #[test]
+    fn test_hallucination_filter_partial_match_passes() {
+        let transcriber =
+            Arc::new(MockTranscriber::new("mock").with_response("Thank you for coming"));
+        let mut station = TranscriberStation::new(transcriber)
+            .with_hallucination_filters(vec!["Thank you.".to_string()]);
+        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_some(),
+            "Partial match should pass through (exact match only)"
+        );
+        assert_eq!(result.unwrap().text, "Thank you for coming");
+    }
+
+    #[test]
+    fn test_hallucination_filter_empty_list_passes() {
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Thank you."));
+        let mut station = TranscriberStation::new(transcriber).with_hallucination_filters(vec![]);
+        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_some(), "Empty filter list should pass everything");
+        assert_eq!(result.unwrap().text, "Thank you.");
+    }
+
+    #[test]
+    fn test_hallucination_filter_after_annotation_removal() {
+        // "[MUSIC] Thank you." → cleaned to "Thank you." → filtered
+        let transcriber =
+            Arc::new(MockTranscriber::new("mock").with_response("[MUSIC] Thank you."));
+        let mut station = TranscriberStation::new(transcriber)
+            .with_hallucination_filters(vec!["Thank you.".to_string()]);
+        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_none(),
+            "After annotation removal, remaining hallucination should be filtered"
         );
     }
 }
