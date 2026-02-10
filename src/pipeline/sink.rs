@@ -210,15 +210,19 @@ impl<E: CommandExecutor> InjectorSink<E> {
 
 impl<E: CommandExecutor + 'static> TextSink for InjectorSink<E> {
     fn handle(&mut self, text: &str) -> crate::error::Result<()> {
+        // Normalize: trim trailing whitespace, append exactly one space so
+        // consecutive dictations flow naturally ("word1 word2 " not "word1word2").
+        let normalized = format!("{} ", text.trim_end());
+
         let paste_key =
             crate::input::focused_window::resolve_paste_key(&self.paste_key, self.verbosity);
 
         match self.method {
             InputMethod::Clipboard => {
-                self.injector.inject_via_clipboard(text, paste_key)?;
+                self.injector.inject_via_clipboard(&normalized, paste_key)?;
             }
             InputMethod::Direct => {
-                self.injector.inject_direct(text)?;
+                self.injector.inject_direct(&normalized)?;
             }
         }
 
@@ -392,10 +396,34 @@ mod tests {
         sink.handle("Direct text").unwrap();
 
         let commands = executor.commands();
+        // Text is normalized with trailing space for natural dictation flow
         assert!(
-            commands.iter().any(
-                |c| (c.contains("wtype") || c.contains("ydotool")) && c.contains("Direct text")
-            )
+            commands
+                .iter()
+                .any(|c| (c.contains("wtype") || c.contains("ydotool"))
+                    && c.contains("Direct text "))
+        );
+    }
+
+    #[test]
+    fn injector_sink_normalizes_trailing_whitespace() {
+        let executor = MockCommandExecutor::new();
+        let injector = TextInjector::new(executor.clone());
+        let mut sink = InjectorSink::new(injector, InputMethod::Direct, "ctrl+v".to_string());
+
+        // Input with extra trailing whitespace → trimmed to exactly one space
+        sink.handle("hello   ").unwrap();
+
+        let commands = executor.commands();
+        assert!(
+            commands.iter().any(|c| c.contains("hello ")),
+            "Should have exactly one trailing space, got: {:?}",
+            commands
+        );
+        assert!(
+            !commands.iter().any(|c| c.contains("hello  ")),
+            "Should not have multiple trailing spaces, got: {:?}",
+            commands
         );
     }
 
