@@ -19,6 +19,8 @@ pub mod defaults;
 #[cfg(feature = "cli")]
 pub mod diagnostics;
 pub mod error;
+#[cfg(feature = "cli")]
+pub mod gnome_extension;
 #[cfg(feature = "benchmark")]
 pub mod init;
 pub mod input;

@@ -1,0 +1,9 @@
+{
+    "uuid": "voicsh@voicsh.dev",
+    "name": "voicsh",
+    "description": "Voice typing indicator and control for voicsh",
+    "shell-version": ["45", "46", "47", "48", "49"],
+    "version": 1,
+    "url": "https://github.com/burka/voicsh",
+    "settings-schema": "org.gnome.shell.extensions.voicsh"
+}

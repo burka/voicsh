@@ -58,6 +58,11 @@ impl DaemonState {
     pub async fn model_name(&self) -> String {
         self.config.lock().await.stt.model.clone()
     }
+
+    /// Returns language setting from config.
+    pub async fn language(&self) -> String {
+        self.config.lock().await.stt.language.clone()
+    }
 }
 
 /// Run the daemon: load model, start IPC server, wait for shutdown.
@@ -328,5 +333,20 @@ mod tests {
 
         let model_name = state.model_name().await;
         assert_eq!(model_name, "test-model");
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_language() {
+        let mut config = Config::default();
+        config.stt.language = "de".to_string();
+
+        #[cfg(feature = "portal")]
+        let state = DaemonState::new(config, mock_transcriber(), None);
+
+        #[cfg(not(feature = "portal"))]
+        let state = DaemonState::new(config, mock_transcriber());
+
+        let language = state.language().await;
+        assert_eq!(language, "de");
     }
 }

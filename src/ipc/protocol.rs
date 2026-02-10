@@ -45,6 +45,7 @@ pub enum Response {
         recording: bool,
         model_loaded: bool,
         model_name: Option<String>,
+        language: Option<String>,
     },
     /// Error occurred
     Error { message: String },
@@ -141,6 +142,7 @@ mod tests {
             recording: true,
             model_loaded: true,
             model_name: Some("base.en".to_string()),
+            language: Some("en".to_string()),
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -157,6 +159,34 @@ mod tests {
             recording: false,
             model_loaded: false,
             model_name: None,
+            language: None,
+        };
+        let json = resp.to_json().expect("should serialize");
+        let deserialized = Response::from_json(&json).expect("should deserialize");
+        assert_eq!(resp, deserialized);
+    }
+
+    #[test]
+    fn test_response_status_with_language() {
+        let resp = Response::Status {
+            recording: true,
+            model_loaded: true,
+            model_name: Some("base.en".to_string()),
+            language: Some("en".to_string()),
+        };
+        let json = resp.to_json().expect("should serialize");
+        let deserialized = Response::from_json(&json).expect("should deserialize");
+        assert_eq!(resp, deserialized);
+        assert!(json.contains("\"language\":\"en\""));
+    }
+
+    #[test]
+    fn test_response_status_language_none() {
+        let resp = Response::Status {
+            recording: false,
+            model_loaded: false,
+            model_name: None,
+            language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");

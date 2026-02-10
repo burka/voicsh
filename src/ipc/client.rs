@@ -101,6 +101,7 @@ mod tests {
                     recording: false,
                     model_loaded: true,
                     model_name: Some("test-model".to_string()),
+                    language: Some("auto".to_string()),
                 },
                 Command::Toggle => Response::Ok,
                 Command::Start => Response::Ok,
@@ -137,10 +138,12 @@ mod tests {
                 recording,
                 model_loaded,
                 model_name,
+                language,
             } => {
                 assert!(!recording);
                 assert!(model_loaded);
                 assert_eq!(model_name, Some("test-model".to_string()));
+                assert_eq!(language, Some("auto".to_string()));
             }
             _ => panic!("Expected Status response, got: {:?}", response),
         }
@@ -290,6 +293,7 @@ mod tests {
                 recording,
                 model_loaded,
                 model_name,
+                language,
             } => {
                 assert!(!recording, "Should not be recording");
                 assert!(model_loaded, "Model should be loaded");
@@ -298,6 +302,7 @@ mod tests {
                     Some("test-model".to_string()),
                     "Model name should match"
                 );
+                assert_eq!(language, Some("auto".to_string()), "Language should match");
             }
             _ => panic!("Expected Status response, got: {:?}", response),
         }

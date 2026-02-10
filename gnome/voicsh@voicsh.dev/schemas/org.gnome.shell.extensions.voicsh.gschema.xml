@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.voicsh" path="/org/gnome/shell/extensions/voicsh/">
+    <key name="toggle-shortcut" type="as">
+      <default>['&lt;Super&gt;&lt;Alt&gt;v']</default>
+      <summary>Toggle recording shortcut</summary>
+      <description>Keyboard shortcut to toggle voice recording on/off</description>
+    </key>
+    <key name="poll-interval" type="i">
+      <default>3</default>
+      <summary>Status poll interval</summary>
+      <description>How often to poll daemon status, in seconds</description>
+    </key>
+  </schema>
+</schemalist>

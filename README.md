@@ -49,6 +49,8 @@ voicsh stop                     # tell daemon to stop recording
 voicsh toggle                   # toggle recording on/off
 voicsh status                   # show daemon health (recording state, model info)
 voicsh install-service          # install systemd user service
+voicsh install-gnome-extension   # install GNOME panel indicator + systemd service
+voicsh uninstall-gnome-extension # remove GNOME extension and systemd service
 ```
 
 ### Verbosity
@@ -90,6 +92,17 @@ voicsh stop                     # stop and inject transcription
 voicsh toggle                   # toggle recording on/off
 voicsh status                   # check daemon health
 ```
+
+### GNOME Shell integration
+
+Install a panel indicator that shows recording state, model, and language. Includes a keyboard shortcut (Super+Alt+V) to toggle recording.
+
+```bash
+voicsh install-gnome-extension   # installs systemd service + GNOME extension
+voicsh uninstall-gnome-extension # removes both
+```
+
+The indicator shows three states: disconnected (grey mic), idle (default mic), and recording (red mic). Click the indicator for a dropdown menu to toggle recording and see current model/language.
 
 ## Install
 

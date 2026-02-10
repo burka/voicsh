@@ -78,6 +78,12 @@ async fn main() -> Result<()> {
         Some(voicsh::cli::Commands::InstallService) => {
             install_systemd_service()?;
         }
+        Some(voicsh::cli::Commands::InstallGnomeExtension) => {
+            voicsh::gnome_extension::install_gnome_extension()?;
+        }
+        Some(voicsh::cli::Commands::UninstallGnomeExtension) => {
+            voicsh::gnome_extension::uninstall_gnome_extension()?;
+        }
         Some(voicsh::cli::Commands::Config { action }) => {
             handle_config_command(action, cli.config.as_deref())?;
         }
@@ -253,6 +259,7 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                 recording,
                 model_loaded,
                 model_name,
+                language,
             } => {
                 println!("Daemon status:");
                 println!("  Recording: {}", if recording { "yes" } else { "no" });
@@ -262,6 +269,9 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                 );
                 if let Some(name) = model_name {
                     println!("  Model: {}", name);
+                }
+                if let Some(lang) = language {
+                    println!("  Language: {}", lang);
                 }
             }
             Response::Error { message } => {

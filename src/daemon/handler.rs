@@ -192,11 +192,13 @@ impl DaemonCommandHandler {
     async fn get_status(&self) -> Response {
         let recording = self.state.is_recording().await;
         let model_name = Some(self.state.model_name().await);
+        let language = Some(self.state.language().await);
 
         Response::Status {
             recording,
             model_loaded: true, // Model is always loaded in daemon
             model_name,
+            language,
         }
     }
 }
@@ -249,6 +251,7 @@ mod tests {
                 recording,
                 model_loaded,
                 model_name,
+                language,
             } => {
                 assert!(!recording, "Should not be recording initially");
                 assert!(model_loaded, "Model should be loaded");
@@ -256,6 +259,11 @@ mod tests {
                     model_name,
                     Some("base".to_string()),
                     "Model name should be 'base' from default config"
+                );
+                assert_eq!(
+                    language,
+                    Some("auto".to_string()),
+                    "Language should be 'auto' from default config"
                 );
             }
             _ => panic!("Expected Status response"),
@@ -306,6 +314,7 @@ mod tests {
                 recording,
                 model_loaded,
                 model_name,
+                language,
             } => {
                 assert!(!recording);
                 assert!(model_loaded);
@@ -313,6 +322,11 @@ mod tests {
                     model_name,
                     Some("base".to_string()),
                     "Model name should be 'base' from default config"
+                );
+                assert_eq!(
+                    language,
+                    Some("auto".to_string()),
+                    "Language should be 'auto' from default config"
                 );
             }
             _ => panic!("Expected Status response"),
@@ -350,10 +364,12 @@ mod tests {
                 recording,
                 model_loaded,
                 model_name,
+                language,
             } => {
                 assert!(!recording, "Should not be recording initially");
                 assert!(model_loaded, "Model should be loaded");
                 assert!(model_name.is_some(), "Model name should be present");
+                assert!(language.is_some(), "Language should be present");
             }
             _ => panic!("Expected Status response, got: {:?}", response),
         }

@@ -1,0 +1,9 @@
+/* voicsh GNOME Shell Extension Styles */
+
+.voicsh-recording .system-status-icon {
+    color: #e53935;
+}
+
+.voicsh-disconnected .system-status-icon {
+    color: #9e9e9e;
+}

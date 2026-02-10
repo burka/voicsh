@@ -163,6 +163,12 @@ pub enum Commands {
     /// Install systemd user service
     InstallService,
 
+    /// Install GNOME Shell extension and systemd user service
+    InstallGnomeExtension,
+
+    /// Uninstall GNOME Shell extension and systemd user service
+    UninstallGnomeExtension,
+
     /// View and modify configuration
     Config {
         #[command(subcommand)]
@@ -518,6 +524,24 @@ mod tests {
         match cli.command {
             Some(Commands::InstallService) => {}
             _ => panic!("Expected InstallService command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_install_gnome_extension() {
+        let cli = Cli::try_parse_from(["voicsh", "install-gnome-extension"]).unwrap();
+        match cli.command {
+            Some(Commands::InstallGnomeExtension) => {}
+            _ => panic!("Expected InstallGnomeExtension command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_uninstall_gnome_extension() {
+        let cli = Cli::try_parse_from(["voicsh", "uninstall-gnome-extension"]).unwrap();
+        match cli.command {
+            Some(Commands::UninstallGnomeExtension) => {}
+            _ => panic!("Expected UninstallGnomeExtension command"),
         }
     }
 
