@@ -1318,6 +1318,7 @@ mod tests {
             model_path,
             language: language.to_string(),
             threads: Some(4),
+            use_gpu: true,
         };
 
         let transcriber: Arc<dyn Transcriber> =

@@ -35,6 +35,8 @@ pub struct WhisperConfig {
     pub language: String,
     /// Number of threads for inference (None = auto-detect)
     pub threads: Option<usize>,
+    /// Whether to use GPU acceleration (default: true)
+    pub use_gpu: bool,
 }
 
 impl Default for WhisperConfig {
@@ -43,6 +45,7 @@ impl Default for WhisperConfig {
             model_path: PathBuf::from("models/ggml-base.bin"),
             language: defaults::DEFAULT_LANGUAGE.to_string(),
             threads: None,
+            use_gpu: true,
         }
     }
 }
@@ -123,6 +126,7 @@ impl WhisperTranscriber {
         // Enable flash attention: uses fused attention kernels that avoid the standalone
         // softmax CUDA kernel, which crashes on Blackwell GPUs (sm_120) with ggml <= 1.7.6
         context_params.flash_attn(true);
+        context_params.use_gpu(config.use_gpu);
         let context = WhisperContext::new_with_params(
             config.model_path.to_str().ok_or_else(|| {
                 VoicshError::TranscriptionInferenceFailed {
@@ -319,6 +323,7 @@ mod tests {
         assert_eq!(config.model_path, PathBuf::from("models/ggml-base.bin"));
         assert_eq!(config.language, crate::defaults::AUTO_LANGUAGE);
         assert_eq!(config.threads, None);
+        assert_eq!(config.use_gpu, true);
     }
 
     #[test]
@@ -327,10 +332,12 @@ mod tests {
             model_path: PathBuf::from("/custom/model.bin"),
             language: "es".to_string(),
             threads: Some(4),
+            use_gpu: true,
         };
         assert_eq!(config.model_path, PathBuf::from("/custom/model.bin"));
         assert_eq!(config.language, "es");
         assert_eq!(config.threads, Some(4));
+        assert_eq!(config.use_gpu, true);
     }
 
     #[test]
@@ -339,6 +346,7 @@ mod tests {
             model_path: PathBuf::from("/nonexistent/model.bin"),
             language: "en".to_string(),
             threads: None,
+            use_gpu: true,
         };
 
         let result = WhisperTranscriber::new(config);
@@ -366,6 +374,7 @@ mod tests {
             model_path: model_path.clone(),
             language: "en".to_string(),
             threads: None,
+            use_gpu: true,
         };
 
         let result = WhisperTranscriber::new(config);
@@ -513,6 +522,7 @@ mod tests {
             model_path,
             language,
             threads: Some(4),
+            use_gpu: true,
         };
 
         let transcriber = WhisperTranscriber::new(config).unwrap();
@@ -531,6 +541,7 @@ mod tests {
             model_path,
             language,
             threads: Some(4),
+            use_gpu: true,
         };
 
         let transcriber = WhisperTranscriber::new(config).unwrap();
@@ -561,6 +572,7 @@ mod tests {
             model_path,
             language,
             threads: Some(4),
+            use_gpu: true,
         };
 
         let transcriber = WhisperTranscriber::new(config).unwrap();

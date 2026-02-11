@@ -387,6 +387,7 @@ pub fn benchmark_model(
         model_path: path,
         language: language.to_string(),
         threads: Some(threads),
+        use_gpu: true,
     };
 
     let transcriber = WhisperTranscriber::new(config)?;

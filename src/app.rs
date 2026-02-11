@@ -446,6 +446,7 @@ async fn load_single_model(
         model_path,
         language: language.to_string(),
         threads: None,
+        use_gpu: true,
     };
 
     WhisperTranscriber::new(whisper_config)

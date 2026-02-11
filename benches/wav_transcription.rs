@@ -60,6 +60,7 @@ fn benchmark_model(
         model_path: model_path(model_name),
         language: "auto".to_string(),
         threads: None,
+        use_gpu: true,
     };
 
     let transcriber = match WhisperTranscriber::new(config) {
@@ -136,6 +137,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     model_path: model_path(model.name),
                     language: "auto".to_string(),
                     threads: None,
+                    use_gpu: true,
                 };
 
                 let transcriber =

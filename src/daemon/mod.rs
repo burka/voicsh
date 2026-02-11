@@ -336,12 +336,14 @@ async fn create_transcriber(
             model_path: en_path,
             language: "en".to_string(),
             threads: None,
+            use_gpu: true,
         })?;
 
         let multilingual_transcriber = WhisperTranscriber::new(WhisperConfig {
             model_path: path,
             language: language.clone(),
             threads: None,
+            use_gpu: true,
         })?;
 
         Ok(Arc::new(FanOutTranscriber::new(vec![
@@ -354,6 +356,7 @@ async fn create_transcriber(
             model_path: path,
             language: language.clone(),
             threads: None,
+            use_gpu: true,
         })?;
 
         Ok(Arc::new(transcriber))

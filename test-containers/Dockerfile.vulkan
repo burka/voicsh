@@ -18,4 +18,5 @@ COPY . .
 
 RUN cargo build --lib --features full,vulkan 2>&1
 RUN cargo test --lib --features full,vulkan --no-run 2>&1
-CMD ["cargo", "test", "--lib", "--features", "full,vulkan"]
+RUN cargo run --features full,vulkan -- models install tiny.en 2>&1
+CMD ["cargo", "test", "--features", "full,vulkan"]
