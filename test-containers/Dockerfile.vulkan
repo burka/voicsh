@@ -1,0 +1,21 @@
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y \
+    curl build-essential cmake pkg-config git \
+    libasound2-dev \
+    libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc \
+    libclang-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain 1.93.0
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+
+WORKDIR /app
+COPY . .
+
+RUN cargo build --lib --features full,vulkan 2>&1
+RUN cargo test --lib --features full,vulkan --no-run 2>&1
+CMD ["cargo", "test", "--lib", "--features", "full,vulkan"]
