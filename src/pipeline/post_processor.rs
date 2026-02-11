@@ -512,6 +512,38 @@ fn english_commands() -> Vec<(String, CommandAction)> {
             "delete word".into(),
             CommandAction::KeyCombo("ctrl+BackSpace".to_string()),
         ),
+        // Symbols
+        ("slash".into(), CommandAction::tight("/")),
+        ("forward slash".into(), CommandAction::tight("/")),
+        ("backslash".into(), CommandAction::tight("\\")),
+        ("ampersand".into(), CommandAction::free("&")),
+        ("and sign".into(), CommandAction::free("&")),
+        ("at sign".into(), CommandAction::tight("@")),
+        ("dollar sign".into(), CommandAction::open("$")),
+        ("hash".into(), CommandAction::free("#")),
+        ("hashtag".into(), CommandAction::open("#")),
+        ("percent sign".into(), CommandAction::punct("%")),
+        ("asterisk".into(), CommandAction::free("*")),
+        ("underscore".into(), CommandAction::tight("_")),
+        ("equal sign".into(), CommandAction::free("=")),
+        ("plus sign".into(), CommandAction::free("+")),
+        ("pipe".into(), CommandAction::free("|")),
+        ("tilde".into(), CommandAction::free("~")),
+        ("backtick".into(), CommandAction::free("`")),
+        // Brackets
+        ("open brace".into(), CommandAction::open("{")),
+        ("close brace".into(), CommandAction::close("}")),
+        ("open bracket".into(), CommandAction::open("[")),
+        ("close bracket".into(), CommandAction::close("]")),
+        ("less than".into(), CommandAction::open("<")),
+        ("greater than".into(), CommandAction::close(">")),
+        ("open angle bracket".into(), CommandAction::open("<")),
+        ("close angle bracket".into(), CommandAction::close(">")),
+        // Key combos
+        (
+            "backspace".into(),
+            CommandAction::KeyCombo("BackSpace".to_string()),
+        ),
     ]
 }
 
@@ -533,6 +565,33 @@ fn german_commands() -> Vec<(String, CommandAction)> {
         (
             "wort löschen".into(),
             CommandAction::KeyCombo("ctrl+BackSpace".to_string()),
+        ),
+        // Symbols
+        ("schrägstrich".into(), CommandAction::tight("/")),
+        ("rückschrägstrich".into(), CommandAction::tight("\\")),
+        ("und zeichen".into(), CommandAction::free("&")),
+        ("at zeichen".into(), CommandAction::tight("@")),
+        ("dollar zeichen".into(), CommandAction::open("$")),
+        ("raute".into(), CommandAction::free("#")),
+        ("prozent zeichen".into(), CommandAction::punct("%")),
+        ("sternchen".into(), CommandAction::free("*")),
+        ("unterstrich".into(), CommandAction::tight("_")),
+        ("gleichheitszeichen".into(), CommandAction::free("=")),
+        ("plus zeichen".into(), CommandAction::free("+")),
+        ("pipe".into(), CommandAction::free("|")),
+        ("tilde".into(), CommandAction::free("~")),
+        ("backtick".into(), CommandAction::free("`")),
+        // Brackets
+        ("geschweifte klammer auf".into(), CommandAction::open("{")),
+        ("geschweifte klammer zu".into(), CommandAction::close("}")),
+        ("eckige klammer auf".into(), CommandAction::open("[")),
+        ("eckige klammer zu".into(), CommandAction::close("]")),
+        ("spitze klammer auf".into(), CommandAction::open("<")),
+        ("spitze klammer zu".into(), CommandAction::close(">")),
+        // Key combos
+        (
+            "rücktaste".into(),
+            CommandAction::KeyCombo("BackSpace".to_string()),
         ),
     ]
 }
@@ -1593,5 +1652,97 @@ mod tests {
         let (text, events) = p.process_with_events("hello");
         assert_eq!(text, "HELLO");
         assert!(events.is_empty());
+    }
+
+    // ── Symbol and bracket command tests ────────────────────────────────
+
+    #[test]
+    fn test_slash_commands() {
+        let mut p = en_processor();
+        // tight: attaches both sides
+        assert_eq!(p.apply("he slash she"), "he/she");
+        assert_eq!(p.apply("and forward slash or"), "and/or");
+        assert_eq!(p.apply("path backslash to"), "path\\to");
+    }
+
+    #[test]
+    fn test_symbol_commands() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("a ampersand b"), "a & b");
+        assert_eq!(p.apply("a and sign b"), "a & b");
+        // tight: no spaces
+        assert_eq!(p.apply("user at sign host"), "user@host");
+        // open: attaches right
+        assert_eq!(p.apply("dollar sign 50"), "$50");
+        // free: keeps spaces
+        assert_eq!(p.apply("a hash b"), "a # b");
+        // open: attaches right
+        assert_eq!(p.apply("hashtag tag"), "#tag");
+        // punct: attaches left
+        assert_eq!(p.apply("50 percent sign"), "50%");
+        assert_eq!(p.apply("a asterisk b"), "a * b");
+        // tight: both sides
+        assert_eq!(p.apply("snake underscore case"), "snake_case");
+        assert_eq!(p.apply("a equal sign b"), "a = b");
+        assert_eq!(p.apply("a plus sign b"), "a + b");
+        assert_eq!(p.apply("a pipe b"), "a | b");
+        assert_eq!(p.apply("a tilde b"), "a ~ b");
+        assert_eq!(p.apply("a backtick b"), "a ` b");
+    }
+
+    #[test]
+    fn test_bracket_commands() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("open brace x close brace"), "{x}");
+        assert_eq!(p.apply("open bracket x close bracket"), "[x]");
+        assert_eq!(p.apply("less than x greater than"), "<x>");
+        assert_eq!(p.apply("open angle bracket x close angle bracket"), "<x>");
+    }
+
+    #[test]
+    fn test_backspace_key_combo() {
+        use crate::pipeline::types::SinkEvent;
+        let mut p = en_processor();
+        let (text, events) = p.apply_with_events("oops backspace");
+        assert_eq!(text, "oops ");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], SinkEvent::Text("oops ".to_string()));
+        assert_eq!(events[1], SinkEvent::KeyCombo("BackSpace".to_string()));
+    }
+
+    #[test]
+    fn test_german_symbol_commands() {
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
+        assert_eq!(p.apply("a schrägstrich b"), "a/b");
+        assert_eq!(p.apply("a rückschrägstrich b"), "a\\b");
+        assert_eq!(p.apply("a und zeichen b"), "a & b");
+        assert_eq!(p.apply("user at zeichen host"), "user@host");
+        assert_eq!(p.apply("dollar zeichen 50"), "$50");
+        assert_eq!(p.apply("a raute b"), "a # b");
+        assert_eq!(p.apply("50 prozent zeichen"), "50%");
+        assert_eq!(p.apply("a sternchen b"), "a * b");
+        assert_eq!(p.apply("schlange unterstrich fall"), "schlange_fall");
+    }
+
+    #[test]
+    fn test_german_bracket_commands() {
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
+        assert_eq!(
+            p.apply("geschweifte klammer auf x geschweifte klammer zu"),
+            "{x}"
+        );
+        assert_eq!(p.apply("eckige klammer auf x eckige klammer zu"), "[x]");
+        assert_eq!(p.apply("spitze klammer auf x spitze klammer zu"), "<x>");
+    }
+
+    #[test]
+    fn test_german_backspace_key_combo() {
+        use crate::pipeline::types::SinkEvent;
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
+        let (text, events) = p.apply_with_events("hallo rücktaste");
+        assert_eq!(text, "hallo ");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], SinkEvent::Text("hallo ".to_string()));
+        assert_eq!(events[1], SinkEvent::KeyCombo("BackSpace".to_string()));
     }
 }
