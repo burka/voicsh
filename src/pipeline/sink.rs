@@ -4,7 +4,7 @@ use crate::ipc::protocol::DaemonEvent;
 use crate::pipeline::error::{StationError, eprintln_clear};
 use crate::pipeline::latency::{LatencyTracker, SessionContext, TranscriptionTiming};
 use crate::pipeline::station::Station;
-use crate::pipeline::types::TranscribedText;
+use crate::pipeline::types::{SinkEvent, TranscribedText};
 #[cfg(feature = "portal")]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,6 +14,16 @@ use std::time::{Duration, Instant};
 pub trait TextSink: Send + 'static {
     /// Handle transcribed text. Called for each transcription result.
     fn handle(&mut self, text: &str) -> crate::error::Result<()>;
+
+    /// Handle a sequence of events. Default implementation processes only Text events.
+    fn handle_events(&mut self, events: &[SinkEvent]) -> crate::error::Result<()> {
+        for event in events {
+            if let SinkEvent::Text(t) = event {
+                self.handle(t)?;
+            }
+        }
+        Ok(())
+    }
 
     /// Called on pipeline shutdown. Return accumulated text if applicable.
     fn finish(&mut self) -> Option<String> {
@@ -78,11 +88,18 @@ impl Station for SinkStation {
     }
 
     fn process(&mut self, text: TranscribedText) -> Result<Option<()>, StationError> {
-        if text.text.trim().is_empty() {
+        // Skip if both text and events are empty
+        if text.text.trim().is_empty() && text.events.is_empty() {
             return Ok(None);
         }
 
-        match self.sink.handle(&text.text) {
+        let handle_result = if !text.events.is_empty() {
+            self.sink.handle_events(&text.events)
+        } else {
+            self.sink.handle(&text.text)
+        };
+
+        match handle_result {
             Ok(()) => {
                 let output_done = Instant::now();
                 self.transcription_count += 1;
@@ -533,5 +550,74 @@ mod tests {
 
         // shutdown() should log the failure but not panic
         station.shutdown();
+    }
+
+    // ── SinkEvent tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_handle_events_routes_text_events_correctly() {
+        let mut sink = CollectorSink::new();
+
+        let events = vec![
+            SinkEvent::Text("hello".to_string()),
+            SinkEvent::Text("world".to_string()),
+        ];
+
+        sink.handle_events(&events).unwrap();
+
+        let result = sink.finish();
+        assert_eq!(result, Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_handle_events_default_skips_key_combo() {
+        let mut sink = CollectorSink::new();
+
+        let events = vec![
+            SinkEvent::Text("hello".to_string()),
+            SinkEvent::KeyCombo("ctrl+BackSpace".to_string()),
+            SinkEvent::Text("world".to_string()),
+        ];
+
+        sink.handle_events(&events).unwrap();
+
+        let result = sink.finish();
+        // KeyCombo should be skipped by default implementation
+        assert_eq!(result, Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_sink_station_uses_handle_events_when_events_present() {
+        let collector = CollectorSink::new();
+        let (result_tx, result_rx) = crossbeam_channel::bounded(1);
+        let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
+
+        let mut text = TranscribedText::new("".to_string());
+        text.events = vec![
+            SinkEvent::Text("from".to_string()),
+            SinkEvent::Text("events".to_string()),
+        ];
+
+        station.process(text).unwrap();
+        station.shutdown();
+
+        let result = result_rx.recv().unwrap();
+        assert_eq!(result, Some("from events".to_string()));
+    }
+
+    #[test]
+    fn test_sink_station_uses_handle_when_events_empty() {
+        let collector = CollectorSink::new();
+        let (result_tx, result_rx) = crossbeam_channel::bounded(1);
+        let mut station = SinkStation::new(Box::new(collector), true, 0, result_tx);
+
+        let text = TranscribedText::new("from text field".to_string());
+        // events is empty, so should use handle() with text.text
+
+        station.process(text).unwrap();
+        station.shutdown();
+
+        let result = result_rx.recv().unwrap();
+        assert_eq!(result, Some("from text field".to_string()));
     }
 }

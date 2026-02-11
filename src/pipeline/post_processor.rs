@@ -865,6 +865,7 @@ mod tests {
             text: "hello period".to_string(),
             timestamp: ts,
             timing: None,
+            events: vec![],
         };
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "hello.");

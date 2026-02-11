@@ -2,6 +2,13 @@
 
 use std::time::Instant;
 
+/// Events that can be sent to the sink for processing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SinkEvent {
+    Text(String),
+    KeyCombo(String), // e.g. "ctrl+BackSpace"
+}
+
 /// Timing information for pipeline stages (only populated when verbosity >= 1).
 #[derive(Debug, Clone)]
 pub struct ChunkTiming {
@@ -137,6 +144,8 @@ pub struct TranscribedText {
     pub timestamp: Instant,
     /// Timing information (only populated when verbosity >= 1).
     pub timing: Option<Box<ChunkTiming>>,
+    /// Events to be processed by the sink.
+    pub events: Vec<SinkEvent>,
 }
 
 impl TranscribedText {
@@ -146,6 +155,7 @@ impl TranscribedText {
             text,
             timestamp: Instant::now(),
             timing: None,
+            events: vec![],
         }
     }
 
@@ -155,6 +165,7 @@ impl TranscribedText {
             text,
             timestamp: Instant::now(),
             timing,
+            events: vec![],
         }
     }
 }

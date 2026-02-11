@@ -25,5 +25,5 @@ pub use post_processor::{
 pub use sink::{CollectorSink, InjectorSink, TextSink};
 pub use station::{Station, StationRunner};
 pub use transcriber_station::TranscriberStation;
-pub use types::{AudioChunk, AudioFrame, TranscribedText, VadFrame};
+pub use types::{AudioChunk, AudioFrame, SinkEvent, TranscribedText, VadFrame};
 pub use vad_station::VadStation;
