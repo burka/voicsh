@@ -246,6 +246,31 @@ impl<E: CommandExecutor + 'static> TextSink for InjectorSink<E> {
         Ok(())
     }
 
+    fn handle_events(&mut self, events: &[SinkEvent]) -> crate::error::Result<()> {
+        let paste_key =
+            crate::input::focused_window::resolve_paste_key(&self.paste_key, self.verbosity);
+
+        for event in events {
+            match event {
+                SinkEvent::Text(text) => {
+                    let normalized = format!("{} ", text.trim_end());
+                    match self.method {
+                        InputMethod::Clipboard => {
+                            self.injector.inject_via_clipboard(&normalized, paste_key)?;
+                        }
+                        InputMethod::Direct => {
+                            self.injector.inject_direct(&normalized)?;
+                        }
+                    }
+                }
+                SinkEvent::KeyCombo(combo) => {
+                    self.injector.inject_key_combo(combo)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn name(&self) -> &'static str {
         "injector"
     }
@@ -619,5 +644,56 @@ mod tests {
 
         let result = result_rx.recv().unwrap();
         assert_eq!(result, Some("from text field".to_string()));
+    }
+
+    #[test]
+    fn injector_sink_handle_events_text() {
+        use crate::pipeline::types::SinkEvent;
+        let executor = MockCommandExecutor::new();
+        let injector = TextInjector::new(executor.clone());
+        let mut sink = InjectorSink::new(injector, InputMethod::Direct, "ctrl+v".to_string());
+
+        let events = vec![
+            SinkEvent::Text("hello".to_string()),
+            SinkEvent::Text("world".to_string()),
+        ];
+        sink.handle_events(&events).unwrap();
+
+        let commands = executor.commands();
+        // Each text event produces a wtype call with normalized text
+        assert!(commands.iter().any(|c| c.contains("hello ")));
+        assert!(commands.iter().any(|c| c.contains("world ")));
+    }
+
+    #[test]
+    fn injector_sink_handle_events_key_combo() {
+        use crate::pipeline::types::SinkEvent;
+        let executor = MockCommandExecutor::new();
+        let injector = TextInjector::new(executor.clone());
+        let mut sink = InjectorSink::new(injector, InputMethod::Direct, "ctrl+v".to_string());
+
+        let events = vec![
+            SinkEvent::Text("hello ".to_string()),
+            SinkEvent::KeyCombo("ctrl+BackSpace".to_string()),
+            SinkEvent::Text("world".to_string()),
+        ];
+        sink.handle_events(&events).unwrap();
+
+        let commands = executor.commands();
+        // Should have: wtype for "hello ", wtype for key combo, wtype for "world "
+        assert!(
+            commands.len() >= 3,
+            "Expected at least 3 commands, got: {:?}",
+            commands
+        );
+        // Key combo should produce wtype with -M and -k args
+        assert!(
+            commands.iter().any(|c| c.contains("wtype")
+                && c.contains("-M")
+                && c.contains("ctrl")
+                && c.contains("BackSpace")),
+            "Expected key combo wtype call, got: {:?}",
+            commands
+        );
     }
 }

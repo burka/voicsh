@@ -210,6 +210,37 @@ impl<E: CommandExecutor> TextInjector<E> {
             .map_err(ydotool_helpful_error)?;
         Ok(())
     }
+
+    /// Inject a keyboard shortcut (e.g. "ctrl+BackSpace").
+    ///
+    /// Tries portal first, then wtype, then ydotool.
+    pub fn inject_key_combo(&self, combo: &str) -> Result<()> {
+        use crate::input::focused_window::paste_key_to_wtype_args;
+
+        // Try portal first (works on GNOME where wtype fails)
+        #[cfg(feature = "portal")]
+        if let Some(portal) = &self.portal
+            && portal.simulate_paste(combo).is_ok()
+        {
+            return Ok(());
+        }
+
+        // Build wtype args from combo
+        let wtype_args = paste_key_to_wtype_args(combo);
+        let wtype_arg_refs: Vec<&str> = wtype_args.iter().map(String::as_str).collect();
+
+        // Try wtype (simpler, no daemon needed)
+        if self.executor.execute("wtype", &wtype_arg_refs).is_ok() {
+            return Ok(());
+        }
+
+        // Fall back to ydotool
+        self.executor
+            .execute("ydotool", &["key", "--delay", "10", combo])
+            .map_err(ydotool_helpful_error)?;
+
+        Ok(())
+    }
 }
 
 impl TextInjector<SystemCommandExecutor> {
@@ -909,5 +940,36 @@ mod tests {
             vec![unicode_text],
             "Unicode text should be passed to wtype"
         );
+    }
+
+    #[test]
+    fn test_inject_key_combo_wtype_success() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder);
+
+        injector.inject_key_combo("ctrl+BackSpace").unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "wtype");
+        assert_eq!(calls[0].1, vec!["-M", "ctrl", "-k", "BackSpace"]);
+    }
+
+    #[test]
+    fn test_inject_key_combo_falls_back_to_ydotool() {
+        let mock = MockCommandExecutor::new()
+            .with_error(VoicshError::InjectionToolNotFound {
+                tool: "wtype".to_string(),
+            })
+            .with_success(); // ydotool succeeds
+        let injector = TextInjector::new(mock);
+
+        injector.inject_key_combo("ctrl+BackSpace").unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "wtype");
+        assert_eq!(calls[1].0, "ydotool");
+        assert_eq!(calls[1].1, vec!["key", "--delay", "10", "ctrl+BackSpace"]);
     }
 }

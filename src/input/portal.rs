@@ -22,6 +22,8 @@ pub(crate) mod keycodes {
     pub const LEFT_SHIFT: i32 = 42;
     /// KEY_V
     pub const V: i32 = 47;
+    /// KEY_BACKSPACE
+    pub const BACKSPACE: i32 = 14;
 }
 
 /// Trait for sending individual key events, enabling mock D-Bus in tests.
@@ -240,6 +242,7 @@ fn parse_paste_key(paste_key: &str) -> Result<Vec<i32>> {
             "ctrl" | "control" => keycodes::LEFT_CTRL,
             "shift" => keycodes::LEFT_SHIFT,
             "v" => keycodes::V,
+            "backspace" => keycodes::BACKSPACE,
             other => {
                 return Err(VoicshError::InjectionFailed {
                     message: format!("Unknown key in paste combo: '{other}'"),
@@ -470,6 +473,12 @@ mod tests {
         fn assert_sync<T: Sync>() {}
         assert_send::<PortalSession>();
         assert_sync::<PortalSession>();
+    }
+
+    #[test]
+    fn parse_ctrl_backspace() {
+        let codes = parse_paste_key("ctrl+BackSpace").unwrap();
+        assert_eq!(codes, vec![keycodes::LEFT_CTRL, keycodes::BACKSPACE]);
     }
 
     #[test]
