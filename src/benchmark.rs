@@ -141,7 +141,7 @@ impl SystemInfo {
             .map(|cpu| cpu.brand().trim().to_string())
             .unwrap_or_else(|| "Unknown CPU".to_string());
 
-        let cpu_cores = system.physical_core_count().unwrap_or(1);
+        let cpu_cores = System::physical_core_count().unwrap_or(1);
         let cpu_threads = system.cpus().len();
 
         let cpu_frequency = system

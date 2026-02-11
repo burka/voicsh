@@ -116,7 +116,7 @@ pub fn list_devices() -> Result<Vec<String>> {
 
     let mut device_names = Vec::new();
     for device in devices {
-        if let Ok(name) = device.name() {
+        if let Ok(name) = device.description().map(|d| d.name().to_string()) {
             // Skip filtered devices
             if should_filter_device(&name) {
                 continue;
@@ -155,7 +155,7 @@ fn get_best_default_device() -> Result<cpal::Device> {
         // Try to find a preferred device
         if let Ok(devices) = host.input_devices() {
             for device in devices {
-                if let Ok(name) = device.name()
+                if let Ok(name) = device.description().map(|d| d.name().to_string())
                     && is_preferred_device(&name)
                 {
                     return Ok(device);
@@ -224,7 +224,7 @@ impl CpalAudioSource {
 
                 let mut found_device = None;
                 for dev in devices {
-                    if let Ok(dev_name) = dev.name()
+                    if let Ok(dev_name) = dev.description().map(|d| d.name().to_string())
                         && dev_name == name
                     {
                         found_device = Some(dev);
@@ -264,7 +264,7 @@ impl CpalAudioSource {
 
         let preferred_config = cpal::StreamConfig {
             channels: 1,
-            sample_rate: cpal::SampleRate(self.sample_rate),
+            sample_rate: self.sample_rate,
             buffer_size: cpal::BufferSize::Default,
         };
 
@@ -327,7 +327,7 @@ impl CpalAudioSource {
                     message: format!("Failed to query default input config: {}", e),
                 })?;
 
-        let native_rate = default_config.sample_rate().0;
+        let native_rate = default_config.sample_rate();
         let native_channels = default_config.channels() as usize;
         let target_rate = self.sample_rate;
 
@@ -588,7 +588,7 @@ mod tests {
         assert!(device.is_ok(), "Failed to get best default device");
 
         if let Ok(dev) = device {
-            if let Ok(name) = dev.name() {
+            if let Ok(name) = dev.description().map(|d| d.name().to_string()) {
                 println!("Best default device: {}", name);
                 // If on a system with PipeWire/Pulse, verify preference
                 if name.to_lowercase().contains("pipewire") || name.to_lowercase().contains("pulse")

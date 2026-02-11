@@ -15,10 +15,10 @@ async-trait = "0.1"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "0.9"
 
 # Error handling
-thiserror = "1"
+thiserror = "2"
 anyhow = "1"
 
 # Concurrency
@@ -32,14 +32,14 @@ clap = { version = "4", features = ["derive"], optional = true }
 clap_complete = { version = "4", optional = true }
 
 # Paths
-dirs = { version = "5", optional = true }
+dirs = { version = "6", optional = true }
 
 # System
 libc = "0.2"
 owo-colors = { version = "4", optional = true }
 
 # Audio
-cpal = { version = "0.15", optional = true }
+cpal = { version = "0.17", optional = true }
 
 # WAV file parsing
 hound = "3.5"
@@ -47,7 +47,7 @@ hound = "3.5"
 # HTTP client for model downloads
 reqwest = { version = "0.13", features = ["stream"], optional = true }
 sha1 = { version = "0.10", optional = true }
-indicatif = { version = "0.17", optional = true }
+indicatif = { version = "0.18", optional = true }
 futures-util = { version = "0.3", optional = true }
 
 # Human-friendly duration parsing (e.g., "30s", "5m", "1h30m")
@@ -71,7 +71,7 @@ hipblas = ["whisper-rs/hipblas"]
 openblas = ["whisper-rs/openblas"]
 
 [dependencies.sysinfo]
-version = "0.33"
+version = "0.38"
 optional = true
 
 [dependencies.flate2]
@@ -80,8 +80,8 @@ optional = true
 
 [dev-dependencies]
 tempfile = "3"
-sysinfo = "0.33"
-criterion = "0.5"
+sysinfo = "0.38"
+criterion = "0.8"
 
 [[bench]]
 name = "wav_transcription"

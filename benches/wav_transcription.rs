@@ -1,5 +1,6 @@
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::fs::File;
+use std::hint::black_box;
 use std::io::BufReader;
 use std::time::{Duration, Instant};
 use voicsh::audio::wav::WavAudioSource;
