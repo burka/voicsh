@@ -50,6 +50,8 @@ pub struct InputConfig {
 pub struct VoiceCommandConfig {
     /// Enable voice command processing (default: true)
     pub enabled: bool,
+    /// Disable all built-in voice commands (default: false)
+    pub disable_defaults: bool,
     /// User-defined command overrides: spoken phrase → replacement text
     pub commands: std::collections::HashMap<String, String>,
 }
@@ -58,6 +60,7 @@ impl Default for VoiceCommandConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            disable_defaults: false,
             commands: std::collections::HashMap::new(),
         }
     }
@@ -334,8 +337,44 @@ impl Config {
 
         out.push_str("[voice_commands]\n");
         out.push_str("# enabled = true  # Enable voice command processing\n");
+        out.push_str(
+            "# disable_defaults = false  # Set to true to disable all built-in commands\n",
+        );
         out.push_str("# [voice_commands.commands]\n");
         out.push_str("# \"smiley\" = \":)\"  # Custom voice command mappings\n");
+        out.push_str("#\n");
+        out.push_str("# Built-in commands (active unless disable_defaults = true):\n");
+
+        // Show subset of languages with their built-in commands
+        let sample_langs = ["en", "de", "es", "fr"];
+        for lang in &sample_langs {
+            let builtins = crate::pipeline::post_processor::builtin_commands_display(lang);
+            if builtins.is_empty() {
+                continue;
+            }
+
+            // Show first 4 commands as examples
+            let examples: Vec<String> = builtins
+                .iter()
+                .take(4)
+                .map(|(phrase, replacement)| format!("\"{}\" → \"{}\"", phrase, replacement))
+                .collect();
+
+            let lang_name = match *lang {
+                "en" => "English",
+                "de" => "German",
+                "es" => "Spanish",
+                "fr" => "French",
+                _ => lang,
+            };
+
+            out.push_str(&format!(
+                "# {} ({}): {}, ...\n",
+                lang_name,
+                lang,
+                examples.join(", ")
+            ));
+        }
         out.push('\n');
 
         out.push_str("[transcription.hallucination_filters]\n");
@@ -1374,5 +1413,60 @@ mod tests {
             template.contains("Merci."),
             "Missing French hallucination default"
         );
+    }
+
+    #[test]
+    fn test_dump_template_contains_disable_defaults() {
+        let template = Config::dump_template();
+        assert!(
+            template.contains("disable_defaults"),
+            "Missing disable_defaults field"
+        );
+        assert!(
+            template.contains("disable_defaults = false"),
+            "Missing disable_defaults default value"
+        );
+        assert!(
+            template.contains("Set to true to disable all built-in commands"),
+            "Missing disable_defaults comment"
+        );
+    }
+
+    #[test]
+    fn test_dump_template_contains_builtin_commands_display() {
+        let template = Config::dump_template();
+        assert!(
+            template.contains("Built-in commands (active unless disable_defaults = true)"),
+            "Missing built-in commands header"
+        );
+        assert!(
+            template.contains("English (en):"),
+            "Missing English built-in commands"
+        );
+        assert!(
+            template.contains("German (de):"),
+            "Missing German built-in commands"
+        );
+        // Should contain at least some command examples
+        assert!(
+            template.contains("period") || template.contains("punkt"),
+            "Missing voice command examples"
+        );
+    }
+
+    #[test]
+    fn test_voice_commands_config_disable_defaults() {
+        let toml_content = r#"
+            [voice_commands]
+            enabled = true
+            disable_defaults = true
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert!(config.voice_commands.enabled);
+        assert!(config.voice_commands.disable_defaults);
     }
 }

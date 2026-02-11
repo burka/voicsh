@@ -1072,7 +1072,11 @@ mod tests {
         let sink = Box::new(CollectorSink::new());
 
         let post_processors: Vec<Box<dyn crate::pipeline::post_processor::PostProcessor>> =
-            vec![Box::new(VoiceCommandProcessor::new("en", &HashMap::new()))];
+            vec![Box::new(VoiceCommandProcessor::new(
+                "en",
+                false,
+                &HashMap::new(),
+            ))];
 
         let handle = pipeline
             .start_with_post_processors(audio_source, transcriber, sink, post_processors)

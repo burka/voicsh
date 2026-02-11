@@ -65,6 +65,7 @@ pub fn build_post_processors(config: &Config) -> Vec<Box<dyn PostProcessor>> {
     if config.voice_commands.enabled {
         processors.push(Box::new(VoiceCommandProcessor::new(
             &config.stt.language,
+            config.voice_commands.disable_defaults,
             &config.voice_commands.commands,
         )));
     }
@@ -99,6 +100,33 @@ fn count_trailing_punct(chars: &[char]) -> usize {
         .iter()
         .take_while(|ch| is_whisper_trailing_punct(**ch))
         .count()
+}
+
+/// Infer attachment behavior from replacement text.
+///
+/// Detects punctuation, brackets, whitespace to choose the appropriate
+/// CommandAction automatically.
+fn infer_action(replacement: &str) -> CommandAction {
+    if replacement
+        .chars()
+        .all(|c| matches!(c, '.' | ',' | ':' | ';' | '?' | '!'))
+        && !replacement.is_empty()
+    {
+        return CommandAction::punct(replacement);
+    }
+    if replacement.len() == 1
+        && let Some(ch) = replacement.chars().next()
+    {
+        match ch {
+            '(' | '[' | '{' => return CommandAction::open(replacement),
+            ')' | ']' | '}' => return CommandAction::close(replacement),
+            _ => {}
+        }
+    }
+    if replacement.chars().all(|c| c.is_whitespace()) && !replacement.is_empty() {
+        return CommandAction::whitespace(replacement);
+    }
+    CommandAction::free(replacement)
 }
 
 /// What a voice command does when matched.
@@ -172,21 +200,29 @@ impl VoiceCommandProcessor {
     /// `language` should be an ISO 639-1 code ("en", "de", "es", …) or "auto".
     /// When "auto", English defaults are used.
     ///
+    /// `disable_defaults`: when true, built-in commands are not loaded.
+    ///
     /// `overrides` are extra mappings from the `[voice_commands]` config section.
-    /// They take precedence over built-in defaults.
-    pub fn new(language: &str, overrides: &HashMap<String, String>) -> Self {
+    /// They take precedence over built-in defaults and use inferred attachment.
+    pub fn new(
+        language: &str,
+        disable_defaults: bool,
+        overrides: &HashMap<String, String>,
+    ) -> Self {
         let mut map: HashMap<String, CommandAction> = HashMap::new();
 
-        // Load built-in commands for the language
-        let builtins = builtin_commands(language);
-        for (phrase, action) in builtins {
-            map.insert(phrase, action);
+        // Load built-in commands for the language unless disabled
+        if !disable_defaults {
+            let builtins = builtin_commands(language);
+            for (phrase, action) in builtins {
+                map.insert(phrase, action);
+            }
         }
 
-        // Apply user overrides (these always win) — free-standing by default
+        // Apply user overrides (these always win) — infer attachment behavior
         for (phrase, replacement) in overrides {
             let lower = phrase.to_lowercase();
-            map.insert(lower, CommandAction::free(replacement));
+            map.insert(lower, infer_action(replacement));
         }
 
         // Sort by descending key length so "new paragraph" matches before "new"
@@ -321,6 +357,23 @@ impl PostProcessor for VoiceCommandProcessor {
     fn name(&self) -> &'static str {
         "voice-commands"
     }
+}
+
+/// Return built-in commands as phrase → replacement pairs for config display.
+///
+/// This is a public API used by config template generation. It strips out
+/// the internal CommandAction details and returns only the phrase-to-text mapping.
+pub fn builtin_commands_display(language: &str) -> Vec<(String, String)> {
+    builtin_commands(language)
+        .into_iter()
+        .filter_map(|(phrase, action)| {
+            if let CommandAction::Insert { text, .. } = action {
+                Some((phrase, text))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Built-in voice command mappings for a given language.
@@ -576,7 +629,7 @@ mod tests {
     // ── VoiceCommandProcessor unit tests ─────────────────────────────────
 
     fn en_processor() -> VoiceCommandProcessor {
-        VoiceCommandProcessor::new("en", &HashMap::new())
+        VoiceCommandProcessor::new("en", false, &HashMap::new())
     }
 
     #[test]
@@ -666,7 +719,7 @@ mod tests {
         overrides.insert("smiley".to_string(), ":)".to_string());
         overrides.insert("at sign".to_string(), "@".to_string());
 
-        let mut p = VoiceCommandProcessor::new("en", &overrides);
+        let mut p = VoiceCommandProcessor::new("en", false, &overrides);
         assert_eq!(p.apply("hello smiley"), "hello :)");
         assert_eq!(p.apply("user at sign example"), "user @ example");
     }
@@ -675,10 +728,12 @@ mod tests {
     fn test_override_replaces_builtin() {
         let mut overrides = HashMap::new();
         // Override "period" to produce "!!!" instead of "."
+        // "!!!" is inferred as punctuation (all chars are !)
         overrides.insert("period".to_string(), "!!!".to_string());
 
-        let mut p = VoiceCommandProcessor::new("en", &overrides);
-        assert_eq!(p.apply("hello period"), "hello !!!");
+        let mut p = VoiceCommandProcessor::new("en", false, &overrides);
+        // "!!!" is inferred as punctuation so it attaches left
+        assert_eq!(p.apply("hello period"), "hello!!!");
     }
 
     #[test]
@@ -736,7 +791,7 @@ mod tests {
 
     #[test]
     fn test_german_commands() {
-        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
         assert_eq!(p.apply("hallo punkt"), "hallo.");
         assert_eq!(p.apply("hallo komma welt"), "hallo, welt");
         assert_eq!(p.apply("was fragezeichen"), "was?");
@@ -746,7 +801,7 @@ mod tests {
 
     #[test]
     fn test_spanish_commands() {
-        let mut p = VoiceCommandProcessor::new("es", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("es", false, &HashMap::new());
         assert_eq!(p.apply("hola punto"), "hola.");
         assert_eq!(p.apply("hola coma mundo"), "hola, mundo");
     }
@@ -755,7 +810,7 @@ mod tests {
 
     #[test]
     fn test_french_commands() {
-        let mut p = VoiceCommandProcessor::new("fr", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("fr", false, &HashMap::new());
         assert_eq!(p.apply("bonjour point"), "bonjour.");
         assert_eq!(p.apply("bonjour virgule monde"), "bonjour, monde");
     }
@@ -772,7 +827,7 @@ mod tests {
 
     #[test]
     fn test_station_with_voice_commands() {
-        let processor = Box::new(VoiceCommandProcessor::new("en", &HashMap::new()));
+        let processor = Box::new(VoiceCommandProcessor::new("en", false, &HashMap::new()));
         let mut station = PostProcessorStation::new(vec![processor]);
         let input = TranscribedText::new("hello comma world period".to_string());
         let result = station.process(input).unwrap().unwrap();
@@ -803,7 +858,7 @@ mod tests {
 
     #[test]
     fn test_station_preserves_timestamp() {
-        let processor = Box::new(VoiceCommandProcessor::new("en", &HashMap::new()));
+        let processor = Box::new(VoiceCommandProcessor::new("en", false, &HashMap::new()));
         let mut station = PostProcessorStation::new(vec![processor]);
         let ts = Instant::now();
         let input = TranscribedText {
@@ -819,7 +874,7 @@ mod tests {
     #[test]
     fn test_station_chains_multiple_processors() {
         // First processor: voice commands
-        let voice = Box::new(VoiceCommandProcessor::new("en", &HashMap::new()));
+        let voice = Box::new(VoiceCommandProcessor::new("en", false, &HashMap::new()));
         // Second processor: uppercase everything
         struct UpperProcessor;
         impl PostProcessor for UpperProcessor {
@@ -900,20 +955,20 @@ mod tests {
 
     #[test]
     fn test_russian_commands() {
-        let mut p = VoiceCommandProcessor::new("ru", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("ru", false, &HashMap::new());
         assert_eq!(p.apply("привет точка"), "привет.");
         assert_eq!(p.apply("привет запятая мир"), "привет, мир");
     }
 
     #[test]
     fn test_japanese_commands() {
-        let mut p = VoiceCommandProcessor::new("ja", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("ja", false, &HashMap::new());
         assert_eq!(p.apply("こんにちは 句点"), "こんにちは。");
     }
 
     #[test]
     fn test_chinese_commands() {
-        let mut p = VoiceCommandProcessor::new("zh", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("zh", false, &HashMap::new());
         assert_eq!(p.apply("你好 句号"), "你好。");
         // Chinese comma attaches left (no space before) but keeps space after
         assert_eq!(p.apply("你好 逗号 世界"), "你好， 世界");
@@ -921,40 +976,40 @@ mod tests {
 
     #[test]
     fn test_korean_commands() {
-        let mut p = VoiceCommandProcessor::new("ko", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("ko", false, &HashMap::new());
         assert_eq!(p.apply("안녕 마침표"), "안녕.");
     }
 
     #[test]
     fn test_portuguese_commands() {
-        let mut p = VoiceCommandProcessor::new("pt", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("pt", false, &HashMap::new());
         assert_eq!(p.apply("olá ponto"), "olá.");
         assert_eq!(p.apply("olá vírgula mundo"), "olá, mundo");
     }
 
     #[test]
     fn test_italian_commands() {
-        let mut p = VoiceCommandProcessor::new("it", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("it", false, &HashMap::new());
         assert_eq!(p.apply("ciao punto"), "ciao.");
         assert_eq!(p.apply("ciao virgola mondo"), "ciao, mondo");
     }
 
     #[test]
     fn test_dutch_commands() {
-        let mut p = VoiceCommandProcessor::new("nl", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("nl", false, &HashMap::new());
         assert_eq!(p.apply("hallo punt"), "hallo.");
         assert_eq!(p.apply("hallo komma wereld"), "hallo, wereld");
     }
 
     #[test]
     fn test_polish_commands() {
-        let mut p = VoiceCommandProcessor::new("pl", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("pl", false, &HashMap::new());
         assert_eq!(p.apply("cześć kropka"), "cześć.");
     }
 
     #[test]
     fn test_german_newline_and_caps() {
-        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
         assert_eq!(p.apply("hallo neue zeile welt"), "hallo\nwelt");
         assert_eq!(
             p.apply("großbuchstaben hallo ende großbuchstaben welt"),
@@ -970,14 +1025,14 @@ mod tests {
 
     #[test]
     fn test_unknown_language_falls_back_to_english() {
-        let mut p = VoiceCommandProcessor::new("xx", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("xx", false, &HashMap::new());
         // Should still recognize English commands as fallback
         assert_eq!(p.apply("hello period"), "hello.");
     }
 
     #[test]
     fn test_auto_language_uses_english() {
-        let mut p = VoiceCommandProcessor::new("auto", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("auto", false, &HashMap::new());
         assert_eq!(p.apply("hello period"), "hello.");
     }
 
@@ -1078,7 +1133,7 @@ mod tests {
 
     #[test]
     fn test_german_enter() {
-        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
         assert_eq!(p.apply("hallo enter welt"), "hallo\nwelt");
     }
 
@@ -1108,28 +1163,28 @@ mod tests {
     #[test]
     fn test_whisper_punkt_with_trailing_period() {
         // German: Whisper outputs "Punkt."
-        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
         assert_eq!(p.apply("hallo Punkt."), "hallo.");
     }
 
     #[test]
     fn test_whisper_punkt_with_trailing_ellipsis() {
         // German: Whisper outputs "Punkt..."
-        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
         assert_eq!(p.apply("hallo Punkt..."), "hallo.");
     }
 
     #[test]
     fn test_whisper_komma_with_trailing_comma() {
         // German: Whisper outputs "Komma,"
-        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
         assert_eq!(p.apply("hallo Komma, welt"), "hallo, welt");
     }
 
     #[test]
     fn test_whisper_fragezeichen_with_trailing_question() {
         // German: Whisper outputs "Fragezeichen?"
-        let mut p = VoiceCommandProcessor::new("de", &HashMap::new());
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
         assert_eq!(p.apply("was Fragezeichen?"), "was?");
     }
 
@@ -1176,5 +1231,182 @@ mod tests {
         // Random punctuation in the middle of a non-command word should not be consumed
         let mut p = en_processor();
         assert_eq!(p.apply("U.S.A. is great"), "U.S.A. is great");
+    }
+
+    // ── infer_action tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_infer_action_punctuation() {
+        let action = infer_action(".");
+        assert_eq!(action, CommandAction::punct("."));
+
+        let action = infer_action(",");
+        assert_eq!(action, CommandAction::punct(","));
+
+        let action = infer_action("...");
+        assert_eq!(action, CommandAction::punct("..."));
+
+        let action = infer_action("!?");
+        assert_eq!(action, CommandAction::punct("!?"));
+    }
+
+    #[test]
+    fn test_infer_action_open_brackets() {
+        assert_eq!(infer_action("("), CommandAction::open("("));
+        assert_eq!(infer_action("["), CommandAction::open("["));
+        assert_eq!(infer_action("{"), CommandAction::open("{"));
+    }
+
+    #[test]
+    fn test_infer_action_close_brackets() {
+        assert_eq!(infer_action(")"), CommandAction::close(")"));
+        assert_eq!(infer_action("]"), CommandAction::close("]"));
+        assert_eq!(infer_action("}"), CommandAction::close("}"));
+    }
+
+    #[test]
+    fn test_infer_action_whitespace() {
+        assert_eq!(infer_action("\n"), CommandAction::whitespace("\n"));
+        assert_eq!(infer_action("\t"), CommandAction::whitespace("\t"));
+        assert_eq!(infer_action("\n\n"), CommandAction::whitespace("\n\n"));
+        assert_eq!(infer_action(" "), CommandAction::whitespace(" "));
+    }
+
+    #[test]
+    fn test_infer_action_free() {
+        assert_eq!(infer_action("hello"), CommandAction::free("hello"));
+        assert_eq!(infer_action(":)"), CommandAction::free(":)"));
+        assert_eq!(infer_action("@"), CommandAction::free("@"));
+        assert_eq!(infer_action("(("), CommandAction::free("(("));
+    }
+
+    #[test]
+    fn test_infer_action_empty_is_free() {
+        // Empty string should not crash
+        assert_eq!(infer_action(""), CommandAction::free(""));
+    }
+
+    // ── disable_defaults tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_disable_defaults_no_builtins() {
+        let mut p = VoiceCommandProcessor::new("en", true, &HashMap::new());
+        // Built-in "period" command should not exist
+        assert_eq!(p.apply("hello period"), "hello period");
+    }
+
+    #[test]
+    fn test_disable_defaults_user_commands_still_work() {
+        let mut overrides = HashMap::new();
+        overrides.insert("dot".to_string(), ".".to_string());
+
+        let mut p = VoiceCommandProcessor::new("en", true, &overrides);
+        // Built-in "period" should not work
+        assert_eq!(p.apply("hello period"), "hello period");
+        // User-defined "dot" should work
+        assert_eq!(p.apply("hello dot"), "hello.");
+    }
+
+    #[test]
+    fn test_disable_defaults_false_keeps_builtins() {
+        let mut p = VoiceCommandProcessor::new("en", false, &HashMap::new());
+        // Built-in "period" should still work
+        assert_eq!(p.apply("hello period"), "hello.");
+    }
+
+    // ── Override with inferred action tests ──────────────────────────────
+
+    #[test]
+    fn test_user_override_infers_punct() {
+        let mut overrides = HashMap::new();
+        overrides.insert("dot".to_string(), ".".to_string());
+
+        let mut p = VoiceCommandProcessor::new("en", false, &overrides);
+        // "dot" should attach left like punctuation
+        assert_eq!(p.apply("hello dot"), "hello.");
+    }
+
+    #[test]
+    fn test_user_override_infers_open() {
+        let mut overrides = HashMap::new();
+        overrides.insert("open paren".to_string(), "(".to_string());
+
+        let mut p = VoiceCommandProcessor::new("en", false, &overrides);
+        // Should attach right
+        assert_eq!(p.apply("note open paren important"), "note (important");
+    }
+
+    #[test]
+    fn test_user_override_infers_whitespace() {
+        let mut overrides = HashMap::new();
+        overrides.insert("break".to_string(), "\n".to_string());
+
+        let mut p = VoiceCommandProcessor::new("en", false, &overrides);
+        // Should attach both sides (eat surrounding spaces)
+        assert_eq!(p.apply("hello break world"), "hello\nworld");
+    }
+
+    // ── builtin_commands_display tests ───────────────────────────────────
+
+    #[test]
+    fn test_builtin_commands_display_returns_pairs() {
+        let commands = builtin_commands_display("en");
+        assert!(
+            !commands.is_empty(),
+            "English should have built-in commands"
+        );
+
+        // Check that we get phrase → replacement pairs
+        assert!(
+            commands
+                .iter()
+                .any(|(phrase, replacement)| phrase == "period" && replacement == "."),
+            "Should contain 'period' → '.'"
+        );
+    }
+
+    #[test]
+    fn test_builtin_commands_display_no_caps_commands() {
+        let commands = builtin_commands_display("en");
+        // Caps toggle commands (CapsOn/CapsOff) should be filtered out
+        // because they don't have Insert actions
+        assert!(
+            !commands.iter().any(|(phrase, _)| phrase == "all caps"),
+            "Should not include caps toggle commands"
+        );
+    }
+
+    #[test]
+    fn test_builtin_commands_display_german() {
+        let commands = builtin_commands_display("de");
+        assert!(!commands.is_empty());
+        assert!(
+            commands
+                .iter()
+                .any(|(phrase, replacement)| phrase == "punkt" && replacement == "."),
+            "German should contain 'punkt' → '.'"
+        );
+    }
+
+    #[test]
+    fn test_builtin_commands_display_roundtrip() {
+        // All built-in display commands should be present in actual processor
+        for lang in ["en", "de", "es", "fr"] {
+            let display = builtin_commands_display(lang);
+            let mut p = VoiceCommandProcessor::new(lang, false, &HashMap::new());
+
+            for (phrase, replacement) in display {
+                let input = format!("test {}", phrase);
+                let output = p.apply(&input);
+                assert!(
+                    output.contains(&replacement),
+                    "Language {}: phrase '{}' should produce '{}' in output '{}'",
+                    lang,
+                    phrase,
+                    replacement,
+                    output
+                );
+            }
+        }
     }
 }
