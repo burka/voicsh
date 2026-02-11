@@ -455,6 +455,18 @@ async fn load_single_model(
 fn build_model_path(model: &str) -> Result<PathBuf> {
     let path = PathBuf::from(model);
 
+    // Reject path traversal before checking existence (../../etc/passwd could exist)
+    if !path.is_absolute() && (model.contains("..") || model.contains('/') || model.contains('\\'))
+    {
+        return Err(VoicshError::Transcription {
+            message: format!(
+                "Invalid model name '{}'. Use a catalog model name (e.g., 'base', 'tiny.en') \
+                 or an absolute path to a model file.",
+                model
+            ),
+        });
+    }
+
     if path.is_absolute() || path.exists() {
         return Ok(path);
     }
@@ -468,17 +480,6 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
             message: format!(
                 "Model '{}' is not installed. Run 'voicsh models install {}' to download it.",
                 model, model
-            ),
-        });
-    }
-
-    // Reject path traversal in model names that aren't absolute/explicit paths
-    if model.contains("..") || model.contains('/') || model.contains('\\') {
-        return Err(VoicshError::Transcription {
-            message: format!(
-                "Invalid model name '{}'. Use a catalog model name (e.g., 'base', 'tiny.en') \
-                 or an absolute path to a model file.",
-                model
             ),
         });
     }
