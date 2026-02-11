@@ -15,6 +15,15 @@ pub trait PostProcessor: Send + 'static {
     /// Transform transcribed text. Returns the processed string.
     fn process(&mut self, text: &str) -> String;
 
+    /// Transform transcribed text and produce events.
+    /// Default implementation delegates to `process` and returns no events.
+    fn process_with_events(
+        &mut self,
+        text: &str,
+    ) -> (String, Vec<crate::pipeline::types::SinkEvent>) {
+        (self.process(text), vec![])
+    }
+
     /// Name for logging/diagnostics.
     fn name(&self) -> &'static str;
 }
@@ -39,7 +48,9 @@ impl Station for PostProcessorStation {
         mut input: TranscribedText,
     ) -> Result<Option<TranscribedText>, StationError> {
         for processor in &mut self.processors {
-            input.text = processor.process(&input.text);
+            let (new_text, events) = processor.process_with_events(&input.text);
+            input.text = new_text;
+            input.events.extend(events);
         }
 
         // Filter out empty results after processing
@@ -144,6 +155,8 @@ enum CommandAction {
     CapsOn,
     /// Toggle caps mode off.
     CapsOff,
+    /// Emit a keyboard shortcut event (e.g., "ctrl+BackSpace").
+    KeyCombo(String),
 }
 
 impl CommandAction {
@@ -235,23 +248,26 @@ impl VoiceCommandProcessor {
         }
     }
 
-    /// Apply voice command replacements to a single text segment.
+    /// Apply voice command replacements and produce sink events.
     ///
-    /// Uses a simple O(n*m) scan where n = text length and m = number of
-    /// commands. With n < 100 chars (typical Whisper segment) and m ~ 20
-    /// built-in commands, this runs in sub-millisecond time. Whisper
-    /// transcription dominates overall latency by orders of magnitude.
-    /// Alternatives considered (aho-corasick, HashMap sliding window) add
-    /// complexity for word-boundary validation, caps-lock state, and spacing
-    /// rules without meaningful benefit at this scale.
-    fn apply(&mut self, text: &str) -> String {
-        // Work on a single char array; compare case-insensitively inline to
-        // avoid index misalignment when to_lowercase() changes char count
-        // (e.g. U+0130 İ → two chars "i\u{307}").
-        let mut result = String::with_capacity(text.len());
+    /// When KeyCombo commands are present, text is split into events:
+    /// - `SinkEvent::Text` for regular text segments
+    /// - `SinkEvent::KeyCombo` for keyboard shortcuts
+    ///
+    /// When no KeyCombo commands are matched, returns empty events for
+    /// backward compatibility (pure text path).
+    fn apply_with_events(
+        &mut self,
+        text: &str,
+    ) -> (String, Vec<crate::pipeline::types::SinkEvent>) {
+        use crate::pipeline::types::SinkEvent;
+
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
         let mut i = 0;
+        let mut current_buf = String::with_capacity(text.len());
+        let mut events: Vec<SinkEvent> = Vec::new();
+        let mut has_key_combo = false;
 
         while i < len {
             let mut matched = false;
@@ -299,35 +315,52 @@ impl VoiceCommandProcessor {
                     continue;
                 }
 
-                let eat_trailing = match action {
+                match action {
+                    CommandAction::KeyCombo(combo) => {
+                        has_key_combo = true;
+                        // Flush text buffer
+                        if !current_buf.is_empty() {
+                            events.push(SinkEvent::Text(std::mem::take(&mut current_buf)));
+                        }
+                        events.push(SinkEvent::KeyCombo(combo.clone()));
+                        // Skip past match
+                        i += plen + trailing_punct_len;
+                        if i < len && chars[i].is_whitespace() {
+                            i += 1;
+                        }
+                    }
                     CommandAction::Insert {
                         text: replacement,
                         attach_left,
                         attach_right,
                     } => {
                         if *attach_left {
-                            while result.ends_with(' ') {
-                                result.pop();
+                            while current_buf.ends_with(' ') {
+                                current_buf.pop();
                             }
                         }
-                        result.push_str(replacement);
-                        *attach_right
+                        current_buf.push_str(replacement);
+                        i += plen + trailing_punct_len;
+                        if *attach_right && i < len && chars[i].is_whitespace() {
+                            i += 1;
+                        }
                     }
                     CommandAction::CapsOn => {
                         self.caps_active = true;
-                        true
+                        i += plen + trailing_punct_len;
+                        if i < len && chars[i].is_whitespace() {
+                            i += 1;
+                        }
                     }
                     CommandAction::CapsOff => {
                         self.caps_active = false;
-                        true
+                        i += plen + trailing_punct_len;
+                        if i < len && chars[i].is_whitespace() {
+                            i += 1;
+                        }
                     }
-                };
-
-                // Skip past the matched phrase and any trailing punctuation.
-                i += plen + trailing_punct_len;
-                if eat_trailing && i < len && chars[i].is_whitespace() {
-                    i += 1;
                 }
+
                 matched = true;
                 break;
             }
@@ -336,22 +369,67 @@ impl VoiceCommandProcessor {
                 let ch = chars[i];
                 if self.caps_active {
                     for upper in ch.to_uppercase() {
-                        result.push(upper);
+                        current_buf.push(upper);
                     }
                 } else {
-                    result.push(ch);
+                    current_buf.push(ch);
                 }
                 i += 1;
             }
         }
 
-        result
+        // Flush remaining text
+        if !current_buf.is_empty() {
+            if has_key_combo {
+                events.push(SinkEvent::Text(std::mem::take(&mut current_buf)));
+            } else {
+                // No key combos at all — return text only, events empty (backward compat)
+                return (current_buf, vec![]);
+            }
+        }
+
+        if has_key_combo {
+            // Full text is the concatenation of all Text events for backward compat
+            let full_text = events
+                .iter()
+                .filter_map(|e| {
+                    if let SinkEvent::Text(t) = e {
+                        Some(t.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<String>();
+            (full_text, events)
+        } else {
+            (current_buf, vec![])
+        }
+    }
+
+    /// Apply voice command replacements to a single text segment.
+    ///
+    /// Uses a simple O(n*m) scan where n = text length and m = number of
+    /// commands. With n < 100 chars (typical Whisper segment) and m ~ 20
+    /// built-in commands, this runs in sub-millisecond time. Whisper
+    /// transcription dominates overall latency by orders of magnitude.
+    /// Alternatives considered (aho-corasick, HashMap sliding window) add
+    /// complexity for word-boundary validation, caps-lock state, and spacing
+    /// rules without meaningful benefit at this scale.
+    fn apply(&mut self, text: &str) -> String {
+        self.apply_with_events(text).0
     }
 }
 
 impl PostProcessor for VoiceCommandProcessor {
     fn process(&mut self, text: &str) -> String {
         self.apply(text)
+    }
+
+    fn process_with_events(
+        &mut self,
+        text: &str,
+    ) -> (String, Vec<crate::pipeline::types::SinkEvent>) {
+        self.apply_with_events(text)
     }
 
     fn name(&self) -> &'static str {
@@ -366,12 +444,10 @@ impl PostProcessor for VoiceCommandProcessor {
 pub fn builtin_commands_display(language: &str) -> Vec<(String, String)> {
     builtin_commands(language)
         .into_iter()
-        .filter_map(|(phrase, action)| {
-            if let CommandAction::Insert { text, .. } = action {
-                Some((phrase, text))
-            } else {
-                None
-            }
+        .filter_map(|(phrase, action)| match action {
+            CommandAction::Insert { text, .. } => Some((phrase, text)),
+            CommandAction::KeyCombo(combo) => Some((phrase, combo)),
+            _ => None,
         })
         .collect()
 }
@@ -431,6 +507,11 @@ fn english_commands() -> Vec<(String, CommandAction)> {
         // Caps toggle
         ("all caps".into(), CommandAction::CapsOn),
         ("end caps".into(), CommandAction::CapsOff),
+        // Key combos
+        (
+            "delete word".into(),
+            CommandAction::KeyCombo("ctrl+BackSpace".to_string()),
+        ),
     ]
 }
 
@@ -449,6 +530,10 @@ fn german_commands() -> Vec<(String, CommandAction)> {
         ("enter".into(), CommandAction::whitespace("\n")),
         ("großbuchstaben".into(), CommandAction::CapsOn),
         ("ende großbuchstaben".into(), CommandAction::CapsOff),
+        (
+            "wort löschen".into(),
+            CommandAction::KeyCombo("ctrl+BackSpace".to_string()),
+        ),
     ]
 }
 
@@ -1391,6 +1476,7 @@ mod tests {
 
     #[test]
     fn test_builtin_commands_display_roundtrip() {
+        use crate::pipeline::types::SinkEvent;
         // All built-in display commands should be present in actual processor
         for lang in ["en", "de", "es", "fr"] {
             let display = builtin_commands_display(lang);
@@ -1398,16 +1484,114 @@ mod tests {
 
             for (phrase, replacement) in display {
                 let input = format!("test {}", phrase);
-                let output = p.apply(&input);
+                let (output, events) = p.apply_with_events(&input);
+
+                // Check if replacement appears in text output OR in events
+                let found_in_text = output.contains(&replacement);
+                let found_in_events = events.iter().any(|e| match e {
+                    SinkEvent::Text(t) => t.contains(&replacement),
+                    SinkEvent::KeyCombo(combo) => combo == &replacement,
+                });
+
                 assert!(
-                    output.contains(&replacement),
-                    "Language {}: phrase '{}' should produce '{}' in output '{}'",
+                    found_in_text || found_in_events,
+                    "Language {}: phrase '{}' should produce '{}' in output '{}' or events {:?}",
                     lang,
                     phrase,
                     replacement,
-                    output
+                    output,
+                    events
                 );
             }
         }
+    }
+
+    // ── KeyCombo event tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_delete_word_produces_key_combo_event() {
+        use crate::pipeline::types::SinkEvent;
+        let mut p = en_processor();
+        let (text, events) = p.apply_with_events("hello delete word world");
+        assert_eq!(text, "hello world");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0], SinkEvent::Text("hello ".to_string()));
+        assert_eq!(events[1], SinkEvent::KeyCombo("ctrl+BackSpace".to_string()));
+        assert_eq!(events[2], SinkEvent::Text("world".to_string()));
+    }
+
+    #[test]
+    fn test_delete_word_at_start() {
+        use crate::pipeline::types::SinkEvent;
+        let mut p = en_processor();
+        let (text, events) = p.apply_with_events("delete word hello");
+        assert_eq!(text, "hello");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], SinkEvent::KeyCombo("ctrl+BackSpace".to_string()));
+        assert_eq!(events[1], SinkEvent::Text("hello".to_string()));
+    }
+
+    #[test]
+    fn test_delete_word_at_end() {
+        use crate::pipeline::types::SinkEvent;
+        let mut p = en_processor();
+        let (text, events) = p.apply_with_events("hello delete word");
+        assert_eq!(text, "hello ");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], SinkEvent::Text("hello ".to_string()));
+        assert_eq!(events[1], SinkEvent::KeyCombo("ctrl+BackSpace".to_string()));
+    }
+
+    #[test]
+    fn test_no_key_combo_returns_empty_events() {
+        let mut p = en_processor();
+        let (text, events) = p.apply_with_events("hello period world");
+        assert_eq!(text, "hello. world");
+        assert!(
+            events.is_empty(),
+            "No KeyCombo matched, events should be empty"
+        );
+    }
+
+    #[test]
+    fn test_mixed_text_commands_and_key_combo() {
+        use crate::pipeline::types::SinkEvent;
+        let mut p = en_processor();
+        let (text, events) = p.apply_with_events("hello comma delete word world period");
+        assert_eq!(text, "hello, world.");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0], SinkEvent::Text("hello, ".to_string()));
+        assert_eq!(events[1], SinkEvent::KeyCombo("ctrl+BackSpace".to_string()));
+        assert_eq!(events[2], SinkEvent::Text("world.".to_string()));
+    }
+
+    #[test]
+    fn test_german_delete_word() {
+        use crate::pipeline::types::SinkEvent;
+        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
+        let (text, events) = p.apply_with_events("hallo wort löschen welt");
+        assert_eq!(text, "hallo welt");
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0], SinkEvent::Text("hallo ".to_string()));
+        assert_eq!(events[1], SinkEvent::KeyCombo("ctrl+BackSpace".to_string()));
+        assert_eq!(events[2], SinkEvent::Text("welt".to_string()));
+    }
+
+    #[test]
+    fn test_process_with_events_default_impl() {
+        // Non-VoiceCommandProcessor (default impl) returns empty events
+        struct UpperProcessor;
+        impl PostProcessor for UpperProcessor {
+            fn process(&mut self, text: &str) -> String {
+                text.to_uppercase()
+            }
+            fn name(&self) -> &'static str {
+                "upper"
+            }
+        }
+        let mut p = UpperProcessor;
+        let (text, events) = p.process_with_events("hello");
+        assert_eq!(text, "HELLO");
+        assert!(events.is_empty());
     }
 }
