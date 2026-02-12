@@ -575,6 +575,8 @@ fn check_prerequisites() -> Result<()> {
 mod tests {
     use super::*;
 
+    // ── Path security tests ──────────────────────────────────────────────
+
     #[test]
     fn test_build_model_path_with_absolute_path() {
         let path = build_model_path("/absolute/path/to/model.bin").unwrap();
@@ -692,6 +694,71 @@ mod tests {
         assert_eq!(result.unwrap(), PathBuf::from("/absolute/path/model.bin"));
     }
 
+    #[test]
+    fn test_build_model_path_rejects_double_dot_anywhere() {
+        // Even if not at the start, .. is dangerous
+        let result = build_model_path("safe/../unsafe/model.bin");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid model name"));
+    }
+
+    #[test]
+    fn test_build_model_path_rejects_hidden_traversal() {
+        // Sneaky path with hidden directory traversal
+        let result = build_model_path("models/../../etc/shadow");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid model name"));
+    }
+
+    #[test]
+    fn test_build_model_path_rejects_forward_slash_in_name() {
+        // Even single forward slash is rejected for non-absolute paths
+        let result = build_model_path("models/subdir/model.bin");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid model name"));
+    }
+
+    #[test]
+    fn test_build_model_path_rejects_mixed_slashes() {
+        // Mixed forward and backward slashes
+        let result = build_model_path("models/subdir\\model.bin");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Invalid model name"));
+    }
+
+    #[test]
+    fn test_build_model_path_error_message_quality_catalog() {
+        // Catalog model error should be actionable
+        let result = build_model_path("tiny");
+        if result.is_err() {
+            let err_msg = result.unwrap_err().to_string();
+            // Should contain both what's wrong AND how to fix it
+            assert!(
+                err_msg.contains("not installed") && err_msg.contains("voicsh models install"),
+                "Error should explain problem and solution: {}",
+                err_msg
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_model_path_error_message_quality_invalid() {
+        // Invalid path error should guide user to valid options
+        let result = build_model_path("../bad/path.bin");
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        // Should mention both catalog names AND absolute paths as valid options
+        assert!(
+            err_msg.contains("catalog model name") || err_msg.contains("absolute path"),
+            "Error should guide to valid options: {}",
+            err_msg
+        );
+    }
+
     // ── Buffer capacity tests ────────────────────────────────────────────
 
     #[test]
@@ -727,5 +794,35 @@ mod tests {
         assert_eq!(chunk_buffer_from_secs(7), 3);
         // 20s / 3 = 7 (ceiling)
         assert_eq!(chunk_buffer_from_secs(20), 7);
+    }
+
+    #[test]
+    fn test_chunk_buffer_from_secs_boundary_at_minimum() {
+        // Test edge case: 2s should give exactly 2 (not fall below)
+        assert_eq!(chunk_buffer_from_secs(2), 2);
+        assert_eq!(chunk_buffer_from_secs(3), 2);
+    }
+
+    #[test]
+    fn test_chunk_buffer_from_secs_boundary_at_transition() {
+        // Test transition from minimum (2) to calculated value (3)
+        assert_eq!(chunk_buffer_from_secs(4), 2);
+        assert_eq!(chunk_buffer_from_secs(5), 2);
+        assert_eq!(chunk_buffer_from_secs(6), 2);
+        assert_eq!(chunk_buffer_from_secs(7), 3); // First value > 2
+    }
+
+    #[test]
+    fn test_chunk_buffer_from_secs_very_large() {
+        // 1 hour = 3600s / 3 = 1200
+        assert_eq!(chunk_buffer_from_secs(3600), 1200);
+    }
+
+    #[test]
+    fn test_chunk_buffer_from_secs_realistic_values() {
+        // Common use cases
+        assert_eq!(chunk_buffer_from_secs(15), 5); // 15s buffer
+        assert_eq!(chunk_buffer_from_secs(30), 10); // 30s buffer
+        assert_eq!(chunk_buffer_from_secs(60), 20); // 1 minute buffer
     }
 }

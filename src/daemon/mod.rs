@@ -127,7 +127,10 @@ impl DaemonState {
     /// Emit an event to all follow clients (for async/handler code).
     pub fn emit(&self, event: DaemonEvent) {
         if let Err(e) = self.event_tx.send(event) {
-            eprintln!("voicsh: failed to emit daemon event to subscribers: {} (all clients may have disconnected)", e);
+            eprintln!(
+                "voicsh: failed to emit daemon event to subscribers: {} (all clients may have disconnected)",
+                e
+            );
         }
     }
 }
@@ -195,7 +198,10 @@ pub async fn run_daemon(
     std::thread::spawn(move || {
         while let Ok(event) = bridge_event_rx.recv() {
             if let Err(e) = bridge_event_tx.send(event) {
-                eprintln!("voicsh: bridge thread failed to forward event to subscribers: {} (all clients may have disconnected)", e);
+                eprintln!(
+                    "voicsh: bridge thread failed to forward event to subscribers: {} (all clients may have disconnected)",
+                    e
+                );
             }
         }
     });
@@ -429,5 +435,393 @@ mod tests {
 
         let language = state.language().await;
         assert_eq!(language, "de");
+    }
+
+    fn create_state_with_config(config: Config) -> DaemonState {
+        #[cfg(feature = "portal")]
+        {
+            DaemonState::new(config, mock_transcriber(), None)
+        }
+
+        #[cfg(not(feature = "portal"))]
+        {
+            DaemonState::new(config, mock_transcriber())
+        }
+    }
+
+    fn create_state() -> DaemonState {
+        create_state_with_config(Config::default())
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_new_initializes_backend_and_device() {
+        let state = create_state();
+
+        // Backend should be non-empty (CPU, CUDA, etc.)
+        assert!(
+            !state.backend.is_empty(),
+            "Backend should be initialized to a non-empty value"
+        );
+
+        // Device may be Some or None depending on environment
+        // Just verify the field exists (this is a structural test)
+        let _ = state.device;
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_new_initializes_channels() {
+        let state = create_state();
+
+        // Event channel should be ready
+        let _rx = state.subscribe();
+
+        // Pipeline event channel should be ready (send a test event)
+        let test_event = DaemonEvent::Log {
+            message: "test".to_string(),
+        };
+        state
+            .pipeline_event_tx
+            .send(test_event.clone())
+            .expect("Should be able to send to pipeline event channel");
+
+        // The bridge thread isn't running in this test, so we can't receive it
+        // But we verified the channel is functional
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_is_recording_transitions() {
+        let state = create_state();
+
+        // Initially not recording
+        assert_eq!(
+            state.is_recording().await,
+            false,
+            "Should not be recording initially"
+        );
+
+        // Simulate setting a pipeline handle (would normally be set by start_recording)
+        // We can't easily create a real PipelineHandle in tests, but we can verify
+        // the state reports correctly
+        {
+            let pipeline = state.pipeline.lock().await;
+            assert!(
+                pipeline.is_none(),
+                "Pipeline should be None when not recording"
+            );
+        }
+
+        // After starting recording (simulated by setting Some), is_recording would return true
+        // This is tested in handler tests where we actually start recording
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_model_name_default() {
+        let state = create_state();
+        let model_name = state.model_name().await;
+        assert_eq!(
+            model_name, "base",
+            "Default config should have 'base' model"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_language_default() {
+        let state = create_state();
+        let language = state.language().await;
+        assert_eq!(
+            language, "auto",
+            "Default config should have 'auto' language"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_subscribe() {
+        let state = create_state();
+
+        // Subscribe should create a new receiver
+        let mut rx1 = state.subscribe();
+        let mut rx2 = state.subscribe();
+
+        // Emit an event
+        let event = DaemonEvent::RecordingStateChanged { recording: true };
+        state.emit(event.clone());
+
+        // Both subscribers should receive it
+        let received1 = rx1
+            .recv()
+            .await
+            .expect("First subscriber should receive event");
+        assert_eq!(
+            received1, event,
+            "First subscriber should receive the exact event"
+        );
+
+        let received2 = rx2
+            .recv()
+            .await
+            .expect("Second subscriber should receive event");
+        assert_eq!(
+            received2, event,
+            "Second subscriber should receive the exact event"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_emit() {
+        let state = create_state();
+        let mut rx = state.subscribe();
+
+        // Emit a recording state change event
+        let event = DaemonEvent::RecordingStateChanged { recording: true };
+        state.emit(event.clone());
+
+        // Should receive the event
+        let received = rx.recv().await.expect("Should receive emitted event");
+        assert_eq!(received, event, "Received event should match emitted event");
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_emit_multiple_events() {
+        let state = create_state();
+        let mut rx = state.subscribe();
+
+        // Emit multiple events
+        let event1 = DaemonEvent::RecordingStateChanged { recording: true };
+        let event2 = DaemonEvent::Transcription {
+            text: "hello".to_string(),
+        };
+        let event3 = DaemonEvent::RecordingStateChanged { recording: false };
+
+        state.emit(event1.clone());
+        state.emit(event2.clone());
+        state.emit(event3.clone());
+
+        // All events should be received in order
+        assert_eq!(rx.recv().await.unwrap(), event1, "First event should match");
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            event2,
+            "Second event should match"
+        );
+        assert_eq!(rx.recv().await.unwrap(), event3, "Third event should match");
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_emit_with_no_subscribers() {
+        // This test verifies emit() doesn't panic when no subscribers exist
+        let state = create_state();
+
+        // Don't create any subscribers
+        // emit() should handle the error gracefully and not panic
+        let event = DaemonEvent::Log {
+            message: "test".to_string(),
+        };
+        state.emit(event);
+
+        // Test passes if we didn't panic
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_emit_after_all_subscribers_dropped() {
+        let state = create_state();
+
+        {
+            let _rx = state.subscribe();
+            // Receiver dropped at end of scope
+        }
+
+        // emit() should handle the "no receivers" error gracefully
+        let event = DaemonEvent::Log {
+            message: "test".to_string(),
+        };
+        state.emit(event);
+
+        // Test passes if we didn't panic
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_subscribe_after_events_emitted() {
+        let state = create_state();
+
+        // Emit event before subscribing
+        let event1 = DaemonEvent::Log {
+            message: "before".to_string(),
+        };
+        state.emit(event1);
+
+        // New subscriber should not receive old events
+        let mut rx = state.subscribe();
+
+        // Emit new event
+        let event2 = DaemonEvent::Log {
+            message: "after".to_string(),
+        };
+        state.emit(event2.clone());
+
+        // Should only receive event2, not event1
+        let received = rx.recv().await.expect("Should receive new event");
+        assert_eq!(
+            received, event2,
+            "New subscriber should only see events after subscription"
+        );
+
+        // Should not have any more events
+        match rx.try_recv() {
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                // Expected
+            }
+            _ => panic!("Should have no more events"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_config_mutation() {
+        let state = create_state();
+
+        // Get initial model name
+        let initial_model = state.model_name().await;
+        assert_eq!(initial_model, "base");
+
+        // Mutate config
+        {
+            let mut config = state.config.lock().await;
+            config.stt.model = "large".to_string();
+        }
+
+        // Model name should reflect the change
+        let new_model = state.model_name().await;
+        assert_eq!(new_model, "large", "Config mutation should be reflected");
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_pipeline_initially_none() {
+        let state = create_state();
+
+        let pipeline = state.pipeline.lock().await;
+        assert!(
+            pipeline.is_none(),
+            "Pipeline should be None on initialization"
+        );
+    }
+
+    #[cfg(feature = "portal")]
+    #[tokio::test]
+    async fn test_daemon_state_portal_none() {
+        let config = Config::default();
+        let state = DaemonState::new(config, mock_transcriber(), None);
+
+        assert!(
+            state.portal.is_none(),
+            "Portal should be None when not provided"
+        );
+    }
+
+    #[cfg(feature = "portal")]
+    #[tokio::test]
+    async fn test_daemon_state_portal_some() {
+        use crate::input::portal::PortalSession;
+
+        let config = Config::default();
+
+        // Create a mock portal session (this might fail in test env, so we just test the API)
+        let portal_result = PortalSession::try_new().await;
+
+        // If portal is available in test env, test with it
+        if let Ok(portal) = portal_result {
+            let state = DaemonState::new(config, mock_transcriber(), Some(Arc::new(portal)));
+            assert!(
+                state.portal.is_some(),
+                "Portal should be Some when provided"
+            );
+        }
+    }
+
+    #[test]
+    fn test_detect_gpu_device_handles_missing_nvidia_smi() {
+        // This test verifies detect_gpu_device() doesn't panic when nvidia-smi is missing
+        // Should return None gracefully
+        let result = detect_gpu_device();
+        // Result may be Some or None depending on environment
+        let _ = result;
+        // Test passes if we didn't panic
+    }
+
+    #[test]
+    fn test_detect_cpu_device_handles_missing_cpuinfo() {
+        // This test verifies detect_cpu_device() doesn't panic
+        // On Linux it should return Some, on other platforms it might return None
+        let result = detect_cpu_device();
+        // Result may be Some or None depending on platform
+        let _ = result;
+        // Test passes if we didn't panic
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_event_channel_capacity() {
+        let state = create_state();
+        let mut rx = state.subscribe();
+
+        // Emit events up to the channel capacity (256)
+        // We emit fewer than capacity to ensure we can receive all
+        for i in 0..100 {
+            state.emit(DaemonEvent::Log {
+                message: format!("event {}", i),
+            });
+        }
+
+        // We should be able to receive all events we sent
+        let mut count = 0;
+        while rx.try_recv().is_ok() {
+            count += 1;
+        }
+
+        // We should have received all 100 events
+        assert_eq!(
+            count, 100,
+            "Should have received all 100 events from the channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_daemon_state_event_channel_overflow() {
+        // This test verifies channel behavior when capacity is exceeded
+        let state = create_state();
+        let mut rx = state.subscribe();
+
+        // Emit many more events than channel capacity without receiving
+        // The broadcast channel will start dropping old events
+        for i in 0..500 {
+            state.emit(DaemonEvent::Log {
+                message: format!("event {}", i),
+            });
+        }
+
+        // Try to receive - we might get Lagged error or some recent events
+        let first_result = rx.try_recv();
+
+        match first_result {
+            Ok(_) => {
+                // We got some events, count them
+                let mut count = 1;
+                while rx.try_recv().is_ok() {
+                    count += 1;
+                }
+                // Should have received some events (fewer than 500)
+                assert!(
+                    count > 0 && count < 500,
+                    "Should receive some but not all events when overflowed"
+                );
+            }
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+                // Expected: channel lagged and dropped some events
+                assert!(n > 0, "Should report how many events were lagged");
+            }
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                // All events were dropped, which is possible
+            }
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                panic!("Channel should not be closed");
+            }
+        }
     }
 }

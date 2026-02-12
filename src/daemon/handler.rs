@@ -483,4 +483,218 @@ mod tests {
             "Shutdown should return Ok"
         );
     }
+
+    #[tokio::test]
+    async fn test_handler_follow_command_returns_error() {
+        let handler = create_test_handler();
+        let response = handler.handle(Command::Follow).await;
+
+        match response {
+            Response::Error { message } => {
+                assert_eq!(
+                    message, "Follow command not supported via request-response handler",
+                    "Follow should return specific error message"
+                );
+            }
+            _ => panic!("Expected Error response for Follow command"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handler_subscribe() {
+        let handler = create_test_handler();
+
+        // Subscribe to events
+        let mut rx = handler.subscribe();
+
+        // Emit a test event
+        handler.state.emit(DaemonEvent::Log {
+            message: "test".to_string(),
+        });
+
+        // Should receive the event
+        let event = rx.recv().await.expect("Should receive event");
+        assert_eq!(
+            event,
+            DaemonEvent::Log {
+                message: "test".to_string()
+            },
+            "Should receive the exact event emitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_toggle_recording_when_not_recording() {
+        let handler = create_test_handler();
+
+        // Ensure not recording
+        assert!(!handler.state.is_recording().await);
+
+        // Toggle should try to start
+        let response = handler.toggle_recording().await;
+
+        // Will either succeed or fail (audio device unavailable in test)
+        match response {
+            Response::Ok { message } => {
+                assert_eq!(message, "Recording started");
+            }
+            Response::Error { .. } => {
+                // Audio device might not be available in test env
+            }
+            _ => panic!("Expected Ok or Error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stop_recording_when_not_recording() {
+        let handler = create_test_handler();
+
+        let response = handler.stop_recording().await;
+
+        match response {
+            Response::Error { message } => {
+                assert_eq!(
+                    message, "Not recording",
+                    "Stop should return 'Not recording' error"
+                );
+            }
+            _ => panic!("Expected Error response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_pipeline_config() {
+        let handler = create_test_handler();
+        let config = handler.state.config.lock().await.clone();
+
+        let pipeline_config = handler.build_pipeline_config(&config);
+
+        // Verify configuration fields
+        assert_eq!(
+            pipeline_config.sample_rate, 16000,
+            "Sample rate should be 16kHz for Whisper"
+        );
+        assert_eq!(
+            pipeline_config.vad.speech_threshold, config.audio.vad_threshold,
+            "VAD threshold should match config"
+        );
+        assert_eq!(
+            pipeline_config.vad.silence_duration_ms, config.audio.silence_duration_ms,
+            "Silence duration should match config"
+        );
+        assert_eq!(
+            pipeline_config.verbosity, 0,
+            "Verbosity should match handler verbosity"
+        );
+        assert!(pipeline_config.auto_level, "Auto level should be enabled");
+        assert!(
+            pipeline_config.quiet,
+            "Quiet should be true in test handler"
+        );
+        assert!(pipeline_config.event_tx.is_some(), "Event TX should be set");
+    }
+
+    #[tokio::test]
+    async fn test_handler_new_with_different_verbosity() {
+        let config = Config::default();
+        let transcriber: Arc<dyn crate::stt::transcriber::Transcriber> =
+            Arc::new(MockTranscriber::new("mock-test-model"));
+
+        #[cfg(feature = "portal")]
+        let state = DaemonState::new(config, transcriber, None);
+
+        #[cfg(not(feature = "portal"))]
+        let state = DaemonState::new(config, transcriber);
+
+        let handler = DaemonCommandHandler::new(state, false, 2);
+
+        assert_eq!(handler.verbosity, 2, "Verbosity should be set correctly");
+        assert!(!handler.quiet, "Quiet should be false");
+    }
+
+    #[tokio::test]
+    async fn test_handler_emits_events_on_state_changes() {
+        let handler = create_test_handler();
+        let mut rx = handler.subscribe();
+
+        // Try to start recording (will fail in test env, but should still emit events if successful)
+        let response = handler.start_recording().await;
+
+        // Check if we got a recording state changed event
+        match response {
+            Response::Ok { .. } => {
+                // If recording started successfully, we should get an event
+                let event = rx
+                    .recv()
+                    .await
+                    .expect("Should receive recording state event");
+                assert_eq!(
+                    event,
+                    DaemonEvent::RecordingStateChanged { recording: true },
+                    "Should emit recording started event"
+                );
+            }
+            Response::Error { .. } => {
+                // Audio device not available, no event emitted
+            }
+            _ => panic!("Unexpected response type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handler_status_shows_correct_backend() {
+        let handler = create_test_handler();
+
+        let response = handler.get_status().await;
+
+        match response {
+            Response::Status { backend, .. } => {
+                assert!(
+                    !backend.is_empty(),
+                    "Backend should be initialized to a non-empty value"
+                );
+            }
+            _ => panic!("Expected Status response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_audio_source_with_invalid_device() {
+        let handler = create_test_handler();
+        let mut config = handler.state.config.lock().await.clone();
+
+        // Set an invalid device name
+        config.audio.device = Some("nonexistent-audio-device-12345".to_string());
+
+        let result = handler.create_audio_source(&config);
+
+        // Should return an error
+        match result {
+            Err(Response::Error { message }) => {
+                assert!(
+                    message.contains("Failed to create audio source"),
+                    "Error message should mention audio source failure"
+                );
+                assert!(
+                    message.contains("nonexistent-audio-device-12345"),
+                    "Error message should include device name"
+                );
+            }
+            Ok(_) => {
+                // Might succeed if the audio backend is very permissive
+            }
+            Err(_) => panic!("Expected Response::Error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_sink() {
+        let handler = create_test_handler();
+        let config = handler.state.config.lock().await.clone();
+
+        // create_sink should not panic
+        let _sink = handler.create_sink(&config);
+
+        // Test passes if we didn't panic
+    }
 }

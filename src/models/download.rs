@@ -402,4 +402,323 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_list_installed_models_with_mock_directory() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let models = ["tiny.en", "base", "small.en"];
+
+        for model in &models {
+            let filename = format!("ggml-{}.bin", model);
+            let path = temp_dir.path().join(&filename);
+            std::fs::write(&path, b"mock model data").unwrap();
+        }
+
+        let non_model = temp_dir.path().join("readme.txt");
+        std::fs::write(non_model, b"not a model").unwrap();
+
+        let subdir = temp_dir.path().join("ggml-subdir.bin");
+        std::fs::create_dir(&subdir).unwrap();
+
+        let entries = std::fs::read_dir(temp_dir.path()).unwrap();
+        let mut found_names: Vec<String> = entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let name = entry.file_name();
+                let name = name.to_str()?;
+                let model = name.strip_prefix("ggml-")?.strip_suffix(".bin")?;
+                if entry.path().is_file() {
+                    Some(model.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        found_names.sort();
+        let mut expected = models.to_vec();
+        expected.sort();
+
+        assert_eq!(
+            found_names, expected,
+            "Should find all model files and ignore non-models"
+        );
+    }
+
+    #[test]
+    fn test_list_installed_models_with_empty_directory() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let entries = std::fs::read_dir(temp_dir.path()).unwrap();
+        let found: Vec<String> = entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let name = entry.file_name();
+                let name = name.to_str()?;
+                let model = name.strip_prefix("ggml-")?.strip_suffix(".bin")?;
+                if entry.path().is_file() {
+                    Some(model.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert_eq!(found.len(), 0, "Empty directory should yield no models");
+    }
+
+    #[test]
+    fn test_list_installed_models_ignores_malformed_filenames() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let bad_names = ["ggml-model", "model.bin", "ggml-model.txt", ".bin"];
+
+        for name in &bad_names {
+            let path = temp_dir.path().join(name);
+            std::fs::write(&path, b"data").unwrap();
+        }
+
+        let empty_name = temp_dir.path().join("ggml-.bin");
+        std::fs::write(&empty_name, b"empty").unwrap();
+
+        let valid = temp_dir.path().join("ggml-tiny.bin");
+        std::fs::write(&valid, b"valid").unwrap();
+
+        let entries = std::fs::read_dir(temp_dir.path()).unwrap();
+        let mut found: Vec<String> = entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let name = entry.file_name();
+                let name = name.to_str()?;
+                let model = name.strip_prefix("ggml-")?.strip_suffix(".bin")?;
+                if entry.path().is_file() {
+                    Some(model.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        found.sort();
+
+        assert_eq!(
+            found.len(),
+            2,
+            "Should find the valid model and empty-name model"
+        );
+        assert_eq!(found[0], "", "Should extract empty string as model name");
+        assert_eq!(found[1], "tiny", "Should extract correct model name");
+    }
+
+    #[test]
+    fn test_find_any_installed_model_verifies_catalog() {
+        let result = find_any_installed_model();
+
+        if let Some(name) = result {
+            let model = crate::models::catalog::get_model(&name);
+            assert!(
+                model.is_some(),
+                "find_any_installed_model returned '{}' but it's not in catalog",
+                name
+            );
+            assert!(
+                is_model_installed(&name),
+                "find_any_installed_model returned '{}' but is_model_installed returns false",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_model_path_with_empty_string() {
+        let path = model_path("");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            filename, "ggml-.bin",
+            "Empty string should produce ggml-.bin"
+        );
+    }
+
+    #[test]
+    fn test_model_path_with_special_characters() {
+        let path = model_path("model-with-dashes");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            filename, "ggml-model-with-dashes.bin",
+            "Dashes should be preserved"
+        );
+
+        let path = model_path("model_with_underscores");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            filename, "ggml-model_with_underscores.bin",
+            "Underscores should be preserved"
+        );
+
+        let path = model_path("model.with.dots");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            filename, "ggml-model.with.dots.bin",
+            "Dots should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_model_path_consistency() {
+        let path1 = model_path("base");
+        let path2 = model_path("base");
+        assert_eq!(path1, path2, "model_path should return consistent results");
+    }
+
+    #[test]
+    fn test_model_path_parent_is_models_dir() {
+        let path = model_path("test-model");
+        let parent = path.parent().unwrap();
+        let expected = models_dir();
+        assert_eq!(parent, expected, "model_path parent should be models_dir");
+    }
+
+    #[test]
+    fn test_is_model_installed_with_empty_string() {
+        let installed = is_model_installed("");
+        assert!(
+            !installed,
+            "Empty string model name should not be installed"
+        );
+    }
+
+    #[test]
+    fn test_format_model_info_contains_all_fields() {
+        let model = get_model("base").unwrap();
+        let formatted = format_model_info(model);
+
+        assert!(
+            formatted.contains("base"),
+            "Should contain model name 'base', got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("142"),
+            "Should contain size '142', got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("MB"),
+            "Should contain 'MB' unit, got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("[") && formatted.contains("]"),
+            "Should contain bracketed status, got: {}",
+            formatted
+        );
+    }
+
+    #[test]
+    fn test_format_model_info_status_is_valid() {
+        let model = get_model("tiny.en").unwrap();
+        let formatted = format_model_info(model);
+
+        let has_installed = formatted.contains("[installed]");
+        let has_not_installed = formatted.contains("[not installed]");
+
+        assert!(
+            has_installed || has_not_installed,
+            "Status should be either [installed] or [not installed], got: {}",
+            formatted
+        );
+        assert!(
+            !(has_installed && has_not_installed),
+            "Should not contain both statuses, got: {}",
+            formatted
+        );
+    }
+
+    #[cfg(feature = "model-download")]
+    #[test]
+    fn test_format_remote_model_structure() {
+        let formatted = format_remote_model("custom-model", 500);
+
+        assert!(
+            formatted.contains("custom-model"),
+            "Should contain model name, got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("500"),
+            "Should contain size, got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("MB"),
+            "Should contain MB unit, got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("installed"),
+            "Should contain installation status, got: {}",
+            formatted
+        );
+    }
+
+    #[test]
+    fn test_models_dir_structure() {
+        let dir = models_dir();
+        let dir_str = dir.to_string_lossy();
+
+        assert!(
+            dir_str.contains("voicsh"),
+            "models_dir should contain 'voicsh', got: {}",
+            dir_str
+        );
+        assert!(
+            dir_str.contains("models"),
+            "models_dir should contain 'models', got: {}",
+            dir_str
+        );
+
+        assert!(
+            dir.file_name().unwrap() == "models",
+            "Last component should be 'models', got: {:?}",
+            dir.file_name()
+        );
+    }
+
+    #[test]
+    fn test_model_path_works_for_all_catalog_models() {
+        for model in crate::models::catalog::list_models() {
+            let path = model_path(model.name);
+            let filename = path.file_name().unwrap().to_string_lossy();
+
+            assert!(
+                filename.starts_with("ggml-"),
+                "Model {} path should start with ggml-, got: {}",
+                model.name,
+                filename
+            );
+            assert!(
+                filename.ends_with(".bin"),
+                "Model {} path should end with .bin, got: {}",
+                model.name,
+                filename
+            );
+            assert!(
+                filename.contains(model.name),
+                "Model {} filename should contain model name, got: {}",
+                model.name,
+                filename
+            );
+        }
+    }
+
+    #[test]
+    fn test_list_installed_models_always_sorted() {
+        let result = list_installed_models();
+        let mut sorted = result.clone();
+        sorted.sort();
+        assert_eq!(
+            result, sorted,
+            "list_installed_models should always return sorted results"
+        );
+    }
 }

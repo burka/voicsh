@@ -298,10 +298,8 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                     if recording { "yes" } else { "no" }
                 );
                 // Model
-                if model_loaded {
-                    if let Some(name) = model_name {
-                        println!("  {}     {}", "Model:".dimmed(), name);
-                    }
+                if model_loaded && let Some(name) = model_name {
+                    println!("  {}     {}", "Model:".dimmed(), name);
                 }
                 // Language
                 if let Some(lang) = language {
