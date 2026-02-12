@@ -2,7 +2,22 @@
 
 ## Build Prerequisites
 
-Requires Rust (via rustup), cmake, pkg-config, and ALSA development headers. On Debian/Ubuntu: `sudo apt install cmake pkg-config libasound2-dev`. On Fedora: `sudo dnf install cmake pkg-config alsa-lib-devel`. For runtime text injection, install `wl-clipboard` plus either `wtype` (wlroots) or `ydotool` (fallback).
+Requires Rust (via rustup), a C toolchain, cmake, pkg-config, libclang, and ALSA development headers:
+
+```bash
+# Debian/Ubuntu:
+sudo apt install build-essential cmake pkg-config libclang-dev libasound2-dev
+
+# Fedora:
+sudo dnf install gcc gcc-c++ cmake pkg-config clang-devel alsa-lib-devel
+
+# Arch:
+sudo pacman -S base-devel cmake pkgconf clang alsa-lib
+```
+
+For the authoritative list of system dependencies, see [`test-containers/Dockerfile.vulkan`](test-containers/Dockerfile.vulkan).
+
+For runtime text injection, install `wl-clipboard` plus either `wtype` (wlroots) or `ydotool` (fallback).
 
 ## Local Install
 

@@ -44,8 +44,32 @@ Pipe mode (`cat file.wav | voicsh`) skips injection and writes to stdout.
 
 ## Install
 
+### Build dependencies
+
+Rust (via [rustup](https://rustup.rs/)) plus a C toolchain, cmake, pkg-config, libclang, and ALSA headers:
+
+```bash
+# Debian/Ubuntu:
+sudo apt install build-essential cmake pkg-config libclang-dev libasound2-dev
+
+# Fedora:
+sudo dnf install gcc gcc-c++ cmake pkg-config clang-devel alsa-lib-devel
+
+# Arch:
+sudo pacman -S base-devel cmake pkgconf clang alsa-lib
+```
+
+For the authoritative list of system dependencies, see [`test-containers/Dockerfile.vulkan`](test-containers/Dockerfile.vulkan).
+
 ```bash
 cargo install --git https://github.com/burka/voicsh.git
+```
+
+If you only need pipe mode (WAV → text, no microphone) and want to skip the ALSA dependency:
+
+```bash
+cargo install --git https://github.com/burka/voicsh.git \
+    --no-default-features --features cli,portal,model-download
 ```
 
 ### GPU acceleration
@@ -55,8 +79,8 @@ By default voicsh runs on CPU. Enable GPU for ~5-10x faster transcription:
 | Backend | Flag | Prerequisites |
 |---------|------|---------------|
 | NVIDIA  | `--features cuda` | [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit) ≥ 11.0 |
-| Cross-platform | `--features vulkan` | [Vulkan SDK](https://vulkan.lunarg.com/) |
-| AMD | `--features hipblas` | [ROCm](https://rocm.docs.amd.com/) |
+| Cross-platform | `--features vulkan` | [Vulkan SDK](https://vulkan.lunarg.com/) — on Ubuntu: `libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc` |
+| AMD (discrete) | `--features hipblas` | [ROCm](https://rocm.docs.amd.com/) |
 | CPU optimized | `--features openblas` | `libopenblas-dev` / `openblas` |
 
 Verify with `voicsh check` (shows detected GPU hardware and compiled backend).
