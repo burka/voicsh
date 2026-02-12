@@ -18,7 +18,7 @@ const EXTENSION_UUID: &str = "voicsh@voicsh.dev";
 pub fn install_gnome_extension() -> Result<()> {
     // Step 1: Install systemd user service
     eprintln!("Installing systemd service...");
-    install_systemd_service()?;
+    crate::systemd::install_and_activate()?;
 
     // Step 2: Install GNOME extension
     eprintln!("Installing GNOME extension...");
@@ -32,35 +32,7 @@ pub fn install_gnome_extension() -> Result<()> {
 /// Uninstall the GNOME Shell extension and systemd user service.
 pub fn uninstall_gnome_extension() -> Result<()> {
     eprintln!("Stopping and disabling systemd service...");
-
-    // Stop service (cleanup/shutdown errors are logged, not fatal)
-    if let Err(e) = Command::new("systemctl")
-        .args(["--user", "stop", "voicsh.service"])
-        .status()
-    {
-        eprintln!("Warning: Failed to stop service: {}", e);
-    }
-
-    // Disable service (cleanup/shutdown errors are logged, not fatal)
-    if let Err(e) = Command::new("systemctl")
-        .args(["--user", "disable", "voicsh.service"])
-        .status()
-    {
-        eprintln!("Warning: Failed to disable service: {}", e);
-    }
-
-    // Remove service file
-    let systemd_dir = get_systemd_user_dir()?;
-    let service_path = systemd_dir.join("voicsh.service");
-    if service_path.exists() {
-        fs::remove_file(&service_path).context("Failed to remove service file")?;
-    }
-
-    // Reload systemd
-    Command::new("systemctl")
-        .args(["--user", "daemon-reload"])
-        .status()
-        .context("Failed to reload systemd")?;
+    crate::systemd::stop_and_disable()?;
 
     eprintln!("Disabling GNOME extension...");
 
@@ -79,53 +51,6 @@ pub fn uninstall_gnome_extension() -> Result<()> {
     }
 
     println!("Service and extension removed. Log out and back in to complete.");
-
-    Ok(())
-}
-
-fn install_systemd_service() -> Result<()> {
-    // Get systemd user directory
-    let systemd_dir = get_systemd_user_dir()?;
-
-    // Create directory if it doesn't exist
-    fs::create_dir_all(&systemd_dir).context("Failed to create systemd user directory")?;
-
-    // Get current executable path
-    let exe_path = std::env::current_exe().context("Failed to get current executable path")?;
-
-    // Generate service file
-    let service_content = format!(
-        r#"[Unit]
-Description=voicsh - Voice typing daemon
-After=graphical-session.target
-
-[Service]
-Type=simple
-ExecStart={} daemon
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-"#,
-        exe_path.display()
-    );
-
-    // Write service file
-    let service_path = systemd_dir.join("voicsh.service");
-    fs::write(&service_path, service_content).context("Failed to write service file")?;
-
-    // Reload systemd
-    Command::new("systemctl")
-        .args(["--user", "daemon-reload"])
-        .status()
-        .context("Failed to reload systemd")?;
-
-    // Enable and start service
-    Command::new("systemctl")
-        .args(["--user", "enable", "--now", "voicsh.service"])
-        .status()
-        .context("Failed to enable and start service")?;
 
     Ok(())
 }
@@ -183,16 +108,6 @@ fn install_extension_files() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn get_systemd_user_dir() -> Result<PathBuf> {
-    if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
-        Ok(PathBuf::from(config_home).join("systemd/user"))
-    } else if let Ok(home) = std::env::var("HOME") {
-        Ok(PathBuf::from(home).join(".config/systemd/user"))
-    } else {
-        anyhow::bail!("Could not determine user config directory")
-    }
 }
 
 fn get_extension_dir() -> Result<PathBuf> {

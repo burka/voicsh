@@ -30,6 +30,8 @@ pub mod models;
 pub mod pipeline;
 pub mod streaming;
 pub mod stt;
+#[cfg(feature = "cli")]
+pub mod systemd;
 
 // L4 composition root - needs everything
 #[cfg(all(feature = "cpal-audio", feature = "model-download", feature = "cli"))]

@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
             handle_follow(socket).await?;
         }
         Some(voicsh::cli::Commands::InstallService) => {
-            install_systemd_service()?;
+            voicsh::systemd::install_and_activate()?;
         }
         Some(voicsh::cli::Commands::InstallGnomeExtension) => {
             voicsh::gnome_extension::install_gnome_extension()?;
@@ -429,59 +429,6 @@ async fn handle_follow(socket: Option<std::path::PathBuf>) -> Result<()> {
             std::process::exit(1);
         }
     }
-
-    Ok(())
-}
-
-/// Install systemd user service.
-fn install_systemd_service() -> Result<()> {
-    use std::fs;
-    use std::path::PathBuf;
-
-    // Get systemd user directory
-    let systemd_dir = if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(config_home).join("systemd/user")
-    } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".config/systemd/user")
-    } else {
-        anyhow::bail!("Could not determine user config directory");
-    };
-
-    // Create directory if it doesn't exist
-    fs::create_dir_all(&systemd_dir)?;
-
-    // Get current executable path
-    let exe_path = std::env::current_exe()?;
-
-    // Generate service file
-    let service_content = format!(
-        r#"[Unit]
-Description=voicsh - Voice typing daemon
-After=graphical-session.target
-
-[Service]
-Type=simple
-ExecStart={} daemon
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-"#,
-        exe_path.display()
-    );
-
-    // Write service file
-    let service_path = systemd_dir.join("voicsh.service");
-    fs::write(&service_path, service_content)?;
-
-    println!("Systemd service installed to: {}", service_path.display());
-    println!("\nTo enable and start the service:");
-    println!("  systemctl --user daemon-reload");
-    println!("  systemctl --user enable voicsh.service");
-    println!("  systemctl --user start voicsh.service");
-    println!("\nTo check status:");
-    println!("  systemctl --user status voicsh.service");
 
     Ok(())
 }
