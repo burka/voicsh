@@ -3,3 +3,23 @@ Cargo.lock
 *report.json
 .serena/
 gschemas.compiled
+
+# Secrets and credentials
+*.env
+*.env.*
+.env.local
+.env.production
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*.pub
+credentials.json
+service-account*.json
+.htpasswd
+*.secret
