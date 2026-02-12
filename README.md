@@ -2,6 +2,9 @@
 
 Offline, privacy-first voice typing. Speak into your mic, text appears in your focused app. Or pipe a WAV file and get text on stdout.
 
+**Build:** Rust, C compiler, cmake, pkg-config, libclang, ALSA headers — `sudo apt install build-essential cmake pkg-config libclang-dev libasound2-dev`
+**Run (mic mode):** `sudo apt install wl-clipboard wtype ydotool` — GNOME 45+ / KDE 6.1+ work without wtype/ydotool; pipe mode has no runtime deps
+
 > **Status: Early MVP (v0.0.1)**
 >
 > Free-time side project. Primary target: **Ubuntu + GNOME + Wayland** — that's what I develop and test on. Other distros, desktops, and compositors are welcome, but I can't reproduce issues outside this setup. Maintenance time is limited.
