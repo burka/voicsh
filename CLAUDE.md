@@ -43,6 +43,13 @@ cargo test --lib --no-default-features
 - No status data in docs: no test counts, no build stats, no "X passed" — these go stale instantly
 - Keep docs concise; prefer code references over prose
 
+## GNOME Extension Development
+```bash
+./gnome/dev.sh              # nested GNOME Shell with extension auto-enabled
+./gnome/dev.sh --verbose    # with debug output
+```
+Handles symlink, schema compilation, GNOME 45-49+ flag detection. See [DEVELOPMENT.md](DEVELOPMENT.md) for details.
+
 ## References
 - [ARCHITECTURE.md](ARCHITECTURE.md) — System design, pipeline, components
 - [DEVELOPMENT.md](DEVELOPMENT.md) — Testing, mocking patterns, quality checks

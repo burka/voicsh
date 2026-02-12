@@ -47,6 +47,41 @@ All external dependencies are behind traits with test doubles:
 - `serde_json` is available as a dependency for JSON test assertions
 - `tempfile` is available for filesystem tests
 
+## GNOME Extension Development
+
+The extension lives in `gnome/voicsh@voicsh.dev/`.
+
+### Nested Shell (UI and IPC iteration)
+
+A dev script launches a **nested GNOME Shell** inside a window — fast iteration without restarting your session.
+
+```bash
+./gnome/dev.sh              # launch nested shell with extension enabled
+./gnome/dev.sh --verbose    # same, with full GLib/Shell debug output
+```
+
+The script handles symlinks, schema compilation, and auto-enabling the extension. Edit code, close the nested window, rerun — ~2-3 second cycle.
+
+Good for: icon states, menu rendering, styles, IPC (socket connect, toggle, status polling), keybindings.
+
+**Not for end-to-end text injection.** The voicsh daemon runs on the host compositor. The nested shell is a separate Wayland compositor — injected text goes to the host, not into the nested window. Test text injection in your real session.
+
+**Why not disable/re-enable?** GJS caches imported JS modules in memory. `gnome-extensions disable && enable` re-runs `enable()` on the cached code — it does not re-read files from disk. A fresh nested shell process has no cache.
+
+**Requirements**: `gnome-shell`, `glib-compile-schemas`, and on GNOME 49+ also `mutter-dev-bin` (`sudo apt install mutter-dev-bin`). Uses `--devkit` on GNOME 49+, `--nested` on 45-48.
+
+### Real Session (end-to-end testing)
+
+For testing text injection, install the extension in your real session and log out/in:
+
+```bash
+# Symlink is already set up by dev.sh, just enable in real session:
+gnome-extensions enable voicsh@voicsh.dev
+# Log out and back in to load the extension
+```
+
+Code changes require a session restart (log out/in) due to GJS module caching.
+
 ## Quality Checks
 
 See [CLAUDE.md](CLAUDE.md) for the canonical quality gate commands to run before every commit.

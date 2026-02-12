@@ -2,3 +2,4 @@
 Cargo.lock
 *report.json
 .serena/
+gschemas.compiled
