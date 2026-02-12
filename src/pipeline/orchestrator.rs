@@ -1034,8 +1034,7 @@ mod tests {
     #[test]
     fn test_pipeline_with_post_processor() {
         // Verify the post-processor station is wired correctly in the pipeline.
-        // Transcriber outputs "hello comma world period", post-processor should
-        // transform it to "hello, world."
+        // Transcriber outputs "period", post-processor should transform it to "."
         use crate::pipeline::post_processor::VoiceCommandProcessor;
         use std::collections::HashMap;
 
@@ -1067,8 +1066,7 @@ mod tests {
         let audio_source =
             Box::new(MockAudioSource::new().with_frame_sequence(vec![loud_phase, quiet_phase]));
 
-        let transcriber =
-            Arc::new(MockTranscriber::new("test-model").with_response("hello comma world period"));
+        let transcriber = Arc::new(MockTranscriber::new("test-model").with_response("period"));
         let sink = Box::new(CollectorSink::new());
 
         let post_processors: Vec<Box<dyn crate::pipeline::post_processor::PostProcessor>> =
@@ -1091,7 +1089,7 @@ mod tests {
         let result = handle.stop();
         assert_eq!(
             result,
-            Some("hello, world.".to_string()),
+            Some(".".to_string()),
             "Post-processor should transform voice commands in pipeline output"
         );
     }

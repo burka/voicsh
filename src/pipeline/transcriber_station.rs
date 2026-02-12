@@ -111,6 +111,12 @@ impl Station for TranscriberStation {
     }
 
     fn process(&mut self, chunk: AudioChunk) -> Result<Option<TranscribedText>, StationError> {
+        // Skip chunks with insufficient audio energy (silence/noise floor)
+        let rms = crate::audio::vad::calculate_rms(&chunk.samples);
+        if rms < crate::defaults::MIN_ENERGY_FOR_TRANSCRIPTION {
+            return Ok(None);
+        }
+
         // Log transcription start if verbose
         if self.verbose {
             eprintln_clear(&format!("  [transcribing {}ms...]", chunk.duration_ms));
@@ -184,7 +190,7 @@ mod tests {
 
         let mut station = TranscriberStation::new(transcriber);
 
-        let chunk = AudioChunk::new(vec![1, 2, 3, 4, 5], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk);
 
         assert!(result.is_ok());
@@ -200,7 +206,7 @@ mod tests {
 
         let mut station = TranscriberStation::new(transcriber);
 
-        let chunk = AudioChunk::new(vec![1, 2, 3, 4, 5], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk);
 
         assert!(result.is_err());
@@ -222,7 +228,7 @@ mod tests {
 
         let mut station = TranscriberStation::new(transcriber);
 
-        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk);
 
         assert!(result.is_ok());
@@ -241,7 +247,7 @@ mod tests {
 
         let mut station = TranscriberStation::new(transcriber);
 
-        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk);
 
         assert!(result.is_ok());
@@ -374,7 +380,7 @@ mod tests {
         let mut station = TranscriberStation::new(transcriber);
 
         let before = Instant::now();
-        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk);
         let after = Instant::now();
 
@@ -400,7 +406,7 @@ mod tests {
         );
         let mut station = TranscriberStation::new(transcriber);
 
-        let chunk = AudioChunk::new(vec![1, 2, 3], 5, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 5, 1);
         let result = station.process(chunk);
 
         assert!(result.is_ok());
@@ -417,7 +423,7 @@ mod tests {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Hello"));
         let mut station = TranscriberStation::new(transcriber);
 
-        let chunk = AudioChunk::new(vec![1, 2, 3], 100_000, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100_000, 1);
         let result = station.process(chunk);
 
         assert!(result.is_ok());
@@ -438,12 +444,12 @@ mod tests {
         let mut station = TranscriberStation::new(transcriber);
 
         // First slow chunk triggers warning
-        let chunk1 = AudioChunk::new(vec![1, 2, 3], 5, 1);
+        let chunk1 = AudioChunk::new(vec![100i16; 100], 5, 1);
         let _ = station.process(chunk1);
         assert!(station.warned_backpressure);
 
         // Second slow chunk: warned_backpressure stays true, no second warning
-        let chunk2 = AudioChunk::new(vec![1, 2, 3], 5, 2);
+        let chunk2 = AudioChunk::new(vec![100i16; 100], 5, 2);
         let result = station.process(chunk2);
         assert!(result.is_ok());
         assert!(station.warned_backpressure);
@@ -466,7 +472,7 @@ mod tests {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Thank you."));
         let mut station = TranscriberStation::new(transcriber)
             .with_hallucination_filters(vec!["Thank you.".to_string()]);
-        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(result.is_none(), "Hallucinated phrase should be discarded");
     }
@@ -476,7 +482,7 @@ mod tests {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("THANK YOU."));
         let mut station = TranscriberStation::new(transcriber)
             .with_hallucination_filters(vec!["Thank you.".to_string()]);
-        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(result.is_none(), "Filter should be case-insensitive");
     }
@@ -486,7 +492,7 @@ mod tests {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Hello world"));
         let mut station = TranscriberStation::new(transcriber)
             .with_hallucination_filters(vec!["Thank you.".to_string()]);
-        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(result.is_some(), "Non-matching text should pass through");
         assert_eq!(result.unwrap().text, "Hello world");
@@ -498,7 +504,7 @@ mod tests {
             Arc::new(MockTranscriber::new("mock").with_response("Thank you for coming"));
         let mut station = TranscriberStation::new(transcriber)
             .with_hallucination_filters(vec!["Thank you.".to_string()]);
-        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(
             result.is_some(),
@@ -511,7 +517,7 @@ mod tests {
     fn test_hallucination_filter_empty_list_passes() {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Thank you."));
         let mut station = TranscriberStation::new(transcriber).with_hallucination_filters(vec![]);
-        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(result.is_some(), "Empty filter list should pass everything");
         assert_eq!(result.unwrap().text, "Thank you.");
@@ -524,11 +530,45 @@ mod tests {
             Arc::new(MockTranscriber::new("mock").with_response("[MUSIC] Thank you."));
         let mut station = TranscriberStation::new(transcriber)
             .with_hallucination_filters(vec!["Thank you.".to_string()]);
-        let chunk = AudioChunk::new(vec![1, 2, 3], 100, 1);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(
             result.is_none(),
             "After annotation removal, remaining hallucination should be filtered"
         );
+    }
+
+    // ── Energy-based skipping tests ──────────────────────────────────────
+
+    #[test]
+    fn test_silent_chunk_skipped() {
+        // All-zero samples → RMS = 0.0 → below threshold → skip transcription
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Silence"));
+        let mut station = TranscriberStation::new(transcriber);
+        let chunk = AudioChunk::new(vec![0i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_none(), "Silent chunk should be skipped");
+    }
+
+    #[test]
+    fn test_quiet_chunk_skipped() {
+        // Very quiet samples (RMS ~0.00003) → below 0.001 threshold
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Quiet"));
+        let mut station = TranscriberStation::new(transcriber);
+        let chunk = AudioChunk::new(vec![1i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_none(), "Very quiet chunk should be skipped");
+    }
+
+    #[test]
+    fn test_speech_chunk_transcribed() {
+        // Loud enough samples → above threshold → transcriber called
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Speech"));
+        let mut station = TranscriberStation::new(transcriber);
+        // Generate samples with RMS well above 0.001 (value ~655 gives RMS ~0.02)
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_some(), "Speech-level chunk should be transcribed");
+        assert_eq!(result.unwrap().text, "Speech");
     }
 }

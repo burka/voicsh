@@ -102,11 +102,14 @@ Pipe mode (`cat file.wav | voicsh`) has no runtime dependencies beyond the binar
 
 ## Voice commands
 
-Spoken punctuation and formatting are processed automatically. Say "period" and get `.`, say "new line" and get a line break.
+Voice commands trigger only when spoken as **standalone utterances** — pause, say the command, pause. Text that merely contains a command word passes through unchanged:
 
 ```
-"hello comma world period" → "hello, world."
-"all caps hello end caps"  → "HELLO"
+[pause] "period" [pause]          → .
+[pause] "new line" [pause]        → (line break)
+"the period of history"           → "the period of history"
+"press enter to continue"        → "press enter to continue"
+[pause] "all caps" [pause] "wow" → "WOW"
 ```
 
 Built-in commands are available for English, German, Spanish, French, Portuguese, Italian, Dutch, Polish, Russian, Japanese, Chinese, and Korean. Discover all commands for a language:
@@ -117,7 +120,7 @@ voicsh config list --language=ko     # Korean voice commands
 voicsh config list --language=en,de  # multiple languages
 ```
 
-Add custom commands in `[voice_commands.commands]` in config — they take precedence over built-ins.
+Add custom commands in `[voice_commands.commands]` in config — they take precedence over built-ins. To disable voice commands entirely: `voice_commands.enabled = false`.
 
 ## Configuration
 

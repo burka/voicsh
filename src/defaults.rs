@@ -49,6 +49,13 @@ pub const ENGLISH_LANGUAGE: &str = "en";
 /// while waiting for transcription. Increase for slower hardware.
 pub const BUFFER_SECS: u64 = 10;
 
+/// Minimum RMS energy for a chunk to be worth transcribing.
+///
+/// Chunks below this are silence/ambient noise — skip Whisper entirely.
+/// VAD speech threshold is 0.02; this is set 20× lower to only reject
+/// truly silent chunks while allowing anything borderline.
+pub const MIN_ENERGY_FOR_TRANSCRIPTION: f32 = 0.001;
+
 /// Report the GPU backend compiled into this build.
 ///
 /// Returns a human-readable name based on the compile-time feature flags.

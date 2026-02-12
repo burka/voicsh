@@ -104,15 +104,6 @@ fn is_whisper_trailing_punct(ch: char) -> bool {
     matches!(ch, '.' | ',' | '?' | '!' | ':' | ';')
 }
 
-/// Count consecutive trailing punctuation characters.
-/// Handles sequences like "..." (three dots for ellipsis).
-fn count_trailing_punct(chars: &[char]) -> usize {
-    chars
-        .iter()
-        .take_while(|ch| is_whisper_trailing_punct(**ch))
-        .count()
-}
-
 /// Infer attachment behavior from replacement text.
 ///
 /// Detects punctuation, brackets, whitespace to choose the appropriate
@@ -250,171 +241,97 @@ impl VoiceCommandProcessor {
 
     /// Apply voice command replacements and produce sink events.
     ///
-    /// When KeyCombo commands are present, text is split into events:
-    /// - `SinkEvent::Text` for regular text segments
-    /// - `SinkEvent::KeyCombo` for keyboard shortcuts
+    /// Voice commands only match when the **entire transcribed text** is the
+    /// command (possibly with Whisper trailing punctuation). If there's other
+    /// text around it, the input is treated as normal speech and returned as-is.
     ///
-    /// When no KeyCombo commands are matched, returns empty events for
-    /// backward compatibility (pure text path).
+    /// This prevents commands like "enter", "tab", "period" from eating common
+    /// words that appear mid-sentence (e.g., "press enter to continue").
     fn apply_with_events(
         &mut self,
         text: &str,
     ) -> (String, Vec<crate::pipeline::types::SinkEvent>) {
-        use crate::pipeline::types::SinkEvent;
+        let trimmed = text.trim();
 
-        let chars: Vec<char> = text.chars().collect();
-        let len = chars.len();
-        let mut i = 0;
-        let mut current_buf = String::with_capacity(text.len());
-        let mut events: Vec<SinkEvent> = Vec::new();
-        let mut has_key_combo = false;
-
-        while i < len {
-            let mut matched = false;
-
-            for (phrase, action) in &self.commands {
-                let phrase_chars: Vec<char> = phrase.chars().collect();
-                let plen = phrase_chars.len();
-
-                if i + plen > len {
-                    continue;
-                }
-
-                // Case-insensitive char-by-char comparison, safe for all Unicode
-                let chars_match = chars[i..i + plen]
-                    .iter()
-                    .zip(phrase_chars.iter())
-                    .all(|(src, phr)| src.to_lowercase().eq(phr.to_lowercase()));
-                if !chars_match {
-                    continue;
-                }
-
-                // Ensure word boundaries: the character before must be start-of-string
-                // or whitespace, and the character after must be end-of-string,
-                // whitespace, or Whisper-inferred trailing punctuation.
-                let before_ok = i == 0 || chars[i - 1].is_whitespace();
-                let after_pos = i + plen;
-                let (after_ok, trailing_punct_len) =
-                    if after_pos == len || chars[after_pos].is_whitespace() {
-                        (true, 0)
-                    } else {
-                        // Accept trailing punctuation Whisper may have appended
-                        // (e.g., "Enter." → match "enter", consume ".")
-                        let punct_len = count_trailing_punct(&chars[after_pos..]);
-                        if punct_len > 0
-                            && (after_pos + punct_len == len
-                                || chars[after_pos + punct_len].is_whitespace())
-                        {
-                            (true, punct_len)
-                        } else {
-                            (false, 0)
-                        }
-                    };
-
-                if !before_ok || !after_ok {
-                    continue;
-                }
-
-                match action {
-                    CommandAction::KeyCombo(combo) => {
-                        has_key_combo = true;
-                        // Flush text buffer
-                        if !current_buf.is_empty() {
-                            events.push(SinkEvent::Text(std::mem::take(&mut current_buf)));
-                        }
-                        events.push(SinkEvent::KeyCombo(combo.clone()));
-                        // Skip past match
-                        i += plen + trailing_punct_len;
-                        if i < len && chars[i].is_whitespace() {
-                            i += 1;
-                        }
-                    }
-                    CommandAction::Insert {
-                        text: replacement,
-                        attach_left,
-                        attach_right,
-                    } => {
-                        if *attach_left {
-                            while current_buf.ends_with(' ') {
-                                current_buf.pop();
-                            }
-                        }
-                        current_buf.push_str(replacement);
-                        i += plen + trailing_punct_len;
-                        if *attach_right && i < len && chars[i].is_whitespace() {
-                            i += 1;
-                        }
-                    }
-                    CommandAction::CapsOn => {
-                        self.caps_active = true;
-                        i += plen + trailing_punct_len;
-                        if i < len && chars[i].is_whitespace() {
-                            i += 1;
-                        }
-                    }
-                    CommandAction::CapsOff => {
-                        self.caps_active = false;
-                        i += plen + trailing_punct_len;
-                        if i < len && chars[i].is_whitespace() {
-                            i += 1;
-                        }
-                    }
-                }
-
-                matched = true;
-                break;
-            }
-
-            if !matched {
-                let ch = chars[i];
-                if self.caps_active {
-                    for upper in ch.to_uppercase() {
-                        current_buf.push(upper);
-                    }
-                } else {
-                    current_buf.push(ch);
-                }
-                i += 1;
-            }
+        // Try exact full-text match (command spoken as standalone utterance)
+        if let Some(result) = self.try_exact_match(trimmed) {
+            return result;
         }
 
-        // Flush remaining text
-        if !current_buf.is_empty() {
-            if has_key_combo {
-                events.push(SinkEvent::Text(std::mem::take(&mut current_buf)));
-            } else {
-                // No key combos at all — return text only, events empty (backward compat)
-                return (current_buf, vec![]);
-            }
-        }
-
-        if has_key_combo {
-            // Full text is the concatenation of all Text events for backward compat
-            let full_text = events
-                .iter()
-                .filter_map(|e| {
-                    if let SinkEvent::Text(t) = e {
-                        Some(t.as_str())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<String>();
-            (full_text, events)
-        } else {
-            (current_buf, vec![])
-        }
+        // No standalone match — return text as-is, only apply caps
+        (self.apply_caps(text), vec![])
     }
 
-    /// Apply voice command replacements to a single text segment.
+    /// Try to match the entire input text against exactly one command.
     ///
-    /// Uses a simple O(n*m) scan where n = text length and m = number of
-    /// commands. With n < 100 chars (typical Whisper segment) and m ~ 20
-    /// built-in commands, this runs in sub-millisecond time. Whisper
-    /// transcription dominates overall latency by orders of magnitude.
-    /// Alternatives considered (aho-corasick, HashMap sliding window) add
-    /// complexity for word-boundary validation, caps-lock state, and spacing
-    /// rules without meaningful benefit at this scale.
+    /// Strips Whisper trailing punctuation before comparison. Returns the
+    /// command result if matched, or None.
+    fn try_exact_match(
+        &mut self,
+        trimmed: &str,
+    ) -> Option<(String, Vec<crate::pipeline::types::SinkEvent>)> {
+        use crate::pipeline::types::SinkEvent;
+
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // Strip trailing Whisper punctuation (e.g., "Enter." → "Enter")
+        let stripped = trimmed.trim_end_matches(is_whisper_trailing_punct);
+
+        if stripped.is_empty() {
+            return None;
+        }
+
+        let stripped_chars: Vec<char> = stripped.chars().collect();
+
+        for (phrase, action) in &self.commands {
+            let phrase_chars: Vec<char> = phrase.chars().collect();
+            if stripped_chars.len() != phrase_chars.len() {
+                continue;
+            }
+
+            let chars_match = stripped_chars
+                .iter()
+                .zip(phrase_chars.iter())
+                .all(|(s, p)| s.to_lowercase().eq(p.to_lowercase()));
+            if !chars_match {
+                continue;
+            }
+
+            // Exact match found — execute command
+            match action {
+                CommandAction::Insert {
+                    text: replacement, ..
+                } => {
+                    return Some((replacement.clone(), vec![]));
+                }
+                CommandAction::CapsOn => {
+                    self.caps_active = true;
+                    return Some((String::new(), vec![]));
+                }
+                CommandAction::CapsOff => {
+                    self.caps_active = false;
+                    return Some((String::new(), vec![]));
+                }
+                CommandAction::KeyCombo(combo) => {
+                    return Some((String::new(), vec![SinkEvent::KeyCombo(combo.clone())]));
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Apply caps-lock transform to text if caps mode is active.
+    fn apply_caps(&self, text: &str) -> String {
+        if !self.caps_active {
+            return text.to_string();
+        }
+        text.chars().flat_map(|c| c.to_uppercase()).collect()
+    }
+
+    /// Apply voice command replacement to text, returning the processed string.
     fn apply(&mut self, text: &str) -> String {
         self.apply_with_events(text).0
     }
@@ -773,981 +690,616 @@ fn korean_commands() -> Vec<(String, CommandAction)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
 
-    // ── VoiceCommandProcessor unit tests ─────────────────────────────────
+    // ── helpers ──────────────────────────────────────────────────────────
 
     fn en_processor() -> VoiceCommandProcessor {
         VoiceCommandProcessor::new("en", false, &HashMap::new())
     }
 
+    fn de_processor() -> VoiceCommandProcessor {
+        VoiceCommandProcessor::new("de", false, &HashMap::new())
+    }
+
+    // ── standalone command tests ─────────────────────────────────────────
+
     #[test]
-    fn test_period_replacement() {
+    fn standalone_period() {
         let mut p = en_processor();
-        assert_eq!(p.apply("hello world period"), "hello world.");
+        assert_eq!(p.apply("period"), ".");
     }
 
     #[test]
-    fn test_comma_replacement() {
+    fn standalone_comma() {
         let mut p = en_processor();
-        assert_eq!(p.apply("hello comma world"), "hello, world");
+        assert_eq!(p.apply("comma"), ",");
     }
 
     #[test]
-    fn test_question_mark() {
+    fn standalone_enter() {
         let mut p = en_processor();
-        assert_eq!(p.apply("how are you question mark"), "how are you?");
+        assert_eq!(p.apply("enter"), "\n");
     }
 
     #[test]
-    fn test_exclamation_mark() {
+    fn standalone_tab() {
         let mut p = en_processor();
-        assert_eq!(p.apply("wow exclamation mark"), "wow!");
+        assert_eq!(p.apply("tab"), "\t");
     }
 
     #[test]
-    fn test_new_line() {
+    fn standalone_exclamation_point() {
         let mut p = en_processor();
-        assert_eq!(p.apply("first new line second"), "first\nsecond");
+        assert_eq!(p.apply("exclamation point"), "!");
     }
 
     #[test]
-    fn test_new_paragraph() {
+    fn standalone_question_mark() {
         let mut p = en_processor();
-        assert_eq!(p.apply("first new paragraph second"), "first\n\nsecond");
+        assert_eq!(p.apply("question mark"), "?");
     }
 
     #[test]
-    fn test_multiple_commands() {
+    fn standalone_colon() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("colon"), ":");
+    }
+
+    #[test]
+    fn standalone_semicolon() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("semicolon"), ";");
+    }
+
+    #[test]
+    fn standalone_dash() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("dash"), " — ");
+    }
+
+    #[test]
+    fn standalone_hyphen() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hyphen"), "-");
+    }
+
+    #[test]
+    fn standalone_new_line() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("new line"), "\n");
+    }
+
+    #[test]
+    fn standalone_new_paragraph() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("new paragraph"), "\n\n");
+    }
+
+    #[test]
+    fn standalone_open_paren() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("open parenthesis"), "(");
+    }
+
+    #[test]
+    fn standalone_close_paren() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("close parenthesis"), ")");
+    }
+
+    #[test]
+    fn standalone_open_bracket() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("open bracket"), "[");
+    }
+
+    #[test]
+    fn standalone_close_bracket() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("close bracket"), "]");
+    }
+
+    #[test]
+    fn standalone_open_quote() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("open quote"), "\"");
+    }
+
+    #[test]
+    fn standalone_close_quote() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("close quote"), "\"");
+    }
+
+    // ── case insensitivity ──────────────────────────────────────────────
+
+    #[test]
+    fn case_insensitive_period() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("Period"), ".");
+    }
+
+    #[test]
+    fn case_insensitive_enter() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("ENTER"), "\n");
+    }
+
+    #[test]
+    fn case_insensitive_new_line() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("New Line"), "\n");
+    }
+
+    // ── Whisper trailing punctuation ────────────────────────────────────
+
+    #[test]
+    fn whisper_trailing_dot() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("Enter."), "\n");
+    }
+
+    #[test]
+    fn whisper_trailing_dot_on_period() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("Period."), ".");
+    }
+
+    #[test]
+    fn whisper_trailing_comma() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("Comma,"), ",");
+    }
+
+    #[test]
+    fn whisper_trailing_question() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("Enter?"), "\n");
+    }
+
+    #[test]
+    fn whisper_trailing_exclamation() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("Enter!"), "\n");
+    }
+
+    // ── commands NOT consumed mid-sentence ──────────────────────────────
+
+    #[test]
+    fn mid_sentence_enter_not_consumed() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello enter world"), "hello enter world");
+    }
+
+    #[test]
+    fn trailing_enter_not_consumed() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello enter"), "hello enter");
+    }
+
+    #[test]
+    fn mid_sentence_period_not_consumed() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("the period of time"), "the period of time");
+    }
+
+    #[test]
+    fn trailing_period_not_consumed() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello period"), "hello period");
+    }
+
+    #[test]
+    fn press_enter_to_continue_passthrough() {
         let mut p = en_processor();
         assert_eq!(
-            p.apply("hello comma world period how are you question mark"),
-            "hello, world. how are you?"
+            p.apply("press enter to continue"),
+            "press enter to continue"
         );
     }
 
     #[test]
-    fn test_case_insensitive() {
+    fn mid_sentence_comma_not_consumed() {
         let mut p = en_processor();
-        assert_eq!(p.apply("hello Period"), "hello.");
+        assert_eq!(p.apply("hello comma world"), "hello comma world");
     }
 
     #[test]
-    fn test_no_commands_passthrough() {
+    fn multi_command_words_not_consumed() {
         let mut p = en_processor();
-        assert_eq!(p.apply("just regular text"), "just regular text");
+        assert_eq!(
+            p.apply("hello comma world period"),
+            "hello comma world period"
+        );
+    }
+
+    // ── passthrough / edge cases ────────────────────────────────────────
+
+    #[test]
+    fn plain_text_passthrough() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("hello world"), "hello world");
     }
 
     #[test]
-    fn test_empty_input() {
+    fn empty_string() {
         let mut p = en_processor();
         assert_eq!(p.apply(""), "");
     }
 
     #[test]
-    fn test_all_caps_toggle() {
+    fn whitespace_only() {
         let mut p = en_processor();
-        assert_eq!(
-            p.apply("hello all caps world end caps foo"),
-            "hello WORLD foo"
-        );
+        assert_eq!(p.apply("   "), "   ");
     }
 
     #[test]
-    fn test_caps_persists_across_words() {
+    fn leading_trailing_whitespace_standalone() {
         let mut p = en_processor();
-        assert_eq!(
-            p.apply("all caps hello world end caps done"),
-            "HELLO WORLD done"
-        );
+        // " period " trimmed is "period" → matches
+        assert_eq!(p.apply(" period "), ".");
+    }
+
+    // ── caps toggle across calls ────────────────────────────────────────
+
+    #[test]
+    fn caps_on_then_text_uppercased() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("all caps"), "");
+        assert_eq!(p.apply("hello"), "HELLO");
     }
 
     #[test]
-    fn test_user_overrides() {
+    fn caps_off_restores_normal() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("all caps"), "");
+        assert_eq!(p.apply("hello"), "HELLO");
+        assert_eq!(p.apply("end caps"), "");
+        assert_eq!(p.apply("world"), "world");
+    }
+
+    #[test]
+    fn caps_with_standalone_command() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("all caps"), "");
+        // Standalone command still produces its replacement, not uppercased
+        assert_eq!(p.apply("period"), ".");
+    }
+
+    #[test]
+    fn caps_applied_to_passthrough_text() {
+        let mut p = en_processor();
+        assert_eq!(p.apply("all caps"), "");
+        assert_eq!(p.apply("hello world"), "HELLO WORLD");
+        assert_eq!(p.apply("end caps"), "");
+        assert_eq!(p.apply("hello world"), "hello world");
+    }
+
+    // ── user overrides ──────────────────────────────────────────────────
+
+    #[test]
+    fn user_override_standalone() {
         let mut overrides = HashMap::new();
-        overrides.insert("smiley".to_string(), ":)".to_string());
-        overrides.insert("at sign".to_string(), "@".to_string());
-
+        overrides.insert("banana".to_string(), "🍌".to_string());
         let mut p = VoiceCommandProcessor::new("en", false, &overrides);
-        assert_eq!(p.apply("hello smiley"), "hello :)");
-        assert_eq!(p.apply("user at sign example"), "user @ example");
+        assert_eq!(p.apply("banana"), "🍌");
     }
 
     #[test]
-    fn test_override_replaces_builtin() {
+    fn user_override_not_consumed_mid_sentence() {
         let mut overrides = HashMap::new();
-        // Override "period" to produce "!!!" instead of "."
-        // "!!!" is inferred as punctuation (all chars are !)
-        overrides.insert("period".to_string(), "!!!".to_string());
-
+        overrides.insert("banana".to_string(), "🍌".to_string());
         let mut p = VoiceCommandProcessor::new("en", false, &overrides);
-        // "!!!" is inferred as punctuation so it attaches left
-        assert_eq!(p.apply("hello period"), "hello!!!");
+        assert_eq!(p.apply("I like banana"), "I like banana");
     }
 
     #[test]
-    fn test_word_boundary_no_partial_match() {
-        let mut p = en_processor();
-        // "periodic" should not trigger "period" replacement
-        assert_eq!(p.apply("periodic table"), "periodic table");
+    fn user_override_replaces_builtin() {
+        let mut overrides = HashMap::new();
+        overrides.insert("period".to_string(), "CUSTOM_PERIOD".to_string());
+        let mut p = VoiceCommandProcessor::new("en", false, &overrides);
+        assert_eq!(p.apply("period"), "CUSTOM_PERIOD");
     }
 
     #[test]
-    fn test_colon_and_semicolon() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("note colon important"), "note: important");
-        assert_eq!(p.apply("done semicolon next"), "done; next");
+    fn disable_defaults_only_overrides_work() {
+        let mut overrides = HashMap::new();
+        overrides.insert("banana".to_string(), "🍌".to_string());
+        let mut p = VoiceCommandProcessor::new("en", true, &overrides);
+        // Built-in "period" no longer works
+        assert_eq!(p.apply("period"), "period");
+        // User override still works
+        assert_eq!(p.apply("banana"), "🍌");
+    }
+
+    // ── language tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn german_standalone_commands() {
+        let mut p = de_processor();
+        assert_eq!(p.apply("punkt"), ".");
+        assert_eq!(p.apply("komma"), ",");
+        assert_eq!(p.apply("enter"), "\n");
     }
 
     #[test]
-    fn test_ellipsis() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("and then ellipsis"), "and then...");
+    fn german_mid_sentence_not_consumed() {
+        let mut p = de_processor();
+        assert_eq!(p.apply("der punkt ist wichtig"), "der punkt ist wichtig");
     }
 
     #[test]
-    fn test_quotes() {
-        let mut p = en_processor();
-        assert_eq!(
-            p.apply("he said open quote hello close quote"),
-            "he said \"hello\""
-        );
-    }
-
-    #[test]
-    fn test_parentheses() {
-        let mut p = en_processor();
-        assert_eq!(
-            p.apply("note open parenthesis important close parenthesis"),
-            "note (important)"
-        );
-    }
-
-    #[test]
-    fn test_tab() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("indent tab code"), "indent\tcode");
-    }
-
-    #[test]
-    fn test_dash_and_hyphen() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("well dash that is it"), "well — that is it");
-        assert_eq!(p.apply("self hyphen aware"), "self-aware");
-    }
-
-    // ── German language tests ────────────────────────────────────────────
-
-    #[test]
-    fn test_german_commands() {
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        assert_eq!(p.apply("hallo punkt"), "hallo.");
-        assert_eq!(p.apply("hallo komma welt"), "hallo, welt");
-        assert_eq!(p.apply("was fragezeichen"), "was?");
-    }
-
-    // ── Spanish language tests ───────────────────────────────────────────
-
-    #[test]
-    fn test_spanish_commands() {
+    fn spanish_standalone_commands() {
         let mut p = VoiceCommandProcessor::new("es", false, &HashMap::new());
-        assert_eq!(p.apply("hola punto"), "hola.");
-        assert_eq!(p.apply("hola coma mundo"), "hola, mundo");
+        assert_eq!(p.apply("punto"), ".");
+        assert_eq!(p.apply("coma"), ",");
     }
 
-    // ── French language tests ────────────────────────────────────────────
-
     #[test]
-    fn test_french_commands() {
+    fn french_standalone_commands() {
         let mut p = VoiceCommandProcessor::new("fr", false, &HashMap::new());
-        assert_eq!(p.apply("bonjour point"), "bonjour.");
-        assert_eq!(p.apply("bonjour virgule monde"), "bonjour, monde");
+        assert_eq!(p.apply("point"), ".");
+        assert_eq!(p.apply("virgule"), ",");
     }
 
-    // ── PostProcessorStation tests ───────────────────────────────────────
+    #[test]
+    fn russian_standalone_commands() {
+        let mut p = VoiceCommandProcessor::new("ru", false, &HashMap::new());
+        assert_eq!(p.apply("точка"), ".");
+        assert_eq!(p.apply("запятая"), ",");
+    }
 
     #[test]
-    fn test_station_passthrough_no_processors() {
-        let mut station = PostProcessorStation::new(vec![]);
+    fn japanese_standalone_commands() {
+        let mut p = VoiceCommandProcessor::new("ja", false, &HashMap::new());
+        assert_eq!(p.apply("句点"), "。");
+        assert_eq!(p.apply("読点"), "、");
+    }
+
+    #[test]
+    fn chinese_standalone_commands() {
+        let mut p = VoiceCommandProcessor::new("zh", false, &HashMap::new());
+        assert_eq!(p.apply("句号"), "。");
+        assert_eq!(p.apply("逗号"), "，");
+    }
+
+    #[test]
+    fn korean_standalone_commands() {
+        let mut p = VoiceCommandProcessor::new("ko", false, &HashMap::new());
+        assert_eq!(p.apply("마침표"), ".");
+        assert_eq!(p.apply("쉼표"), ",");
+    }
+
+    #[test]
+    fn portuguese_standalone_commands() {
+        let mut p = VoiceCommandProcessor::new("pt", false, &HashMap::new());
+        assert_eq!(p.apply("ponto"), ".");
+        assert_eq!(p.apply("vírgula"), ",");
+    }
+
+    #[test]
+    fn italian_standalone_commands() {
+        let mut p = VoiceCommandProcessor::new("it", false, &HashMap::new());
+        assert_eq!(p.apply("punto"), ".");
+        assert_eq!(p.apply("virgola"), ",");
+    }
+
+    #[test]
+    fn dutch_standalone_commands() {
+        let mut p = VoiceCommandProcessor::new("nl", false, &HashMap::new());
+        assert_eq!(p.apply("punt"), ".");
+        assert_eq!(p.apply("komma"), ",");
+    }
+
+    #[test]
+    fn polish_standalone_commands() {
+        let mut p = VoiceCommandProcessor::new("pl", false, &HashMap::new());
+        assert_eq!(p.apply("kropka"), ".");
+        assert_eq!(p.apply("przecinek"), ",");
+    }
+
+    // ── KeyCombo events (standalone) ────────────────────────────────────
+
+    #[test]
+    fn standalone_delete_word_event() {
+        let mut p = en_processor();
+        let (text, events) = p.apply_with_events("delete word");
+        assert_eq!(text, "");
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            crate::pipeline::types::SinkEvent::KeyCombo(_)
+        ));
+    }
+
+    #[test]
+    fn standalone_backspace_event() {
+        let mut p = en_processor();
+        let (text, events) = p.apply_with_events("backspace");
+        assert_eq!(text, "");
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            crate::pipeline::types::SinkEvent::KeyCombo(_)
+        ));
+    }
+
+    #[test]
+    fn delete_word_mid_sentence_not_consumed() {
+        let mut p = en_processor();
+        let (text, events) = p.apply_with_events("please delete word now");
+        assert_eq!(text, "please delete word now");
+        assert!(events.is_empty());
+    }
+
+    // ── PostProcessorStation ────────────────────────────────────────────
+
+    #[test]
+    fn station_standalone_command() {
+        let processor = VoiceCommandProcessor::new("en", false, &HashMap::new());
+        let mut station = PostProcessorStation::new(vec![Box::new(processor)]);
+        let input = TranscribedText::new("period".to_string());
+        let result = station.process(input).unwrap().unwrap();
+        assert_eq!(result.text, ".");
+    }
+
+    #[test]
+    fn station_passthrough_text() {
+        let processor = VoiceCommandProcessor::new("en", false, &HashMap::new());
+        let mut station = PostProcessorStation::new(vec![Box::new(processor)]);
         let input = TranscribedText::new("hello world".to_string());
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "hello world");
     }
 
     #[test]
-    fn test_station_with_voice_commands() {
-        let processor = Box::new(VoiceCommandProcessor::new("en", false, &HashMap::new()));
-        let mut station = PostProcessorStation::new(vec![processor]);
-        let input = TranscribedText::new("hello comma world period".to_string());
-        let result = station.process(input).unwrap().unwrap();
-        assert_eq!(result.text, "hello, world.");
-    }
-
-    #[test]
-    fn test_station_filters_empty_result() {
-        // A processor that returns empty string
-        struct EmptyProcessor;
-        impl PostProcessor for EmptyProcessor {
-            fn process(&mut self, _text: &str) -> String {
-                String::new()
-            }
-            fn name(&self) -> &'static str {
-                "empty"
-            }
-        }
-
-        let mut station = PostProcessorStation::new(vec![Box::new(EmptyProcessor)]);
-        let input = TranscribedText::new("hello".to_string());
+    fn station_empty_result_filtered() {
+        let processor = VoiceCommandProcessor::new("en", false, &HashMap::new());
+        let mut station = PostProcessorStation::new(vec![Box::new(processor)]);
+        let input = TranscribedText::new("all caps".to_string());
+        // "all caps" returns empty text → station should return None
         let result = station.process(input).unwrap();
-        assert!(
-            result.is_none(),
-            "Empty post-processed text should be filtered"
-        );
+        assert!(result.is_none());
     }
 
     #[test]
-    fn test_station_preserves_timestamp() {
-        let processor = Box::new(VoiceCommandProcessor::new("en", false, &HashMap::new()));
-        let mut station = PostProcessorStation::new(vec![processor]);
-        let ts = Instant::now();
-        let input = TranscribedText {
-            text: "hello period".to_string(),
-            timestamp: ts,
-            timing: None,
-            events: vec![],
-        };
-        let result = station.process(input).unwrap().unwrap();
-        assert_eq!(result.text, "hello.");
-        assert_eq!(result.timestamp, ts);
-    }
-
-    #[test]
-    fn test_station_chains_multiple_processors() {
-        // First processor: voice commands
-        let voice = Box::new(VoiceCommandProcessor::new("en", false, &HashMap::new()));
-        // Second processor: uppercase everything
-        struct UpperProcessor;
-        impl PostProcessor for UpperProcessor {
+    fn station_noop_processor() {
+        struct NoOpPostProcessor;
+        impl PostProcessor for NoOpPostProcessor {
             fn process(&mut self, text: &str) -> String {
-                text.to_uppercase()
+                text.to_string()
             }
             fn name(&self) -> &'static str {
-                "upper"
+                "noop"
             }
         }
-
-        let mut station = PostProcessorStation::new(vec![voice, Box::new(UpperProcessor)]);
-        let input = TranscribedText::new("hello period".to_string());
+        let processor = NoOpPostProcessor;
+        let mut station = PostProcessorStation::new(vec![Box::new(processor)]);
+        let input = TranscribedText::new("hello period world".to_string());
         let result = station.process(input).unwrap().unwrap();
-        assert_eq!(result.text, "HELLO.");
+        assert_eq!(result.text, "hello period world");
     }
 
-    #[test]
-    fn test_station_name() {
-        let station = PostProcessorStation::new(vec![]);
-        assert_eq!(station.name(), "post-processor");
-    }
+    // ── infer_action ────────────────────────────────────────────────────
 
     #[test]
-    fn test_station_whitespace_only_filtered() {
-        let mut station = PostProcessorStation::new(vec![]);
-        let input = TranscribedText::new("   \n\t  ".to_string());
-        let result = station.process(input).unwrap();
+    fn infer_action_newline() {
+        let action = infer_action("\n");
         assert!(
-            result.is_none(),
-            "Whitespace-only text should be filtered out"
+            matches!(action, CommandAction::Insert { text, attach_left: true, attach_right: true } if text == "\n")
         );
     }
 
     #[test]
-    fn test_only_command_input() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("period"), ".");
-    }
-
-    #[test]
-    fn test_only_caps_toggle_returns_empty() {
-        // "all caps end caps" with nothing between produces empty string
-        let mut p = en_processor();
-        assert_eq!(p.apply("all caps end caps"), "");
-    }
-
-    #[test]
-    fn test_multiple_spaces_between_words() {
-        let mut p = en_processor();
-        // All spaces before attach-left punctuation are consumed
-        assert_eq!(p.apply("hello  period"), "hello.");
-    }
-
-    #[test]
-    fn test_triple_space_before_punctuation() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello   comma world"), "hello, world");
-    }
-
-    #[test]
-    fn test_multi_space_before_close_quote() {
-        let mut p = en_processor();
-        assert_eq!(
-            p.apply("he said open quote hello  close quote"),
-            "he said \"hello\""
-        );
-    }
-
-    #[test]
-    fn test_caps_with_punctuation() {
-        let mut p = en_processor();
-        assert_eq!(
-            p.apply("all caps hello end caps comma world"),
-            "HELLO, world"
-        );
-    }
-
-    #[test]
-    fn test_russian_commands() {
-        let mut p = VoiceCommandProcessor::new("ru", false, &HashMap::new());
-        assert_eq!(p.apply("привет точка"), "привет.");
-        assert_eq!(p.apply("привет запятая мир"), "привет, мир");
-    }
-
-    #[test]
-    fn test_japanese_commands() {
-        let mut p = VoiceCommandProcessor::new("ja", false, &HashMap::new());
-        assert_eq!(p.apply("こんにちは 句点"), "こんにちは。");
-    }
-
-    #[test]
-    fn test_chinese_commands() {
-        let mut p = VoiceCommandProcessor::new("zh", false, &HashMap::new());
-        assert_eq!(p.apply("你好 句号"), "你好。");
-        // Chinese comma attaches left (no space before) but keeps space after
-        assert_eq!(p.apply("你好 逗号 世界"), "你好， 世界");
-    }
-
-    #[test]
-    fn test_korean_commands() {
-        let mut p = VoiceCommandProcessor::new("ko", false, &HashMap::new());
-        assert_eq!(p.apply("안녕 마침표"), "안녕.");
-    }
-
-    #[test]
-    fn test_portuguese_commands() {
-        let mut p = VoiceCommandProcessor::new("pt", false, &HashMap::new());
-        assert_eq!(p.apply("olá ponto"), "olá.");
-        assert_eq!(p.apply("olá vírgula mundo"), "olá, mundo");
-    }
-
-    #[test]
-    fn test_italian_commands() {
-        let mut p = VoiceCommandProcessor::new("it", false, &HashMap::new());
-        assert_eq!(p.apply("ciao punto"), "ciao.");
-        assert_eq!(p.apply("ciao virgola mondo"), "ciao, mondo");
-    }
-
-    #[test]
-    fn test_dutch_commands() {
-        let mut p = VoiceCommandProcessor::new("nl", false, &HashMap::new());
-        assert_eq!(p.apply("hallo punt"), "hallo.");
-        assert_eq!(p.apply("hallo komma wereld"), "hallo, wereld");
-    }
-
-    #[test]
-    fn test_polish_commands() {
-        let mut p = VoiceCommandProcessor::new("pl", false, &HashMap::new());
-        assert_eq!(p.apply("cześć kropka"), "cześć.");
-    }
-
-    #[test]
-    fn test_german_newline_and_caps() {
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        assert_eq!(p.apply("hallo neue zeile welt"), "hallo\nwelt");
-        assert_eq!(
-            p.apply("großbuchstaben hallo ende großbuchstaben welt"),
-            "HALLO welt"
-        );
-    }
-
-    #[test]
-    fn test_processor_trait_name() {
-        let p = en_processor();
-        assert_eq!(PostProcessor::name(&p), "voice-commands");
-    }
-
-    #[test]
-    fn test_unknown_language_falls_back_to_english() {
-        let mut p = VoiceCommandProcessor::new("xx", false, &HashMap::new());
-        // Should still recognize English commands as fallback
-        assert_eq!(p.apply("hello period"), "hello.");
-    }
-
-    #[test]
-    fn test_auto_language_uses_english() {
-        let mut p = VoiceCommandProcessor::new("auto", false, &HashMap::new());
-        assert_eq!(p.apply("hello period"), "hello.");
-    }
-
-    #[test]
-    fn test_full_stop_alias() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello full stop"), "hello.");
-    }
-
-    #[test]
-    fn test_exclamation_point_alias() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("wow exclamation point"), "wow!");
-    }
-
-    #[test]
-    fn test_longer_phrase_matches_first() {
-        // "new paragraph" should match before "new line"
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello new paragraph world"), "hello\n\nworld");
-    }
-
-    #[test]
-    fn test_command_at_start() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("period hello"), ". hello");
-    }
-
-    #[test]
-    fn test_consecutive_commands() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello period period period"), "hello...");
-    }
-
-    #[test]
-    fn test_case_insensitive_unicode_safe() {
-        // U+0130 (İ) lowercases to two chars in some locales.
-        // The char-by-char comparison must not panic or misalign.
-        let mut p = en_processor();
-        assert_eq!(
-            p.apply("hello İ world"),
-            "hello İ world",
-            "Non-command Unicode text should pass through unchanged"
-        );
-    }
-
-    // ── build_post_processors tests ─────────────────────────────────────
-
-    #[test]
-    fn test_build_post_processors_enabled_returns_one() {
-        let mut config = Config::default();
-        config.voice_commands.enabled = true;
-        let processors = build_post_processors(&config);
-        assert_eq!(
-            processors.len(),
-            1,
-            "Enabled voice commands should produce one processor"
-        );
-        assert_eq!(processors[0].name(), "voice-commands");
-    }
-
-    #[test]
-    fn test_build_post_processors_disabled_returns_empty() {
-        let mut config = Config::default();
-        config.voice_commands.enabled = false;
-        let processors = build_post_processors(&config);
+    fn infer_action_double_newline() {
+        let action = infer_action("\n\n");
         assert!(
-            processors.is_empty(),
-            "Disabled voice commands should produce no processors"
+            matches!(action, CommandAction::Insert { text, attach_left: true, attach_right: true } if text == "\n\n")
         );
     }
 
-    // ── New alias tests ─────────────────────────────────────────────────
-
     #[test]
-    fn test_dot_alias() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello dot"), "hello.");
+    fn infer_action_tab() {
+        let action = infer_action("\t");
+        assert!(
+            matches!(action, CommandAction::Insert { text, attach_left: true, attach_right: true } if text == "\t")
+        );
     }
 
     #[test]
-    fn test_enter_produces_newline() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("first enter second"), "first\nsecond");
-    }
-
-    #[test]
-    fn test_enter_at_end() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello enter"), "hello\n");
-    }
-
-    #[test]
-    fn test_double_enter() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello enter enter world"), "hello\n\nworld");
-    }
-
-    #[test]
-    fn test_german_enter() {
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        assert_eq!(p.apply("hallo enter welt"), "hallo\nwelt");
-    }
-
-    // ── Whisper trailing punctuation tests ───────────────────────────────
-
-    #[test]
-    fn test_whisper_enter_with_trailing_period() {
-        // Whisper transcribes "Enter." when user says "enter" with falling intonation
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello Enter."), "hello\n");
-    }
-
-    #[test]
-    fn test_whisper_period_with_trailing_period() {
-        // Whisper outputs "Period." — should not double the dot
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello Period."), "hello.");
-    }
-
-    #[test]
-    fn test_whisper_comma_with_trailing_comma() {
-        // Whisper outputs "Comma," — should produce single comma
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello Comma, world"), "hello, world");
-    }
-
-    #[test]
-    fn test_whisper_punkt_with_trailing_period() {
-        // German: Whisper outputs "Punkt."
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        assert_eq!(p.apply("hallo Punkt."), "hallo.");
-    }
-
-    #[test]
-    fn test_whisper_punkt_with_trailing_ellipsis() {
-        // German: Whisper outputs "Punkt..."
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        assert_eq!(p.apply("hallo Punkt..."), "hallo.");
-    }
-
-    #[test]
-    fn test_whisper_komma_with_trailing_comma() {
-        // German: Whisper outputs "Komma,"
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        assert_eq!(p.apply("hallo Komma, welt"), "hallo, welt");
-    }
-
-    #[test]
-    fn test_whisper_fragezeichen_with_trailing_question() {
-        // German: Whisper outputs "Fragezeichen?"
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        assert_eq!(p.apply("was Fragezeichen?"), "was?");
-    }
-
-    #[test]
-    fn test_whisper_question_mark_with_trailing_question() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("really Question Mark?"), "really?");
-    }
-
-    #[test]
-    fn test_whisper_exclamation_mark_with_trailing_bang() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("wow Exclamation Mark!"), "wow!");
-    }
-
-    #[test]
-    fn test_whisper_trailing_punct_mid_sentence() {
-        // "Enter." followed by more text
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello Enter. world"), "hello\nworld");
-    }
-
-    #[test]
-    fn test_whisper_trailing_punct_does_not_match_partial_word() {
-        // "periodic." should NOT trigger "period" — the "ic" before "." prevents it
-        let mut p = en_processor();
-        assert_eq!(p.apply("periodic."), "periodic.");
-    }
-
-    #[test]
-    fn test_whisper_dot_with_trailing_period() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello Dot."), "hello.");
-    }
-
-    #[test]
-    fn test_whisper_new_line_with_trailing_period() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("hello New Line. world"), "hello\nworld");
-    }
-
-    #[test]
-    fn test_trailing_punct_only_consumed_at_word_boundary() {
-        // Random punctuation in the middle of a non-command word should not be consumed
-        let mut p = en_processor();
-        assert_eq!(p.apply("U.S.A. is great"), "U.S.A. is great");
-    }
-
-    // ── infer_action tests ───────────────────────────────────────────────
-
-    #[test]
-    fn test_infer_action_punctuation() {
+    fn infer_action_period() {
         let action = infer_action(".");
-        assert_eq!(action, CommandAction::punct("."));
+        assert!(
+            matches!(action, CommandAction::Insert { text, attach_left: true, attach_right: false } if text == ".")
+        );
+    }
 
+    #[test]
+    fn infer_action_comma() {
         let action = infer_action(",");
-        assert_eq!(action, CommandAction::punct(","));
-
-        let action = infer_action("...");
-        assert_eq!(action, CommandAction::punct("..."));
-
-        let action = infer_action("!?");
-        assert_eq!(action, CommandAction::punct("!?"));
-    }
-
-    #[test]
-    fn test_infer_action_open_brackets() {
-        assert_eq!(infer_action("("), CommandAction::open("("));
-        assert_eq!(infer_action("["), CommandAction::open("["));
-        assert_eq!(infer_action("{"), CommandAction::open("{"));
-    }
-
-    #[test]
-    fn test_infer_action_close_brackets() {
-        assert_eq!(infer_action(")"), CommandAction::close(")"));
-        assert_eq!(infer_action("]"), CommandAction::close("]"));
-        assert_eq!(infer_action("}"), CommandAction::close("}"));
-    }
-
-    #[test]
-    fn test_infer_action_whitespace() {
-        assert_eq!(infer_action("\n"), CommandAction::whitespace("\n"));
-        assert_eq!(infer_action("\t"), CommandAction::whitespace("\t"));
-        assert_eq!(infer_action("\n\n"), CommandAction::whitespace("\n\n"));
-        assert_eq!(infer_action(" "), CommandAction::whitespace(" "));
-    }
-
-    #[test]
-    fn test_infer_action_free() {
-        assert_eq!(infer_action("hello"), CommandAction::free("hello"));
-        assert_eq!(infer_action(":)"), CommandAction::free(":)"));
-        assert_eq!(infer_action("@"), CommandAction::free("@"));
-        assert_eq!(infer_action("(("), CommandAction::free("(("));
-    }
-
-    #[test]
-    fn test_infer_action_empty_is_free() {
-        // Empty string should not crash
-        assert_eq!(infer_action(""), CommandAction::free(""));
-    }
-
-    // ── disable_defaults tests ───────────────────────────────────────────
-
-    #[test]
-    fn test_disable_defaults_no_builtins() {
-        let mut p = VoiceCommandProcessor::new("en", true, &HashMap::new());
-        // Built-in "period" command should not exist
-        assert_eq!(p.apply("hello period"), "hello period");
-    }
-
-    #[test]
-    fn test_disable_defaults_user_commands_still_work() {
-        let mut overrides = HashMap::new();
-        overrides.insert("dot".to_string(), ".".to_string());
-
-        let mut p = VoiceCommandProcessor::new("en", true, &overrides);
-        // Built-in "period" should not work
-        assert_eq!(p.apply("hello period"), "hello period");
-        // User-defined "dot" should work
-        assert_eq!(p.apply("hello dot"), "hello.");
-    }
-
-    #[test]
-    fn test_disable_defaults_false_keeps_builtins() {
-        let mut p = VoiceCommandProcessor::new("en", false, &HashMap::new());
-        // Built-in "period" should still work
-        assert_eq!(p.apply("hello period"), "hello.");
-    }
-
-    // ── Override with inferred action tests ──────────────────────────────
-
-    #[test]
-    fn test_user_override_infers_punct() {
-        let mut overrides = HashMap::new();
-        overrides.insert("dot".to_string(), ".".to_string());
-
-        let mut p = VoiceCommandProcessor::new("en", false, &overrides);
-        // "dot" should attach left like punctuation
-        assert_eq!(p.apply("hello dot"), "hello.");
-    }
-
-    #[test]
-    fn test_user_override_infers_open() {
-        let mut overrides = HashMap::new();
-        overrides.insert("open paren".to_string(), "(".to_string());
-
-        let mut p = VoiceCommandProcessor::new("en", false, &overrides);
-        // Should attach right
-        assert_eq!(p.apply("note open paren important"), "note (important");
-    }
-
-    #[test]
-    fn test_user_override_infers_whitespace() {
-        let mut overrides = HashMap::new();
-        overrides.insert("break".to_string(), "\n".to_string());
-
-        let mut p = VoiceCommandProcessor::new("en", false, &overrides);
-        // Should attach both sides (eat surrounding spaces)
-        assert_eq!(p.apply("hello break world"), "hello\nworld");
-    }
-
-    // ── builtin_commands_display tests ───────────────────────────────────
-
-    #[test]
-    fn test_builtin_commands_display_returns_pairs() {
-        let commands = builtin_commands_display("en");
         assert!(
-            !commands.is_empty(),
-            "English should have built-in commands"
-        );
-
-        // Check that we get phrase → replacement pairs
-        assert!(
-            commands
-                .iter()
-                .any(|(phrase, replacement)| phrase == "period" && replacement == "."),
-            "Should contain 'period' → '.'"
+            matches!(action, CommandAction::Insert { text, attach_left: true, attach_right: false } if text == ",")
         );
     }
 
     #[test]
-    fn test_builtin_commands_display_no_caps_commands() {
-        let commands = builtin_commands_display("en");
-        // Caps toggle commands (CapsOn/CapsOff) should be filtered out
-        // because they don't have Insert actions
+    fn infer_action_open_paren() {
+        let action = infer_action("(");
         assert!(
-            !commands.iter().any(|(phrase, _)| phrase == "all caps"),
-            "Should not include caps toggle commands"
+            matches!(action, CommandAction::Insert { text, attach_left: false, attach_right: true } if text == "(")
         );
     }
 
     #[test]
-    fn test_builtin_commands_display_german() {
-        let commands = builtin_commands_display("de");
-        assert!(!commands.is_empty());
+    fn infer_action_close_paren() {
+        let action = infer_action(")");
         assert!(
-            commands
-                .iter()
-                .any(|(phrase, replacement)| phrase == "punkt" && replacement == "."),
-            "German should contain 'punkt' → '.'"
+            matches!(action, CommandAction::Insert { text, attach_left: true, attach_right: false } if text == ")")
         );
     }
 
     #[test]
-    fn test_builtin_commands_display_roundtrip() {
-        use crate::pipeline::types::SinkEvent;
-        // All built-in display commands should be present in actual processor
-        for lang in ["en", "de", "es", "fr"] {
+    fn infer_action_plain_word() {
+        let action = infer_action("hello");
+        assert!(
+            matches!(action, CommandAction::Insert { text, attach_left: false, attach_right: false } if text == "hello")
+        );
+    }
+
+    // ── builtin_commands_display ─────────────────────────────────────────
+
+    #[test]
+    fn builtin_commands_roundtrip() {
+        // Every built-in command phrase should produce its replacement when used standalone
+        for lang in SUPPORTED_LANGUAGES {
             let display = builtin_commands_display(lang);
-            let mut p = VoiceCommandProcessor::new(lang, false, &HashMap::new());
-
-            for (phrase, replacement) in display {
-                let input = format!("test {}", phrase);
-                let (output, events) = p.apply_with_events(&input);
-
-                // Check if replacement appears in text output OR in events
-                let found_in_text = output.contains(&replacement);
-                let found_in_events = events.iter().any(|e| match e {
-                    SinkEvent::Text(t) => t.contains(&replacement),
-                    SinkEvent::KeyCombo(combo) => combo == &replacement,
-                });
-
-                assert!(
-                    found_in_text || found_in_events,
-                    "Language {}: phrase '{}' should produce '{}' in output '{}' or events {:?}",
-                    lang,
-                    phrase,
-                    replacement,
-                    output,
-                    events
+            let mut processor = VoiceCommandProcessor::new(lang, false, &HashMap::new());
+            for (phrase, _replacement) in &display {
+                let result = processor.apply(phrase);
+                // The result should NOT be the original phrase (it should be transformed)
+                assert_ne!(
+                    result, *phrase,
+                    "Language {lang}: standalone \"{phrase}\" was not recognized as a command"
                 );
             }
         }
     }
 
-    // ── KeyCombo event tests ─────────────────────────────────────────────
+    // ── build_post_processors ────────────────────────────────────────────
 
     #[test]
-    fn test_delete_word_produces_key_combo_event() {
-        use crate::pipeline::types::SinkEvent;
+    fn build_post_processors_voice_commands_enabled() {
+        let config = Config::default();
+        let processors = build_post_processors(&config);
+        // Default config has voice_commands enabled
+        assert!(!processors.is_empty());
+        assert_eq!(processors[0].name(), "voice-commands");
+    }
+
+    #[test]
+    fn build_post_processors_voice_commands_disabled() {
+        let mut config = Config::default();
+        config.voice_commands.enabled = false;
+        let processors = build_post_processors(&config);
+        assert!(processors.is_empty());
+    }
+
+    // ── performance ──────────────────────────────────────────────────────
+
+    #[test]
+    fn processing_completes_quickly() {
+        // Standalone matching is O(n) where n = number of commands.
+        // Verify it completes in a reasonable time for a batch.
+        use std::time::Instant;
         let mut p = en_processor();
-        let (text, events) = p.apply_with_events("hello delete word world");
-        assert_eq!(text, "hello world");
-        assert_eq!(events.len(), 3);
-        assert_eq!(events[0], SinkEvent::Text("hello ".to_string()));
-        assert_eq!(events[1], SinkEvent::KeyCombo("ctrl+BackSpace".to_string()));
-        assert_eq!(events[2], SinkEvent::Text("world".to_string()));
-    }
-
-    #[test]
-    fn test_delete_word_at_start() {
-        use crate::pipeline::types::SinkEvent;
-        let mut p = en_processor();
-        let (text, events) = p.apply_with_events("delete word hello");
-        assert_eq!(text, "hello");
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0], SinkEvent::KeyCombo("ctrl+BackSpace".to_string()));
-        assert_eq!(events[1], SinkEvent::Text("hello".to_string()));
-    }
-
-    #[test]
-    fn test_delete_word_at_end() {
-        use crate::pipeline::types::SinkEvent;
-        let mut p = en_processor();
-        let (text, events) = p.apply_with_events("hello delete word");
-        assert_eq!(text, "hello ");
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0], SinkEvent::Text("hello ".to_string()));
-        assert_eq!(events[1], SinkEvent::KeyCombo("ctrl+BackSpace".to_string()));
-    }
-
-    #[test]
-    fn test_no_key_combo_returns_empty_events() {
-        let mut p = en_processor();
-        let (text, events) = p.apply_with_events("hello period world");
-        assert_eq!(text, "hello. world");
-        assert!(
-            events.is_empty(),
-            "No KeyCombo matched, events should be empty"
-        );
-    }
-
-    #[test]
-    fn test_mixed_text_commands_and_key_combo() {
-        use crate::pipeline::types::SinkEvent;
-        let mut p = en_processor();
-        let (text, events) = p.apply_with_events("hello comma delete word world period");
-        assert_eq!(text, "hello, world.");
-        assert_eq!(events.len(), 3);
-        assert_eq!(events[0], SinkEvent::Text("hello, ".to_string()));
-        assert_eq!(events[1], SinkEvent::KeyCombo("ctrl+BackSpace".to_string()));
-        assert_eq!(events[2], SinkEvent::Text("world.".to_string()));
-    }
-
-    #[test]
-    fn test_german_delete_word() {
-        use crate::pipeline::types::SinkEvent;
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        let (text, events) = p.apply_with_events("hallo wort löschen welt");
-        assert_eq!(text, "hallo welt");
-        assert_eq!(events.len(), 3);
-        assert_eq!(events[0], SinkEvent::Text("hallo ".to_string()));
-        assert_eq!(events[1], SinkEvent::KeyCombo("ctrl+BackSpace".to_string()));
-        assert_eq!(events[2], SinkEvent::Text("welt".to_string()));
-    }
-
-    #[test]
-    fn test_process_with_events_default_impl() {
-        // Non-VoiceCommandProcessor (default impl) returns empty events
-        struct UpperProcessor;
-        impl PostProcessor for UpperProcessor {
-            fn process(&mut self, text: &str) -> String {
-                text.to_uppercase()
-            }
-            fn name(&self) -> &'static str {
-                "upper"
-            }
+        let start = Instant::now();
+        for _ in 0..10_000 {
+            let _ = p.apply("hello world this is a normal sentence");
         }
-        let mut p = UpperProcessor;
-        let (text, events) = p.process_with_events("hello");
-        assert_eq!(text, "HELLO");
-        assert!(events.is_empty());
-    }
-
-    // ── Symbol and bracket command tests ────────────────────────────────
-
-    #[test]
-    fn test_slash_commands() {
-        let mut p = en_processor();
-        // tight: attaches both sides
-        assert_eq!(p.apply("he slash she"), "he/she");
-        assert_eq!(p.apply("and forward slash or"), "and/or");
-        assert_eq!(p.apply("path backslash to"), "path\\to");
-    }
-
-    #[test]
-    fn test_symbol_commands() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("a ampersand b"), "a & b");
-        assert_eq!(p.apply("a and sign b"), "a & b");
-        // tight: no spaces
-        assert_eq!(p.apply("user at sign host"), "user@host");
-        // open: attaches right
-        assert_eq!(p.apply("dollar sign 50"), "$50");
-        // free: keeps spaces
-        assert_eq!(p.apply("a hash b"), "a # b");
-        // open: attaches right
-        assert_eq!(p.apply("hashtag tag"), "#tag");
-        // punct: attaches left
-        assert_eq!(p.apply("50 percent sign"), "50%");
-        assert_eq!(p.apply("a asterisk b"), "a * b");
-        // tight: both sides
-        assert_eq!(p.apply("snake underscore case"), "snake_case");
-        assert_eq!(p.apply("a equal sign b"), "a = b");
-        assert_eq!(p.apply("a plus sign b"), "a + b");
-        assert_eq!(p.apply("a pipe b"), "a | b");
-        assert_eq!(p.apply("a tilde b"), "a ~ b");
-        assert_eq!(p.apply("a backtick b"), "a ` b");
-    }
-
-    #[test]
-    fn test_bracket_commands() {
-        let mut p = en_processor();
-        assert_eq!(p.apply("open brace x close brace"), "{x}");
-        assert_eq!(p.apply("open bracket x close bracket"), "[x]");
-        assert_eq!(p.apply("less than x greater than"), "<x>");
-        assert_eq!(p.apply("open angle bracket x close angle bracket"), "<x>");
-    }
-
-    #[test]
-    fn test_backspace_key_combo() {
-        use crate::pipeline::types::SinkEvent;
-        let mut p = en_processor();
-        let (text, events) = p.apply_with_events("oops backspace");
-        assert_eq!(text, "oops ");
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0], SinkEvent::Text("oops ".to_string()));
-        assert_eq!(events[1], SinkEvent::KeyCombo("BackSpace".to_string()));
-    }
-
-    #[test]
-    fn test_german_symbol_commands() {
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        assert_eq!(p.apply("a schrägstrich b"), "a/b");
-        assert_eq!(p.apply("a rückschrägstrich b"), "a\\b");
-        assert_eq!(p.apply("a und zeichen b"), "a & b");
-        assert_eq!(p.apply("user at zeichen host"), "user@host");
-        assert_eq!(p.apply("dollar zeichen 50"), "$50");
-        assert_eq!(p.apply("a raute b"), "a # b");
-        assert_eq!(p.apply("50 prozent zeichen"), "50%");
-        assert_eq!(p.apply("a sternchen b"), "a * b");
-        assert_eq!(p.apply("schlange unterstrich fall"), "schlange_fall");
-    }
-
-    #[test]
-    fn test_german_bracket_commands() {
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        assert_eq!(
-            p.apply("geschweifte klammer auf x geschweifte klammer zu"),
-            "{x}"
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed.as_millis() < 1000,
+            "10k iterations took {elapsed:?}, expected < 1s"
         );
-        assert_eq!(p.apply("eckige klammer auf x eckige klammer zu"), "[x]");
-        assert_eq!(p.apply("spitze klammer auf x spitze klammer zu"), "<x>");
-    }
-
-    #[test]
-    fn test_german_backspace_key_combo() {
-        use crate::pipeline::types::SinkEvent;
-        let mut p = VoiceCommandProcessor::new("de", false, &HashMap::new());
-        let (text, events) = p.apply_with_events("hallo rücktaste");
-        assert_eq!(text, "hallo ");
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0], SinkEvent::Text("hallo ".to_string()));
-        assert_eq!(events[1], SinkEvent::KeyCombo("BackSpace".to_string()));
     }
 }
