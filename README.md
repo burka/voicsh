@@ -1,5 +1,7 @@
 # voicsh — Voice typing for Wayland Linux
 
+[![crates.io](https://img.shields.io/crates/v/voicsh.svg)](https://crates.io/crates/voicsh)
+
 Offline, privacy-first voice typing. Speak into your mic, text appears in your focused app. Or pipe a WAV file and get text on stdout.
 
 **Build:** Rust, C compiler, cmake, pkg-config, libclang, ALSA headers — `sudo apt install build-essential cmake pkg-config libclang-dev libasound2-dev`
@@ -15,7 +17,7 @@ Offline, privacy-first voice typing. Speak into your mic, text appears in your f
 ## Quick start
 
 ```bash
-cargo install --git https://github.com/burka/voicsh.git
+cargo install voicsh
 
 # Test with a WAV file first (no mic or runtime deps needed):
 cat file.wav | voicsh
@@ -66,13 +68,13 @@ sudo pacman -S base-devel cmake pkgconf clang alsa-lib
 For the authoritative list of system dependencies, see [`test-containers/Dockerfile.vulkan`](test-containers/Dockerfile.vulkan).
 
 ```bash
-cargo install --git https://github.com/burka/voicsh.git
+cargo install voicsh
 ```
 
 If you only need pipe mode (WAV → text, no microphone) and want to skip the ALSA dependency:
 
 ```bash
-cargo install --git https://github.com/burka/voicsh.git \
+cargo install voicsh \
     --no-default-features --features cli,portal,model-download
 ```
 
