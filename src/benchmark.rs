@@ -652,4 +652,93 @@ mod tests {
         };
         assert_eq!(info.display(), "AMD Radeon RX 7900 XTX");
     }
+
+    #[test]
+    fn test_system_info_detect() {
+        let system_info = SystemInfo::detect();
+
+        // Verify defaults and reasonable values
+        assert!(!system_info.cpu_model.is_empty());
+        assert!(system_info.cpu_model != "Unknown CPU"); // Most systems have CPU info
+        assert!(system_info.cpu_cores > 0);
+        assert!(system_info.cpu_threads > 0);
+        assert!(system_info.cpu_threads >= system_info.cpu_cores);
+        assert!(system_info.total_memory_mb > 0);
+        assert!(system_info.available_memory_mb <= system_info.total_memory_mb);
+        assert!(!system_info.whisper_backend.is_empty());
+        assert!(system_info.whisper_backend.contains("whisper.cpp"));
+        assert!(system_info.whisper_threads > 0);
+        assert!(!system_info.available_backends.is_empty());
+
+        // Verify CPU backend is always available
+        let cpu_backend = system_info
+            .available_backends
+            .iter()
+            .find(|b| b.name == "CPU");
+        assert!(cpu_backend.is_some());
+        assert!(cpu_backend.unwrap().available);
+    }
+
+    #[test]
+    fn test_resource_monitor_new() {
+        let monitor = ResourceMonitor::new();
+
+        // Verify monitor was created successfully
+        // Get stats to verify the monitor is functional
+        let (cpu_total, cpu_per_core, memory) = monitor.get_current_stats();
+
+        // Verify stats are non-negative
+        assert!(cpu_total >= 0.0);
+        assert!(cpu_per_core >= 0.0);
+        assert!(memory >= 0.0);
+    }
+
+    #[test]
+    fn test_resource_monitor_default() {
+        let monitor = ResourceMonitor::default();
+        let monitor2 = ResourceMonitor::new();
+
+        // Both should be functional and return valid stats
+        let (cpu1, _, mem1) = monitor.get_current_stats();
+        let (cpu2, _, mem2) = monitor2.get_current_stats();
+
+        assert!(cpu1 >= 0.0);
+        assert!(mem1 >= 0.0);
+        assert!(cpu2 >= 0.0);
+        assert!(mem2 >= 0.0);
+    }
+
+    #[test]
+    fn parse_nvidia_gpu_malformed_empty_vram() {
+        // Edge case: empty VRAM field
+        let info = parse_nvidia_gpu("GeForce RTX 4090, ");
+        assert_eq!(info.name, "NVIDIA GeForce RTX 4090");
+        assert_eq!(info.vram_mb, None);
+    }
+
+    #[test]
+    fn parse_nvidia_gpu_malformed_non_numeric_vram() {
+        // Edge case: non-numeric VRAM
+        let info = parse_nvidia_gpu("Tesla V100, NotANumber MiB");
+        assert_eq!(info.name, "NVIDIA Tesla V100");
+        assert_eq!(info.vram_mb, None);
+    }
+
+    #[test]
+    fn test_backend_info_cpu_always_active() {
+        let system_info = SystemInfo::detect();
+        let cpu_backends: Vec<_> = system_info
+            .available_backends
+            .iter()
+            .filter(|b| b.name == "CPU")
+            .collect();
+
+        assert_eq!(cpu_backends.len(), 1);
+        let cpu_backend = cpu_backends[0];
+        assert!(
+            cpu_backend.available,
+            "CPU backend must always be available"
+        );
+        assert!(!cpu_backend.compile_flags.is_empty());
+    }
 }
