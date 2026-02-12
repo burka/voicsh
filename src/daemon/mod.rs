@@ -720,22 +720,17 @@ mod tests {
     #[tokio::test]
     async fn test_daemon_state_portal_some() {
         use crate::input::portal::PortalSession;
+        use crate::input::portal::testing::NoOpConnector;
 
         let config = Config::default();
-
-        // Real D-Bus portal may block for a permission dialog or hang in CI,
-        // so bail out after 2 seconds and treat it as "portal unavailable".
-        let portal_result =
-            tokio::time::timeout(std::time::Duration::from_secs(2), PortalSession::try_new()).await;
-
-        // If portal connected within the timeout, verify DaemonState accepts it
-        if let Ok(Ok(portal)) = portal_result {
-            let state = DaemonState::new(config, mock_transcriber(), Some(Arc::new(portal)));
-            assert!(
-                state.portal.is_some(),
-                "Portal should be Some when provided"
-            );
-        }
+        let portal = PortalSession::with_connector(Box::new(NoOpConnector))
+            .await
+            .unwrap();
+        let state = DaemonState::new(config, mock_transcriber(), Some(Arc::new(portal)));
+        assert!(
+            state.portal.is_some(),
+            "Portal should be Some when provided"
+        );
     }
 
     #[test]
