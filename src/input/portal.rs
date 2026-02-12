@@ -183,8 +183,13 @@ impl PortalConnector for AshpdConnector {
 ///
 /// Created via `try_new()` in an async context; `simulate_paste()` is sync
 /// (uses `Handle::block_on`) so it can be called from pipeline station threads.
+///
+/// If the D-Bus session goes stale (common after hours/days in long-lived tmux
+/// sessions), `simulate_paste` will attempt one automatic reconnect before
+/// falling back to wtype/ydotool.
 pub struct PortalSession {
-    key_sender: Arc<dyn KeySender>,
+    key_sender: std::sync::Mutex<Arc<dyn KeySender>>,
+    connector: Box<dyn PortalConnector>,
     handle: tokio::runtime::Handle,
 }
 
@@ -207,13 +212,17 @@ impl PortalSession {
                 std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
             }
         }
-        Self::with_connector(&AshpdConnector).await
+        Self::with_connector(Box::new(AshpdConnector)).await
     }
 
-    async fn with_connector(connector: &dyn PortalConnector) -> Result<Self> {
+    async fn with_connector(connector: Box<dyn PortalConnector>) -> Result<Self> {
         let handle = tokio::runtime::Handle::current();
         let key_sender = connector.connect().await?;
-        Ok(Self { key_sender, handle })
+        Ok(Self {
+            key_sender: std::sync::Mutex::new(key_sender),
+            connector,
+            handle,
+        })
     }
 
     /// Simulate a paste key combo via the portal.
@@ -221,12 +230,58 @@ impl PortalSession {
     /// Parses the paste_key string (e.g. "ctrl+v", "ctrl+shift+v") and sends
     /// the corresponding key press/release events through the portal.
     ///
+    /// If the key sequence fails (stale D-Bus session), refreshes the D-Bus
+    /// address and reconnects once before returning the error. This handles
+    /// long-lived tmux/screen sessions that outlive GNOME logins.
+    ///
     /// This is synchronous (blocks on the tokio runtime) so it can be called
     /// from pipeline station threads that are not tokio worker threads.
     pub fn simulate_paste(&self, paste_key: &str) -> Result<()> {
         let key_sequence = parse_paste_key(paste_key)?;
-        self.handle
-            .block_on(send_key_sequence(self.key_sender.as_ref(), &key_sequence))
+        let sender = self
+            .key_sender
+            .lock()
+            .map_err(|e| VoicshError::InjectionFailed {
+                message: format!("Portal session lock poisoned: {e}"),
+            })?
+            .clone();
+
+        let first_err = match self
+            .handle
+            .block_on(send_key_sequence(sender.as_ref(), &key_sequence))
+        {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+
+        // Only retry on injection failures (D-Bus errors), not parse errors
+        if !matches!(first_err, VoicshError::InjectionFailed { .. }) {
+            return Err(first_err);
+        }
+
+        eprintln!("voicsh: portal key injection failed, attempting reconnect...");
+
+        // Refresh D-Bus address from running gnome-shell
+        if let Some(fresh_addr) = crate::input::focused_window::fresh_gnome_dbus_address() {
+            unsafe {
+                std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
+            }
+        }
+
+        match self.handle.block_on(self.connector.connect()) {
+            Ok(new_sender) => {
+                if let Ok(mut guard) = self.key_sender.lock() {
+                    *guard = new_sender.clone();
+                }
+                eprintln!("voicsh: portal reconnected, retrying paste");
+                self.handle
+                    .block_on(send_key_sequence(new_sender.as_ref(), &key_sequence))
+            }
+            Err(reconnect_err) => {
+                eprintln!("voicsh: portal reconnect failed: {reconnect_err}");
+                Err(first_err)
+            }
+        }
     }
 }
 
@@ -298,21 +353,34 @@ mod tests {
         }
     }
 
-    /// Configurable connector for testing bootstrap error paths.
+    /// Configurable connector for testing bootstrap and reconnection paths.
+    ///
+    /// Uses a VecDeque so multiple `connect()` calls return different results
+    /// (first call = initial connect, second call = reconnect attempt, etc.).
     struct TestConnector {
-        result: std::sync::Mutex<Option<Result<Arc<dyn KeySender>>>>,
+        results: std::sync::Mutex<std::collections::VecDeque<Result<Arc<dyn KeySender>>>>,
     }
 
     impl TestConnector {
         fn success(sender: Arc<dyn KeySender>) -> Self {
+            let mut q = std::collections::VecDeque::new();
+            q.push_back(Ok(sender));
             Self {
-                result: std::sync::Mutex::new(Some(Ok(sender))),
+                results: std::sync::Mutex::new(q),
             }
         }
 
         fn failure(message: &str) -> Self {
+            let mut q = std::collections::VecDeque::new();
+            q.push_back(Err(VoicshError::Other(message.to_string())));
             Self {
-                result: std::sync::Mutex::new(Some(Err(VoicshError::Other(message.to_string())))),
+                results: std::sync::Mutex::new(q),
+            }
+        }
+
+        fn sequence(results: Vec<Result<Arc<dyn KeySender>>>) -> Self {
+            Self {
+                results: std::sync::Mutex::new(results.into()),
             }
         }
     }
@@ -320,7 +388,11 @@ mod tests {
     #[async_trait::async_trait]
     impl PortalConnector for TestConnector {
         async fn connect(&self) -> Result<Arc<dyn KeySender>> {
-            self.result.lock().unwrap().take().unwrap()
+            self.results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("TestConnector: no more results queued")
         }
     }
 
@@ -554,7 +626,9 @@ mod tests {
     async fn test_simulate_paste_with_mock() {
         let recorder = Arc::new(RecordingKeySender::new());
         let connector = TestConnector::success(recorder.clone());
-        let session = PortalSession::with_connector(&connector).await.unwrap();
+        let session = PortalSession::with_connector(Box::new(connector))
+            .await
+            .unwrap();
 
         // Use spawn_blocking since simulate_paste calls block_on
         let recorder_clone = recorder.clone();
@@ -571,7 +645,9 @@ mod tests {
     async fn test_simulate_paste_invalid_key() {
         let recorder = Arc::new(RecordingKeySender::new());
         let connector = TestConnector::success(recorder.clone());
-        let session = PortalSession::with_connector(&connector).await.unwrap();
+        let session = PortalSession::with_connector(Box::new(connector))
+            .await
+            .unwrap();
 
         let result = tokio::task::spawn_blocking(move || session.simulate_paste("alt+v"))
             .await
@@ -608,7 +684,9 @@ mod tests {
     async fn test_with_connector_success() {
         let sender = Arc::new(RecordingKeySender::new());
         let connector = TestConnector::success(sender.clone());
-        let session = PortalSession::with_connector(&connector).await.unwrap();
+        let session = PortalSession::with_connector(Box::new(connector))
+            .await
+            .unwrap();
 
         // Verify session works by simulating a paste
         let result = tokio::task::spawn_blocking(move || session.simulate_paste("ctrl+v"))
@@ -622,7 +700,7 @@ mod tests {
     #[tokio::test]
     async fn test_with_connector_unavailable() {
         let connector = TestConnector::failure("Portal RemoteDesktop unavailable");
-        let result = PortalSession::with_connector(&connector).await;
+        let result = PortalSession::with_connector(Box::new(connector)).await;
         assert!(result.is_err());
         match result {
             Err(VoicshError::Other(msg)) => assert!(msg.contains("unavailable"), "Got: {msg}"),
@@ -633,7 +711,7 @@ mod tests {
     #[tokio::test]
     async fn test_with_connector_session_failed() {
         let connector = TestConnector::failure("Portal session creation failed");
-        let result = PortalSession::with_connector(&connector).await;
+        let result = PortalSession::with_connector(Box::new(connector)).await;
         assert!(result.is_err());
         match result {
             Err(VoicshError::Other(msg)) => {
@@ -646,7 +724,7 @@ mod tests {
     #[tokio::test]
     async fn test_with_connector_device_rejected() {
         let connector = TestConnector::failure("Portal device selection rejected");
-        let result = PortalSession::with_connector(&connector).await;
+        let result = PortalSession::with_connector(Box::new(connector)).await;
         assert!(result.is_err());
         match result {
             Err(VoicshError::Other(msg)) => {
@@ -659,7 +737,7 @@ mod tests {
     #[tokio::test]
     async fn test_with_connector_start_rejected() {
         let connector = TestConnector::failure("Portal session start rejected");
-        let result = PortalSession::with_connector(&connector).await;
+        let result = PortalSession::with_connector(Box::new(connector)).await;
         assert!(result.is_err());
         match result {
             Err(VoicshError::Other(msg)) => assert!(msg.contains("start rejected"), "Got: {msg}"),
@@ -670,7 +748,7 @@ mod tests {
     #[tokio::test]
     async fn test_with_connector_no_keyboard() {
         let connector = TestConnector::failure("keyboard not included");
-        let result = PortalSession::with_connector(&connector).await;
+        let result = PortalSession::with_connector(Box::new(connector)).await;
         assert!(result.is_err());
         match result {
             Err(VoicshError::Other(msg)) => {
@@ -714,6 +792,128 @@ mod tests {
         // but it must not panic.
         if let Some(token) = &result {
             assert!(!token.is_empty(), "Loaded token should not be empty");
+        }
+    }
+
+    /// A KeySender that fails on the first N calls then succeeds.
+    struct FailThenSucceedKeySender {
+        fail_count: std::sync::Mutex<usize>,
+        calls: std::sync::Mutex<Vec<(String, i32)>>,
+    }
+
+    impl FailThenSucceedKeySender {
+        fn new(fail_count: usize) -> Self {
+            Self {
+                fail_count: std::sync::Mutex::new(fail_count),
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl KeySender for FailThenSucceedKeySender {
+        async fn press_key(&self, code: i32) -> Result<()> {
+            let mut count = self.fail_count.lock().unwrap();
+            if *count > 0 {
+                *count -= 1;
+                return Err(VoicshError::InjectionFailed {
+                    message: "stale D-Bus session".to_string(),
+                });
+            }
+            self.calls.lock().unwrap().push(("press".to_string(), code));
+            Ok(())
+        }
+
+        async fn release_key(&self, code: i32) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("release".to_string(), code));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_on_stale_session() {
+        // First sender fails (stale session), reconnect provides a working sender
+        let stale_sender: Arc<dyn KeySender> = Arc::new(FailThenSucceedKeySender::new(1));
+        let fresh_sender = Arc::new(RecordingKeySender::new());
+        let fresh_sender_clone = fresh_sender.clone();
+
+        let connector = TestConnector::sequence(vec![
+            Ok(stale_sender),
+            Ok(fresh_sender.clone() as Arc<dyn KeySender>),
+        ]);
+        let session = PortalSession::with_connector(Box::new(connector))
+            .await
+            .unwrap();
+
+        let result = tokio::task::spawn_blocking(move || session.simulate_paste("ctrl+v"))
+            .await
+            .unwrap();
+
+        assert!(result.is_ok(), "Expected reconnect to succeed: {result:?}");
+        // The fresh sender should have received the key events after reconnect
+        let calls = fresh_sender_clone.calls();
+        assert_eq!(calls.len(), 4, "Expected 4 key events after reconnect");
+        assert_eq!(calls[0], ("press".to_string(), keycodes::LEFT_CTRL));
+        assert_eq!(calls[1], ("press".to_string(), keycodes::V));
+        assert_eq!(calls[2], ("release".to_string(), keycodes::V));
+        assert_eq!(calls[3], ("release".to_string(), keycodes::LEFT_CTRL));
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_failure_returns_original_error() {
+        // First sender fails, reconnect also fails — should return the original error
+        let stale_sender: Arc<dyn KeySender> = Arc::new(FailThenSucceedKeySender::new(1));
+
+        let connector = TestConnector::sequence(vec![
+            Ok(stale_sender),
+            Err(VoicshError::Other("reconnect failed".to_string())),
+        ]);
+        let session = PortalSession::with_connector(Box::new(connector))
+            .await
+            .unwrap();
+
+        let result = tokio::task::spawn_blocking(move || session.simulate_paste("ctrl+v"))
+            .await
+            .unwrap();
+
+        assert!(result.is_err());
+        match result {
+            Err(VoicshError::InjectionFailed { message }) => {
+                // Should be the original injection error, not the reconnect error
+                assert!(
+                    message.contains("stale D-Bus session"),
+                    "Expected original error, got: {message}"
+                );
+            }
+            other => panic!("Expected InjectionFailed, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_reconnect_on_parse_error() {
+        // Parse errors (non-InjectionFailed) should NOT trigger reconnect
+        let recorder = Arc::new(RecordingKeySender::new());
+        let connector = TestConnector::success(recorder);
+        let session = PortalSession::with_connector(Box::new(connector))
+            .await
+            .unwrap();
+
+        let result = tokio::task::spawn_blocking(move || session.simulate_paste("alt+v"))
+            .await
+            .unwrap();
+
+        assert!(result.is_err());
+        match result {
+            Err(VoicshError::InjectionFailed { message }) => {
+                assert!(
+                    message.contains("Unknown key"),
+                    "Expected parse error, got: {message}"
+                );
+            }
+            other => panic!("Expected InjectionFailed parse error, got: {other:?}"),
         }
     }
 }

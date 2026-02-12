@@ -32,12 +32,22 @@ export default class VoicshExtension extends Extension {
         this._modelName = null;
         this._language = null;
 
+        // Settings (needed before menu for shortcut label, and before keybinding)
+        this._settings = this.getSettings();
+
         // Menu items
-        this._toggleItem = new PopupMenu.PopupMenuItem('Toggle Recording');
+        const shortcutLabel = this._formatToggleLabel();
+        this._toggleItem = new PopupMenu.PopupMenuItem(shortcutLabel);
         this._toggleItem.connect('activate', () => this._sendCommand('toggle'));
         this._indicator.menu.addMenuItem(this._toggleItem);
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        this._restartItem = new PopupMenu.PopupMenuItem('Restart Daemon');
+        this._restartItem.connect('activate', () => {
+            GLib.spawn_command_line_async('systemctl --user restart voicsh.service');
+        });
+        this._indicator.menu.addMenuItem(this._restartItem);
 
         this._modelItem = new PopupMenu.PopupMenuItem('Model: —');
         this._modelItem.setSensitive(false);
@@ -50,8 +60,7 @@ export default class VoicshExtension extends Extension {
         // Add to panel
         Main.panel.addToStatusArea('voicsh', this._indicator);
 
-        // Settings & keybinding
-        this._settings = this.getSettings();
+        // Keybinding
         Main.wm.addKeybinding(
             'toggle-shortcut',
             this._settings,
@@ -152,6 +161,35 @@ export default class VoicshExtension extends Extension {
 
         this._modelItem.label.text = `Model: ${this._modelName || '—'}`;
         this._languageItem.label.text = `Language: ${this._language || '—'}`;
+    }
+
+    _formatToggleLabel() {
+        const shortcut = this._settings?.get_strv('toggle-shortcut')[0] || '';
+        if (!shortcut) return 'Toggle Recording';
+        const formatted = this._formatShortcut(shortcut);
+        return formatted ? `Toggle Recording  (${formatted})` : 'Toggle Recording';
+    }
+
+    _formatShortcut(accel) {
+        // Parse GTK accelerator format like '<Super><Alt>v' into 'Super+Alt+V'
+        const parts = [];
+        let remaining = accel;
+        const modifiers = [
+            ['<Super>', 'Super'],
+            ['<Meta>', 'Super'],
+            ['<Ctrl>', 'Ctrl'],
+            ['<Control>', 'Ctrl'],
+            ['<Alt>', 'Alt'],
+            ['<Shift>', 'Shift'],
+        ];
+        for (const [token, label] of modifiers) {
+            if (remaining.includes(token)) {
+                parts.push(label);
+                remaining = remaining.replace(token, '');
+            }
+        }
+        if (remaining) parts.push(remaining.toUpperCase());
+        return parts.join('+');
     }
 
     _ipcRequest(command) {
