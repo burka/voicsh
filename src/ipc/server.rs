@@ -91,6 +91,19 @@ impl IpcServer {
                 message: format!("Failed to bind to socket: {}", e),
             })?;
 
+        // Restrict socket to owner only (0600) — especially important for
+        // the /tmp fallback path where umask may be too permissive.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            std::fs::set_permissions(&self.socket_path, perms).map_err(|e| {
+                VoicshError::IpcSocket {
+                    message: format!("Failed to set socket permissions: {e}"),
+                }
+            })?;
+        }
+
         let handler = Arc::new(handler);
 
         loop {

@@ -24,12 +24,20 @@ cargo test --lib --no-default-features
 > cargo test --lib  --no-default-features
 > ```
 
-## Test Rules
-- Every test MUST assert expected values, not just `is_ok()` / `is_some()`
+## Test Rules — Every Test Must Validate Its Outcome
+- A test only counts if it **validates the result against an expected value**
+- `assert!(x.is_ok())` alone is **never sufficient** — unwrap and `assert_eq!` on the value
+- `assert!(x.is_err())` alone is **never sufficient** — verify the error variant or message
+- `assert!(x.is_some())` alone is **never sufficient** — unwrap and check the inner value
 - After unwrapping, assert the concrete value (`assert_eq!`, not just `assert!`)
-- `is_err()` checks must also verify the error variant or message
 - "Doesn't panic" tests must document why in a comment
 - A test without outcome validation does not count toward coverage goals
+
+## Linting Rules — Zero Tolerance
+- `cargo clippy -- -D warnings` must pass with **0 warnings** before every commit
+- `cargo fmt` must produce no changes before every commit
+- Treat clippy suggestions as requirements, not suggestions
+- Never suppress clippy lints without a justifying comment
 
 ## Error Handling Rules — Fail Fast, Fail Loud, Fail Helpful
 - Never silently discard errors (`let _ =` on Result is forbidden outside tests)
