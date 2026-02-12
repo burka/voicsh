@@ -291,6 +291,75 @@ impl Config {
         })
     }
 
+    /// Display a single config section by top-level key (e.g., "stt", "audio").
+    pub fn display_section(&self, key: &str) -> crate::error::Result<String> {
+        let value = toml::Value::try_from(self).map_err(|e| {
+            crate::error::VoicshError::Other(format!("Failed to serialize config: {e}"))
+        })?;
+        let section = navigate_toml_path(&value, key)?;
+        Ok(format_toml_value(section))
+    }
+
+    /// Format voice commands for display, filtered by language(s).
+    ///
+    /// Shows built-in commands for each requested language, plus any
+    /// custom commands from the config.
+    pub fn display_voice_commands(languages: &[&str], custom: &HashMap<String, String>) -> String {
+        use crate::pipeline::post_processor::builtin_commands_display;
+
+        let mut out = String::new();
+        for lang in languages {
+            let lang_name = language_name(lang);
+            let builtins = builtin_commands_display(lang);
+            if builtins.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("Voice commands ({}, {}):\n", lang_name, lang));
+            for (phrase, replacement) in &builtins {
+                let display_replacement = replacement.replace('\n', "\\n").replace('\t', "\\t");
+                let quoted_phrase = format!("\"{}\"", phrase);
+                out.push_str(&format!(
+                    "  {:<30} → \"{}\"\n",
+                    quoted_phrase, display_replacement
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !custom.is_empty() {
+            out.push_str("Custom commands:\n");
+            let mut sorted: Vec<_> = custom.iter().collect();
+            sorted.sort_by_key(|(k, _)| k.to_lowercase());
+            for (phrase, replacement) in sorted {
+                out.push_str(&format!(
+                    "  {:30} → \"{}\"\n",
+                    format!("\"{}\"", phrase),
+                    replacement
+                ));
+            }
+            out.push('\n');
+        }
+
+        out
+    }
+
+    /// Validate language codes against supported languages.
+    ///
+    /// Returns an error naming the unsupported language if any are invalid.
+    pub fn validate_languages(languages: &[&str]) -> crate::error::Result<()> {
+        use crate::pipeline::post_processor::SUPPORTED_LANGUAGES;
+        for lang in languages {
+            if !SUPPORTED_LANGUAGES.contains(lang) {
+                return Err(crate::error::VoicshError::Other(format!(
+                    "Unknown language '{}'. Supported: {}",
+                    lang,
+                    SUPPORTED_LANGUAGES.join(", ")
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Generate a commented TOML template documenting all fields and defaults.
     pub fn dump_template() -> String {
         let defaults = default_hallucination_filters();
@@ -396,6 +465,25 @@ impl Config {
         }
 
         out
+    }
+}
+
+/// Map a language code to a human-readable name.
+fn language_name(code: &str) -> &'static str {
+    match code {
+        "en" => "English",
+        "de" => "German",
+        "es" => "Spanish",
+        "fr" => "French",
+        "pt" => "Portuguese",
+        "it" => "Italian",
+        "nl" => "Dutch",
+        "pl" => "Polish",
+        "ru" => "Russian",
+        "ja" => "Japanese",
+        "zh" => "Chinese",
+        "ko" => "Korean",
+        _ => "Unknown",
     }
 }
 
@@ -1451,6 +1539,144 @@ mod tests {
         assert!(
             template.contains("period") || template.contains("punkt"),
             "Missing voice command examples"
+        );
+    }
+
+    // ── display_section tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_display_section_stt() {
+        let config = Config::default();
+        let output = config.display_section("stt").unwrap();
+        assert!(
+            output.contains("base"),
+            "stt section should contain model name 'base': {}",
+            output
+        );
+        assert!(
+            output.contains("auto"),
+            "stt section should contain language 'auto': {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_display_section_audio() {
+        let config = Config::default();
+        let output = config.display_section("audio").unwrap();
+        assert!(
+            output.contains("16000"),
+            "audio section should contain sample_rate: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_display_section_invalid_key() {
+        let config = Config::default();
+        let result = config.display_section("nonexistent");
+        assert!(result.is_err());
+    }
+
+    // ── display_voice_commands tests ────────────────────────────────────
+
+    #[test]
+    fn test_display_voice_commands_korean() {
+        let output = Config::display_voice_commands(&["ko"], &HashMap::new());
+        assert!(
+            output.contains("Korean"),
+            "Should show Korean language name: {}",
+            output
+        );
+        assert!(
+            output.contains("마침표"),
+            "Should contain Korean period command: {}",
+            output
+        );
+        assert!(
+            output.contains("\".\""),
+            "Should show period replacement: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_display_voice_commands_english() {
+        let output = Config::display_voice_commands(&["en"], &HashMap::new());
+        assert!(
+            output.contains("English"),
+            "Should show English language name: {}",
+            output
+        );
+        assert!(
+            output.contains("period"),
+            "Should contain period command: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_display_voice_commands_multiple_languages() {
+        let output = Config::display_voice_commands(&["en", "de"], &HashMap::new());
+        assert!(
+            output.contains("English"),
+            "Should show English: {}",
+            output
+        );
+        assert!(output.contains("German"), "Should show German: {}", output);
+    }
+
+    #[test]
+    fn test_display_voice_commands_with_custom() {
+        let mut custom = HashMap::new();
+        custom.insert("smiley".to_string(), ":)".to_string());
+        let output = Config::display_voice_commands(&["en"], &custom);
+        assert!(
+            output.contains("Custom commands"),
+            "Should show custom section: {}",
+            output
+        );
+        assert!(
+            output.contains("smiley"),
+            "Should contain custom command: {}",
+            output
+        );
+    }
+
+    // ── validate_languages tests ────────────────────────────────────────
+
+    #[test]
+    fn test_validate_languages_valid() {
+        assert!(Config::validate_languages(&["en"]).is_ok());
+        assert!(Config::validate_languages(&["en", "de", "ko"]).is_ok());
+    }
+
+    #[test]
+    fn test_validate_languages_invalid() {
+        let result = Config::validate_languages(&["xx"]);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("xx"),
+            "Error should mention the bad language: {}",
+            err_msg
+        );
+        assert!(
+            err_msg.contains("Supported"),
+            "Error should list supported languages: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn test_validate_languages_mixed_valid_invalid() {
+        let result = Config::validate_languages(&["en", "zz"]);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("zz"),
+            "Error should mention the bad language: {}",
+            err_msg
         );
     }
 

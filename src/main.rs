@@ -238,12 +238,65 @@ fn handle_config_command(
             Config::set_value_by_path(&config_path, &key, &value)?;
             println!("Set {} = {}", key, value);
         }
-        ConfigAction::List => {
+        ConfigAction::List { key, language } => {
             let config = Config::load_or_default(&config_path).with_env_overrides();
-            match config.to_display_toml() {
-                Ok(toml) => print!("{}", toml),
-                Err(e) => {
-                    eprintln!("Error: {}", e);
+
+            // Parse languages if provided
+            let lang_codes: Option<Vec<&str>> = language
+                .as_deref()
+                .map(|s| s.split(',').map(|l| l.trim()).collect());
+
+            // Validate languages
+            if let Some(ref codes) = lang_codes
+                && let Err(e) = Config::validate_languages(codes)
+            {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+
+            match (key.as_deref(), &lang_codes) {
+                // Show voice commands for specific languages
+                (Some("voice_commands"), Some(codes)) | (None, Some(codes)) => {
+                    print!(
+                        "{}",
+                        Config::display_voice_commands(codes, &config.voice_commands.commands)
+                    );
+                }
+                // Show voice commands section (all configured languages)
+                (Some("voice_commands"), None) => {
+                    let lang = config.stt.language.as_str();
+                    let langs = if lang == "auto" {
+                        vec!["en"]
+                    } else {
+                        vec![lang]
+                    };
+                    print!(
+                        "{}",
+                        Config::display_voice_commands(&langs, &config.voice_commands.commands)
+                    );
+                }
+                // Show a specific config section
+                (Some(section), None) => match config.display_section(section) {
+                    Ok(toml) => println!("{}", toml),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                },
+                // Show full config (original behavior)
+                (None, None) => match config.to_display_toml() {
+                    Ok(toml) => print!("{}", toml),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                },
+                // --language with a non-voice_commands key doesn't make sense
+                (Some(section), Some(_)) => {
+                    eprintln!(
+                        "Error: --language filter only applies to voice_commands, not '{}'",
+                        section
+                    );
                     std::process::exit(1);
                 }
             }

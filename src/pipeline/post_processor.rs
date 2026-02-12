@@ -437,6 +437,11 @@ impl PostProcessor for VoiceCommandProcessor {
     }
 }
 
+/// Languages with built-in voice command support.
+pub const SUPPORTED_LANGUAGES: &[&str] = &[
+    "en", "de", "es", "fr", "pt", "it", "nl", "pl", "ru", "ja", "zh", "ko",
+];
+
 /// Return built-in commands as phrase → replacement pairs for config display.
 ///
 /// This is a public API used by config template generation. It strips out

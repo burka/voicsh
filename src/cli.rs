@@ -205,8 +205,14 @@ pub enum ConfigAction {
         /// Value to set
         value: String,
     },
-    /// List all current configuration values
-    List,
+    /// List current configuration values (optionally filtered by section or language)
+    List {
+        /// Config section to show (e.g., stt, audio, voice_commands)
+        key: Option<String>,
+        /// Filter voice commands by language (comma-separated, e.g., en,de)
+        #[arg(long, value_name = "LANG")]
+        language: Option<String>,
+    },
     /// Dump a commented configuration template
     Dump,
 }
@@ -833,7 +839,62 @@ mod tests {
         let cli = Cli::try_parse_from(["voicsh", "config", "list"]).unwrap();
         match cli.command {
             Some(Commands::Config { action }) => match action {
-                ConfigAction::List => {}
+                ConfigAction::List { key, language } => {
+                    assert!(key.is_none(), "No key should be set");
+                    assert!(language.is_none(), "No language should be set");
+                }
+                _ => panic!("Expected List action"),
+            },
+            _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_list_with_key() {
+        let cli = Cli::try_parse_from(["voicsh", "config", "list", "stt"]).unwrap();
+        match cli.command {
+            Some(Commands::Config { action }) => match action {
+                ConfigAction::List { key, language } => {
+                    assert_eq!(key.as_deref(), Some("stt"));
+                    assert!(language.is_none());
+                }
+                _ => panic!("Expected List action"),
+            },
+            _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_list_with_language() {
+        let cli = Cli::try_parse_from(["voicsh", "config", "list", "--language=ko"]).unwrap();
+        match cli.command {
+            Some(Commands::Config { action }) => match action {
+                ConfigAction::List { key, language } => {
+                    assert!(key.is_none());
+                    assert_eq!(language.as_deref(), Some("ko"));
+                }
+                _ => panic!("Expected List action"),
+            },
+            _ => panic!("Expected Config command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_config_list_with_key_and_language() {
+        let cli = Cli::try_parse_from([
+            "voicsh",
+            "config",
+            "list",
+            "voice_commands",
+            "--language=en,de",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Config { action }) => match action {
+                ConfigAction::List { key, language } => {
+                    assert_eq!(key.as_deref(), Some("voice_commands"));
+                    assert_eq!(language.as_deref(), Some("en,de"));
+                }
                 _ => panic!("Expected List action"),
             },
             _ => panic!("Expected Config command"),
