@@ -325,7 +325,8 @@ mod tests {
     #[test]
     fn test_invalid_command_returns_error() {
         let result = Cli::try_parse_from(["voicsh", "invalid"]);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 
     #[test]
@@ -424,13 +425,22 @@ mod tests {
     #[test]
     fn test_models_requires_subcommand() {
         let result = Cli::try_parse_from(["voicsh", "models"]);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
     }
 
     #[test]
     fn test_models_install_requires_name() {
         let result = Cli::try_parse_from(["voicsh", "models", "install"]);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("required") || msg.contains("name"),
+            "Expected missing required argument error, got: {msg}"
+        );
     }
 
     #[test]
@@ -772,10 +782,26 @@ mod tests {
 
     #[test]
     fn test_parse_buffer_secs_invalid() {
-        assert!(parse_buffer_secs("abc").is_err());
-        assert!(parse_buffer_secs("10x").is_err());
-        assert!(parse_buffer_secs("").is_err());
-        assert!(parse_buffer_secs("-5").is_err());
+        let err = parse_buffer_secs("abc").unwrap_err();
+        assert!(
+            err.contains("invalid") || err.contains("expected") || err.contains("unknown"),
+            "Expected parse error for 'abc', got: {err}"
+        );
+        let err = parse_buffer_secs("10x").unwrap_err();
+        assert!(
+            err.contains("invalid") || err.contains("expected") || err.contains("unknown"),
+            "Expected parse error for '10x', got: {err}"
+        );
+        let err = parse_buffer_secs("").unwrap_err();
+        assert!(
+            err.contains("invalid") || err.contains("expected") || err.contains("empty"),
+            "Expected parse error for empty string, got: {err}"
+        );
+        let err = parse_buffer_secs("-5").unwrap_err();
+        assert!(
+            err.contains("invalid") || err.contains("expected") || err.contains("unknown"),
+            "Expected parse error for '-5', got: {err}"
+        );
     }
 
     #[test]
@@ -916,20 +942,39 @@ mod tests {
     #[test]
     fn test_config_requires_subcommand() {
         let result = Cli::try_parse_from(["voicsh", "config"]);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
     }
 
     #[test]
     fn test_config_get_requires_key() {
         let result = Cli::try_parse_from(["voicsh", "config", "get"]);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("required") || msg.contains("key"),
+            "Expected missing required argument error, got: {msg}"
+        );
     }
 
     #[test]
     fn test_config_set_requires_key_and_value() {
         let result = Cli::try_parse_from(["voicsh", "config", "set"]);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("required") || msg.contains("key"),
+            "Expected missing required argument error, got: {msg}"
+        );
         let result = Cli::try_parse_from(["voicsh", "config", "set", "stt.model"]);
-        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("required") || msg.contains("value"),
+            "Expected missing required argument error, got: {msg}"
+        );
     }
 }

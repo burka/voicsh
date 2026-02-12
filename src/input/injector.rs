@@ -350,9 +350,9 @@ mod tests {
     #[test]
     fn test_command_executor_is_object_safe() {
         // This test verifies that CommandExecutor can be used as a trait object
-        let executor: Box<dyn CommandExecutor> = Box::new(MockCommandExecutor::new());
-        let result = executor.execute("echo", &["test"]);
-        assert!(result.is_ok());
+        let mock = MockCommandExecutor::new();
+        let executor: Box<dyn CommandExecutor> = Box::new(mock);
+        executor.execute("echo", &["test"]).unwrap();
     }
 
     #[test]
@@ -377,15 +377,14 @@ mod tests {
     fn test_mock_executor_returns_configured_response() {
         let mock = MockCommandExecutor::new().with_success().with_success();
 
-        let result1 = mock.execute("cmd1", &[]);
-        assert!(result1.is_ok());
-
-        let result2 = mock.execute("cmd2", &[]);
-        assert!(result2.is_ok());
+        mock.execute("cmd1", &[]).unwrap();
+        mock.execute("cmd2", &[]).unwrap();
 
         // After configured responses are exhausted, returns success by default
-        let result3 = mock.execute("cmd3", &[]);
-        assert!(result3.is_ok());
+        mock.execute("cmd3", &[]).unwrap();
+
+        // Verify all three commands were recorded
+        assert_eq!(mock.call_count(), 3);
     }
 
     #[test]
@@ -409,8 +408,11 @@ mod tests {
     fn test_mock_executor_clear_calls() {
         let mock = MockCommandExecutor::new();
 
-        mock.execute("cmd", &[]).unwrap();
+        mock.execute("cmd", &["arg1"]).unwrap();
         assert_eq!(mock.call_count(), 1);
+        let call = mock.call(0).unwrap();
+        assert_eq!(call.0, "cmd");
+        assert_eq!(call.1, vec!["arg1"]);
 
         mock.clear_calls();
         assert_eq!(mock.call_count(), 0);
@@ -428,7 +430,7 @@ mod tests {
         assert_eq!(calls[0].0, "cmd1");
         assert_eq!(calls[0].1, vec!["arg1", "arg2"]);
         assert_eq!(calls[1].0, "cmd2");
-        assert!(calls[1].1.is_empty());
+        assert_eq!(calls[1].1, Vec::<String>::new());
     }
 
     #[test]
@@ -498,13 +500,13 @@ mod tests {
             .with_success(); // ydotool succeeds
         let injector = TextInjector::new(mock);
 
-        let result = injector.inject_via_clipboard("test", "ctrl+v");
-        assert!(result.is_ok());
+        injector.inject_via_clipboard("test", "ctrl+v").unwrap();
 
         // Should have called wl-copy, then wtype (failed), then ydotool
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 3);
         assert_eq!(calls[0].0, "wl-copy");
+        assert_eq!(calls[0].1, vec!["test"]);
         assert_eq!(calls[1].0, "wtype");
         assert_eq!(calls[2].0, "ydotool");
         assert_eq!(calls[2].1, vec!["key", "--delay", "10", "ctrl+v"]);
@@ -555,12 +557,12 @@ mod tests {
             .with_success(); // ydotool succeeds
         let injector = TextInjector::new(mock);
 
-        let result = injector.inject_direct("test");
-        assert!(result.is_ok());
+        injector.inject_direct("test").unwrap();
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].0, "wtype");
+        assert_eq!(calls[0].1, vec!["test"]);
         assert_eq!(calls[1].0, "ydotool");
         assert_eq!(calls[1].1, vec!["type", "--delay", "10", "test"]);
     }
@@ -578,13 +580,16 @@ mod tests {
         let injector = TextInjector::new(mock);
 
         let result = injector.inject_direct("test");
-        assert!(result.is_err());
 
         match result {
             Err(VoicshError::InjectionFailed { message }) => {
-                assert!(message.contains("wtype"));
+                assert!(
+                    message.contains("wtype"),
+                    "Error should suggest wtype: {message}"
+                );
             }
-            _ => panic!("Expected InjectionFailed error"),
+            Err(e) => panic!("Expected InjectionFailed error, got: {:?}", e),
+            Ok(_) => panic!("Expected error when both tools unavailable"),
         }
     }
 
@@ -758,9 +763,15 @@ mod tests {
             })
             .with_success();
 
-        assert!(mock.execute("cmd1", &[]).is_ok());
-        assert!(mock.execute("cmd2", &[]).is_err());
-        assert!(mock.execute("cmd3", &[]).is_ok());
+        mock.execute("cmd1", &[]).unwrap();
+
+        let result2 = mock.execute("cmd2", &[]);
+        assert!(matches!(result2, Err(VoicshError::InjectionFailed { .. })));
+
+        mock.execute("cmd3", &[]).unwrap();
+
+        // Verify all commands were recorded
+        assert_eq!(mock.call_count(), 3);
     }
 
     #[test]
@@ -772,7 +783,9 @@ mod tests {
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, "wl-copy");
         assert_eq!(calls[0].1, vec![""]);
+        assert_eq!(calls[1].0, "wtype");
     }
 
     #[test]
@@ -783,10 +796,9 @@ mod tests {
         injector.inject_direct("").unwrap();
 
         let calls = injector.executor.calls();
-        assert_eq!(calls.len(), 1);
-        // wtype is tried first
-        assert_eq!(calls[0].0, "wtype");
-        assert_eq!(calls[0].1, vec![""]);
+        assert_eq!(calls.len(), 1, "Should call wtype once");
+        assert_eq!(calls[0].0, "wtype", "Should try wtype first");
+        assert_eq!(calls[0].1, vec![""], "Should pass empty string to wtype");
     }
 
     // Unicode and international text tests
@@ -806,6 +818,12 @@ mod tests {
             vec![emoji_text],
             "Emoji text should be passed to wl-copy"
         );
+        assert_eq!(calls[1].0, "wtype", "Second call should be wtype");
+        assert_eq!(
+            calls[1].1,
+            vec!["-M", "ctrl", "-k", "v"],
+            "Should simulate ctrl+v"
+        );
     }
 
     #[test]
@@ -820,11 +838,13 @@ mod tests {
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(calls[0].0, "wl-copy", "First call should be wl-copy");
         assert_eq!(
             calls[0].1,
             vec![chinese_text],
             "Chinese text should be passed correctly"
         );
+        assert_eq!(calls[1].0, "wtype", "Second call should be wtype");
     }
 
     #[test]
@@ -839,11 +859,13 @@ mod tests {
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(calls[0].0, "wl-copy", "First call should be wl-copy");
         assert_eq!(
             calls[0].1,
             vec![arabic_text],
             "Arabic text should be passed correctly"
         );
+        assert_eq!(calls[1].0, "wtype", "Second call should be wtype");
     }
 
     #[test]
@@ -858,11 +880,13 @@ mod tests {
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(calls[0].0, "wl-copy", "First call should be wl-copy");
         assert_eq!(
             calls[0].1,
             vec![cyrillic_text],
             "Cyrillic text should be passed correctly"
         );
+        assert_eq!(calls[1].0, "wtype", "Second call should be wtype");
     }
 
     #[test]
@@ -876,11 +900,13 @@ mod tests {
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(calls[0].0, "wl-copy", "First call should be wl-copy");
         assert_eq!(
             calls[0].1,
             vec![mixed_text],
             "Mixed text should be passed correctly"
         );
+        assert_eq!(calls[1].0, "wtype", "Second call should be wtype");
     }
 
     #[test]
@@ -896,11 +922,13 @@ mod tests {
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(calls[0].0, "wl-copy", "First call should be wl-copy");
         assert_eq!(
             calls[0].1,
             vec![accented_text],
             "Accented text should be passed correctly"
         );
+        assert_eq!(calls[1].0, "wtype", "Second call should be wtype");
     }
 
     #[test]
@@ -916,11 +944,13 @@ mod tests {
 
         let calls = injector.executor.calls();
         assert_eq!(calls.len(), 2, "Should call wl-copy and wtype");
+        assert_eq!(calls[0].0, "wl-copy", "First call should be wl-copy");
         assert_eq!(
             calls[0].1,
             vec![multiline_text],
             "Multiline Unicode text should be passed correctly"
         );
+        assert_eq!(calls[1].0, "wtype", "Second call should be wtype");
     }
 
     #[test]
