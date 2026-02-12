@@ -126,8 +126,9 @@ impl DaemonState {
 
     /// Emit an event to all follow clients (for async/handler code).
     pub fn emit(&self, event: DaemonEvent) {
-        // Ignore send errors (no subscribers = ok)
-        let _ = self.event_tx.send(event);
+        if let Err(e) = self.event_tx.send(event) {
+            eprintln!("voicsh: failed to emit daemon event to subscribers: {} (all clients may have disconnected)", e);
+        }
     }
 }
 
@@ -193,8 +194,9 @@ pub async fn run_daemon(
     let bridge_event_tx = state.event_tx.clone();
     std::thread::spawn(move || {
         while let Ok(event) = bridge_event_rx.recv() {
-            // Ignore send errors (no subscribers = ok)
-            let _ = bridge_event_tx.send(event);
+            if let Err(e) = bridge_event_tx.send(event) {
+                eprintln!("voicsh: bridge thread failed to forward event to subscribers: {} (all clients may have disconnected)", e);
+            }
         }
     });
 
