@@ -11,13 +11,17 @@ keywords = ["voice", "audio", "whisper", "wayland", "accessibility"]
 categories = ["command-line-utilities", "multimedia::audio"]
 exclude = [
     ".github/",
+    "ARCHITECTURE.md",
+    "BENCHMARKING.md",
     "CLAUDE.md",
     "CONTRIBUTING.md",
     "DEVELOPMENT.md",
-    "BENCHMARKING.md",
+    "ROADMAP.md",
+    "benches/",
     "gnome/dev.sh",
     "scripts/",
     "test-containers/",
+    "tests/",
 ]
 
 [dependencies]
