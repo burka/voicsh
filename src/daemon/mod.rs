@@ -723,11 +723,13 @@ mod tests {
 
         let config = Config::default();
 
-        // Create a mock portal session (this might fail in test env, so we just test the API)
-        let portal_result = PortalSession::try_new().await;
+        // Real D-Bus portal may block for a permission dialog or hang in CI,
+        // so bail out after 2 seconds and treat it as "portal unavailable".
+        let portal_result =
+            tokio::time::timeout(std::time::Duration::from_secs(2), PortalSession::try_new()).await;
 
-        // If portal is available in test env, test with it
-        if let Ok(portal) = portal_result {
+        // If portal connected within the timeout, verify DaemonState accepts it
+        if let Ok(Ok(portal)) = portal_result {
             let state = DaemonState::new(config, mock_transcriber(), Some(Arc::new(portal)));
             assert!(
                 state.portal.is_some(),
