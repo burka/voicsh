@@ -185,20 +185,32 @@ impl Station for TranscriberStation {
         // Clean Whisper markers
         let cleaned_text = clean_transcription(&result.text);
 
-        // Skip empty results
-        if cleaned_text.is_empty() {
+        // Skip empty or punctuation-only results (e.g. "...", "…", ",,")
+        if cleaned_text.is_empty()
+            || cleaned_text
+                .trim_matches(|c: char| {
+                    c.is_ascii_punctuation()
+                        || c == '…'
+                        || c == '。'
+                        || c == '、'
+                        || c == '！'
+                        || c == '？'
+                })
+                .is_empty()
+        {
             return Ok(None);
         }
 
         // Filter hallucinated phrases (exact match, case-insensitive, punctuation-normalized)
         if !self.hallucination_filters.is_empty() {
             let lower = cleaned_text.to_lowercase();
-            let stripped = lower.trim_end_matches(['.', '!', '?', ',', ';']);
-            if self
-                .hallucination_filters
-                .iter()
-                .any(|f| f == &lower || f.trim_end_matches(['.', '!', '?', ',', ';']) == stripped)
-            {
+            let stripped =
+                lower.trim_end_matches(['.', '!', '?', ',', ';', '。', '、', '！', '？']);
+            if self.hallucination_filters.iter().any(|f| {
+                f == &lower
+                    || f.trim_end_matches(['.', '!', '?', ',', ';', '。', '、', '！', '？'])
+                        == stripped
+            }) {
                 if self.verbose {
                     render_event(&DaemonEvent::TranscriptionDropped {
                         text: cleaned_text.clone(),
@@ -700,6 +712,38 @@ mod tests {
             result.is_none(),
             "Should match after normalizing both punctuation marks"
         );
+    }
+
+    #[test]
+    fn test_hallucination_filter_cjk_punctuation_normalized() {
+        // Filter has "ありがとうございました。" (with Japanese period)
+        // but Whisper might output without the period
+        let transcriber =
+            Arc::new(MockTranscriber::new("mock").with_response("ありがとうございました"));
+        let mut station = TranscriberStation::new(transcriber)
+            .with_hallucination_filters(vec!["ありがとうございました。".to_string()]);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_none(),
+            "Should match after normalizing CJK period (。)"
+        );
+    }
+
+    #[test]
+    fn test_punctuation_only_output_skipped() {
+        // Whisper sometimes outputs "..." or "…" for silence — should be dropped
+        for text in &["...", "…", ",,", "....", "。", "!?"] {
+            let transcriber = Arc::new(MockTranscriber::new("mock").with_response(text));
+            let mut station = TranscriberStation::new(transcriber);
+            let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
+            let result = station.process(chunk).unwrap();
+            assert!(
+                result.is_none(),
+                "Punctuation-only output '{}' should be skipped",
+                text
+            );
+        }
     }
 
     // ── Energy-based skipping tests ──────────────────────────────────────
