@@ -1,4 +1,7 @@
-# voicsh Development Guide
+---
+title: Development
+weight: 4
+---
 
 ## Build Prerequisites
 

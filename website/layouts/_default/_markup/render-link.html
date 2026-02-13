@@ -1,0 +1,17 @@
+{{- $url := .Destination -}}
+{{- $isExternal := or (strings.HasPrefix $url "http") (strings.HasPrefix $url "mailto:") -}}
+{{- $isAnchor := strings.HasPrefix $url "#" -}}
+{{- if and (not $isExternal) (not $isAnchor) -}}
+  {{- if strings.HasSuffix $url ".md" -}}
+    {{- /* Rewrite .md links to Hugo page paths */ -}}
+    {{- $url = $url | replaceRE `\.md$` "/" | lower -}}
+    {{- if not (strings.HasPrefix $url "/") -}}
+      {{- $url = printf "/%s" $url -}}
+    {{- end -}}
+  {{- else -}}
+    {{- /* Non-md relative links → GitHub blob */ -}}
+    {{- $url = printf "https://github.com/burka/voicsh/blob/main/%s" $url -}}
+    {{- $isExternal = true -}}
+  {{- end -}}
+{{- end -}}
+<a href="{{ $url | safeURL }}"{{ with .Title }} title="{{ . }}"{{ end }}{{ if $isExternal }} target="_blank" rel="noreferrer"{{ end }}>{{ .Text | safeHTML }}</a>

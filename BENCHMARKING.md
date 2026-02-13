@@ -1,4 +1,7 @@
-# WAV Transcription Benchmarking
+---
+title: Benchmarking
+weight: 5
+---
 
 This document describes the benchmarking suite for testing WAV transcription performance across different Whisper models, backends, and languages.
 

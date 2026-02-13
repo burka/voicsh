@@ -1,4 +1,7 @@
-# voicsh Roadmap
+---
+title: Roadmap
+weight: 7
+---
 
 ## 0.0.1 — First release (done)
 

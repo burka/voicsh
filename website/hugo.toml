@@ -1,0 +1,56 @@
+baseURL = "https://voic.sh/"
+languageCode = "en-us"
+title = "voic.sh"
+
+[[module.imports]]
+  path = "github.com/imfing/hextra"
+
+[[module.mounts]]
+  source = "content"
+  target = "content"
+
+[[module.mounts]]
+  source = "../README.md"
+  target = "content/_index.md"
+
+[[module.mounts]]
+  source = "../INSTALL.md"
+  target = "content/install.md"
+
+[[module.mounts]]
+  source = "../ARCHITECTURE.md"
+  target = "content/architecture.md"
+
+[[module.mounts]]
+  source = "../DEVELOPMENT.md"
+  target = "content/development.md"
+
+[[module.mounts]]
+  source = "../BENCHMARKING.md"
+  target = "content/benchmarking.md"
+
+[[module.mounts]]
+  source = "../CONTRIBUTING.md"
+  target = "content/contributing.md"
+
+[[module.mounts]]
+  source = "../ROADMAP.md"
+  target = "content/roadmap.md"
+
+[markup.goldmark.renderer]
+  unsafe = true
+
+[params]
+  description = "Offline, privacy-first voice typing for Wayland Linux"
+
+[[params.navbar.extra]]
+  name = "GitHub"
+  url = "https://github.com/burka/voicsh"
+  icon = "github"
+
+[params.footer]
+  displayPoweredBy = false
+
+[params.editURL]
+  enable = true
+  base = "https://github.com/burka/voicsh/edit/main"

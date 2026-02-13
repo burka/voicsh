@@ -1,4 +1,7 @@
-# voicsh Architecture
+---
+title: Architecture
+weight: 3
+---
 
 Wayland-only voice typing: audio capture → VAD → chunking → Whisper transcription → text injection.
 

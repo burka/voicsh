@@ -1,4 +1,7 @@
-# Contributing to voicsh
+---
+title: Contributing
+weight: 6
+---
 
 voicsh is a free-time side project. Contributions of all kinds are welcome — from bug reports to code changes to just telling me it didn't build on your machine.
 

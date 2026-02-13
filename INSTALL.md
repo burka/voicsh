@@ -1,4 +1,7 @@
-# Installing voicsh
+---
+title: Installation
+weight: 2
+---
 
 ## Build dependencies
 

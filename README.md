@@ -1,6 +1,11 @@
-# voicsh — Voice typing for Wayland Linux
-
+---
+title: "voic.sh \u2014 Voice typing for Wayland Linux"
+linkTitle: Overview
+cascade:
+  type: docs
+---
 [![crates.io](https://img.shields.io/crates/v/voicsh.svg)](https://crates.io/crates/voicsh)
+[![docs](https://img.shields.io/badge/docs-voic.sh-blue)](https://voic.sh)
 
 Offline, privacy-first voice typing. Speak into your mic, text appears in your focused app. Or pipe a WAV file and get text on stdout.
 
