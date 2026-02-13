@@ -220,11 +220,6 @@ impl LatencyTracker {
             timing.realtime_factor(),
         );
     }
-
-    /// Prints basic timing for a single transcription.
-    pub fn print_basic(&self, timing: &TranscriptionTiming, _text: &str) {
-        eprintln!("  ({} wait)", format_duration(timing.perceived_wait()));
-    }
 }
 
 impl Default for LatencyTracker {
@@ -517,7 +512,6 @@ mod tests {
         tracker.record(timing.clone());
         tracker.print_summary();
         tracker.print_detailed(&timing, "test text", 1);
-        tracker.print_basic(&timing, "test text");
     }
 
     #[test]

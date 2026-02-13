@@ -115,6 +115,8 @@ pub enum DaemonEvent {
         text: String,
         language: String,
         confidence: f32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        wait_ms: Option<u32>,
     },
     /// Transcription dropped by language/confidence filter
     TranscriptionDropped {
@@ -621,6 +623,7 @@ mod tests {
             text: "hello world".to_string(),
             language: "en".to_string(),
             confidence: 0.95,
+            wait_ms: None,
         };
         let json = event.to_json().expect("should serialize");
         let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
@@ -663,11 +666,13 @@ mod tests {
                 text: String::new(),
                 language: "en".to_string(),
                 confidence: 1.0,
+                wait_ms: None,
             },
             DaemonEvent::Transcription {
                 text: "Hello 👋 World".to_string(),
                 language: "de".to_string(),
                 confidence: 0.85,
+                wait_ms: Some(300),
             },
             DaemonEvent::TranscriptionDropped {
                 text: "test".to_string(),

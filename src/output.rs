@@ -47,15 +47,20 @@ pub fn render_event(event: &DaemonEvent) {
             text,
             language,
             confidence,
+            wait_ms,
         } => {
             clear_line();
-            if !language.is_empty() && *confidence < 0.99 {
-                eprintln!("{text} {DIM}[{language}] {:.0}%{RESET}", confidence * 100.0);
+            let lang = if !language.is_empty() && *confidence < 0.99 {
+                format!(" {DIM}[{language}] {:.0}%{RESET}", confidence * 100.0)
             } else if !language.is_empty() {
-                eprintln!("{text} {DIM}[{language}]{RESET}");
+                format!(" {DIM}[{language}]{RESET}")
             } else {
-                eprintln!("{text}");
-            }
+                String::new()
+            };
+            let wait = wait_ms
+                .map(|ms| format!(" {DIM}({ms}ms){RESET}"))
+                .unwrap_or_default();
+            eprintln!("{text}{lang}{wait}");
         }
         DaemonEvent::TranscriptionDropped {
             text,
@@ -64,10 +69,12 @@ pub fn render_event(event: &DaemonEvent) {
             reason,
         } => {
             clear_line();
-            eprintln!(
-                "{DIM}[dropped: {reason} | {language} {:.0}%] \"{text}\"{RESET}",
-                confidence * 100.0
-            );
+            let conf = if *confidence < 0.99 {
+                format!(" {:.0}%", confidence * 100.0)
+            } else {
+                String::new()
+            };
+            eprintln!("{DIM}[dropped: {reason} | {language}{conf}] \"{text}\"{RESET}");
         }
         DaemonEvent::Log { message } => {
             clear_line();
@@ -114,6 +121,7 @@ mod tests {
             text: "hello world".to_string(),
             language: "en".to_string(),
             confidence: 0.95,
+            wait_ms: None,
         });
 
         render_event(&DaemonEvent::TranscriptionDropped {
@@ -170,6 +178,7 @@ mod tests {
             text: "test".to_string(),
             language: String::new(),
             confidence: 0.9,
+            wait_ms: None,
         });
     }
 }

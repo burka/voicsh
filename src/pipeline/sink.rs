@@ -105,20 +105,27 @@ impl Station for SinkStation {
                 let output_done = Instant::now();
                 self.transcription_count += 1;
 
-                // Emit transcription event for follow clients
+                // Compute wait time from timing if available
+                let wait_ms = text
+                    .timing
+                    .as_ref()
+                    .map(|t| output_done.duration_since(t.capture_start).as_millis() as u32);
+
+                // Emit transcription event for follow clients (with timing)
                 if let Some(ref tx) = self.event_tx
                     && tx
                         .try_send(DaemonEvent::Transcription {
                             text: text.text.clone(),
                             language: text.language.clone(),
                             confidence: text.confidence,
+                            wait_ms,
                         })
                         .is_err()
                 {
                     // Channel full or closed - OK to ignore in sink
                 }
 
-                // Record timing if available
+                // Record timing and show output
                 if let Some(chunk_timing) = text.timing {
                     let timing = TranscriptionTiming {
                         capture_start: chunk_timing.capture_start,
@@ -133,34 +140,29 @@ impl Station for SinkStation {
                     self.latency_tracker.record(timing.clone());
 
                     if !self.quiet {
+                        // Show transcription (with inline wait) for all verbosity levels
+                        render_event(&DaemonEvent::Transcription {
+                            text: text.text.clone(),
+                            language: text.language.clone(),
+                            confidence: text.confidence,
+                            wait_ms,
+                        });
+                        // Verbose >= 2: supplementary detailed breakdown
                         if self.verbosity >= 2 {
-                            // Full diagnostic breakdown - show transcription event, then detailed timing
-                            render_event(&DaemonEvent::Transcription {
-                                text: text.text.clone(),
-                                language: text.language.clone(),
-                                confidence: text.confidence,
-                            });
                             self.latency_tracker.print_detailed(
                                 &timing,
                                 &text.text,
                                 self.transcription_count,
                             );
-                        } else if self.verbosity >= 1 {
-                            // Show transcription event, then basic timing
-                            render_event(&DaemonEvent::Transcription {
-                                text: text.text.clone(),
-                                language: text.language.clone(),
-                                confidence: text.confidence,
-                            });
-                            self.latency_tracker.print_basic(&timing, &text.text);
                         }
                     }
                 } else if !self.quiet && self.verbosity == 0 {
-                    // No verbosity and no timing - just show transcription event
+                    // No timing - just show transcription event
                     render_event(&DaemonEvent::Transcription {
                         text: text.text.clone(),
                         language: text.language.clone(),
                         confidence: text.confidence,
+                        wait_ms: None,
                     });
                 }
                 Ok(Some(()))

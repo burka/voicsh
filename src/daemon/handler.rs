@@ -179,6 +179,7 @@ impl DaemonCommandHandler {
                     text: text.clone(),
                     language: String::new(),
                     confidence: 1.0,
+                    wait_ms: None,
                 });
                 Response::Transcription { text }
             } else {
@@ -704,6 +705,7 @@ mod tests {
             text: "test".to_string(),
             language: "en".to_string(),
             confidence: 0.95,
+            wait_ms: None,
         });
 
         // Should receive the event
@@ -713,6 +715,7 @@ mod tests {
                 text,
                 language,
                 confidence,
+                ..
             } => {
                 assert_eq!(text, "test");
                 assert_eq!(language, "en");
@@ -1061,6 +1064,7 @@ mod tests {
             text: "test".to_string(),
             language: "en".to_string(),
             confidence: 0.95,
+            wait_ms: None,
         });
 
         // Should receive
@@ -1070,6 +1074,7 @@ mod tests {
                 text,
                 language,
                 confidence,
+                ..
             } => {
                 assert_eq!(text, "test");
                 assert_eq!(language, "en");

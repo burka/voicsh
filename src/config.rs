@@ -568,6 +568,9 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "Satsang with Mooji".into(),
             "Closed captioning provided by the Imperial News Network".into(),
             "For more information visit www.fema.gov".into(),
+            "mmm".into(),
+            "hmm".into(),
+            "mm-hmm".into(),
         ],
     );
     m.insert(
