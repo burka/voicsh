@@ -13,7 +13,7 @@
 
 use crate::defaults;
 use crate::error::{Result, VoicshError};
-use crate::stt::transcriber::{Transcriber, TranscriptionResult};
+use crate::stt::transcriber::{Transcriber, TranscriptionResult, WordProbability};
 use std::path::PathBuf;
 
 #[cfg(feature = "whisper")]
@@ -255,27 +255,71 @@ impl Transcriber for WhisperTranscriber {
         let lang_id = state.full_lang_id_from_state();
         let language = whisper_rs::get_lang_str(lang_id).unwrap_or("").to_string();
 
-        // Extract transcribed text and compute confidence from segment probabilities
+        // Extract transcribed text and compute confidence from average token probabilities.
+        // We use per-token probabilities (WhisperToken::token_probability) rather than
+        // no_speech_probability, because no_speech_prob only measures "is there speech at all?"
+        // and is always ~0 for actual speech, making 1-no_speech_prob always ~1.0 (useless).
         let mut transcription = String::new();
-        let mut confidence_sum = 0.0_f32;
-        let mut segment_count = 0u32;
+        let mut prob_sum = 0.0_f64;
+        let mut token_count = 0u32;
+        let mut word_groups: Vec<(String, Vec<f32>)> = Vec::new(); // (word_text, token_probs)
+
         for segment in state.as_iter() {
-            transcription.push_str(&segment.to_string());
-            // no_speech_probability is 0.0..1.0; confidence = 1 - no_speech_prob
-            confidence_sum += 1.0 - segment.no_speech_probability();
-            segment_count += 1;
+            if let Ok(text) = segment.to_str_lossy() {
+                transcription.push_str(&text);
+            }
+            for i in 0..segment.n_tokens() {
+                if let Some(token) = segment.get_token(i) {
+                    let prob = token.token_probability();
+                    prob_sum += prob as f64;
+                    token_count += 1;
+
+                    // Build word-level probabilities from token text
+                    let token_text = match token.to_str_lossy() {
+                        Ok(t) => t.into_owned(),
+                        Err(_) => continue,
+                    };
+                    // Skip special tokens
+                    if token_text.is_empty()
+                        || token_text.starts_with("<|")
+                        || token_text.starts_with("[_")
+                    {
+                        continue;
+                    }
+                    // New word if starts with space, or first word
+                    if token_text.starts_with(' ') || word_groups.is_empty() {
+                        word_groups.push((token_text.trim_start().to_string(), vec![prob]));
+                    } else if let Some(last) = word_groups.last_mut() {
+                        last.0.push_str(&token_text);
+                        last.1.push(prob);
+                    }
+                }
+            }
         }
 
-        let confidence = if segment_count > 0 {
-            (confidence_sum / segment_count as f32).clamp(0.0, 1.0)
+        let confidence = if token_count > 0 {
+            (prob_sum / token_count as f64).clamp(0.0, 1.0) as f32
         } else {
             0.0
         };
+
+        let word_probabilities: Vec<WordProbability> = word_groups
+            .into_iter()
+            .filter(|(w, _)| !w.is_empty())
+            .map(|(word, probs)| {
+                let avg = probs.iter().sum::<f32>() / probs.len() as f32;
+                WordProbability {
+                    word,
+                    probability: avg,
+                }
+            })
+            .collect();
 
         Ok(TranscriptionResult {
             text: transcription.trim().to_string(),
             language,
             confidence,
+            word_probabilities,
         })
     }
 

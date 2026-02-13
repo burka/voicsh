@@ -7,6 +7,7 @@ use std::io::{self, Write};
 
 const DIM: &str = "\x1b[2m";
 const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
 const RESET: &str = "\x1b[0m";
 
@@ -48,6 +49,7 @@ pub fn render_event(event: &DaemonEvent) {
             language,
             confidence,
             wait_ms,
+            word_probabilities,
         } => {
             clear_line();
             let lang = if !language.is_empty() && *confidence < 0.99 {
@@ -60,7 +62,26 @@ pub fn render_event(event: &DaemonEvent) {
             let wait = wait_ms
                 .map(|ms| format!(" {DIM}({ms}ms){RESET}"))
                 .unwrap_or_default();
-            eprintln!("{text}{lang}{wait}");
+
+            if word_probabilities.is_empty() {
+                // Fallback: plain text (no word-level data)
+                eprintln!("{text}{lang}{wait}");
+            } else {
+                // Render each word colored by probability
+                for (i, wp) in word_probabilities.iter().enumerate() {
+                    if i > 0 {
+                        eprint!(" ");
+                    }
+                    if wp.probability >= 0.8 {
+                        eprint!("{}", wp.word);
+                    } else if wp.probability >= 0.5 {
+                        eprint!("{YELLOW}{}{RESET}", wp.word);
+                    } else {
+                        eprint!("{RED}{}{RESET}", wp.word);
+                    }
+                }
+                eprintln!("{lang}{wait}");
+            }
         }
         DaemonEvent::TranscriptionDropped {
             text,
@@ -122,6 +143,7 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
+            word_probabilities: vec![],
         });
 
         render_event(&DaemonEvent::TranscriptionDropped {
@@ -179,6 +201,32 @@ mod tests {
             language: String::new(),
             confidence: 0.9,
             wait_ms: None,
+            word_probabilities: vec![],
+        });
+    }
+
+    #[test]
+    fn test_render_transcription_with_word_probabilities() {
+        use crate::stt::transcriber::WordProbability;
+        render_event(&DaemonEvent::Transcription {
+            text: "high medium low".to_string(),
+            language: "en".to_string(),
+            confidence: 0.7,
+            wait_ms: Some(250),
+            word_probabilities: vec![
+                WordProbability {
+                    word: "high".to_string(),
+                    probability: 0.95,
+                },
+                WordProbability {
+                    word: "medium".to_string(),
+                    probability: 0.65,
+                },
+                WordProbability {
+                    word: "low".to_string(),
+                    probability: 0.35,
+                },
+            ],
         });
     }
 }

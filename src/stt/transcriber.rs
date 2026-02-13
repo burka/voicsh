@@ -3,6 +3,13 @@ use crate::error::{Result, VoicshError};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Per-word probability information from transcription.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WordProbability {
+    pub word: String,
+    pub probability: f32,
+}
+
 /// Result of a transcription, including detected language and confidence.
 #[derive(Debug, Clone)]
 pub struct TranscriptionResult {
@@ -12,6 +19,8 @@ pub struct TranscriptionResult {
     pub language: String,
     /// Confidence score in 0.0..1.0, derived from segment probabilities.
     pub confidence: f32,
+    /// Per-word probability scores (empty if not available).
+    pub word_probabilities: Vec<WordProbability>,
 }
 
 impl TranscriptionResult {
@@ -21,6 +30,7 @@ impl TranscriptionResult {
             text,
             language: String::new(),
             confidence: 1.0,
+            word_probabilities: Vec::new(),
         }
     }
 }
@@ -145,6 +155,7 @@ impl Transcriber for MockTranscriber {
                 text: self.response.clone(),
                 language: self.language.clone(),
                 confidence: self.confidence,
+                word_probabilities: Vec::new(),
             })
         }
     }
@@ -313,5 +324,44 @@ mod tests {
         assert_eq!(result.text, "test text");
         assert_eq!(result.confidence, 0.85);
         assert_eq!(result.language, "de");
+    }
+
+    #[test]
+    fn test_word_probability_construction() {
+        let wp = WordProbability {
+            word: "hello".to_string(),
+            probability: 0.95,
+        };
+        assert_eq!(wp.word, "hello");
+        assert_eq!(wp.probability, 0.95);
+    }
+
+    #[test]
+    fn test_word_probability_clone() {
+        let wp = WordProbability {
+            word: "test".to_string(),
+            probability: 0.75,
+        };
+        let cloned = wp.clone();
+        assert_eq!(wp.word, cloned.word);
+        assert_eq!(wp.probability, cloned.probability);
+    }
+
+    #[test]
+    fn test_word_probability_debug() {
+        let wp = WordProbability {
+            word: "debug".to_string(),
+            probability: 0.85,
+        };
+        let debug_str = format!("{:?}", wp);
+        assert!(debug_str.contains("WordProbability"));
+        assert!(debug_str.contains("debug"));
+        assert!(debug_str.contains("0.85"));
+    }
+
+    #[test]
+    fn test_transcription_result_empty_word_probabilities() {
+        let result = TranscriptionResult::from_text("test".to_string());
+        assert!(result.word_probabilities.is_empty());
     }
 }

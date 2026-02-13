@@ -180,6 +180,7 @@ impl DaemonCommandHandler {
                     language: String::new(),
                     confidence: 1.0,
                     wait_ms: None,
+                    word_probabilities: vec![],
                 });
                 Response::Transcription { text }
             } else {
@@ -706,6 +707,7 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
+            word_probabilities: vec![],
         });
 
         // Should receive the event
@@ -795,11 +797,13 @@ mod tests {
         );
         assert!(pipeline_config.event_tx.is_some(), "Event TX should be set");
         assert_eq!(
-            pipeline_config.allowed_languages, config.stt.allowed_languages,
+            *pipeline_config.allowed_languages.read().unwrap(),
+            config.stt.allowed_languages,
             "Allowed languages should match config"
         );
         assert_eq!(
-            pipeline_config.min_confidence, config.stt.min_confidence,
+            *pipeline_config.min_confidence.read().unwrap(),
+            config.stt.min_confidence,
             "Min confidence should match config"
         );
     }
@@ -1065,6 +1069,7 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
+            word_probabilities: vec![],
         });
 
         // Should receive

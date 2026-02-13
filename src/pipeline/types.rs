@@ -150,6 +150,8 @@ pub struct TranscribedText {
     pub timing: Option<Box<ChunkTiming>>,
     /// Events to be processed by the sink.
     pub events: Vec<SinkEvent>,
+    /// Per-word probability scores (empty if not available).
+    pub word_probabilities: Vec<crate::stt::transcriber::WordProbability>,
 }
 
 impl TranscribedText {
@@ -162,6 +164,7 @@ impl TranscribedText {
             timestamp: Instant::now(),
             timing: None,
             events: vec![],
+            word_probabilities: Vec::new(),
         }
     }
 
@@ -174,6 +177,7 @@ impl TranscribedText {
             timestamp: Instant::now(),
             timing,
             events: vec![],
+            word_probabilities: Vec::new(),
         }
     }
 }

@@ -119,6 +119,7 @@ impl Station for SinkStation {
                             language: text.language.clone(),
                             confidence: text.confidence,
                             wait_ms,
+                            word_probabilities: text.word_probabilities.clone(),
                         })
                         .is_err()
                 {
@@ -146,6 +147,7 @@ impl Station for SinkStation {
                             language: text.language.clone(),
                             confidence: text.confidence,
                             wait_ms,
+                            word_probabilities: text.word_probabilities.clone(),
                         });
                         // Verbose >= 2: supplementary detailed breakdown
                         if self.verbosity >= 2 {
@@ -163,6 +165,7 @@ impl Station for SinkStation {
                         language: text.language.clone(),
                         confidence: text.confidence,
                         wait_ms: None,
+                        word_probabilities: text.word_probabilities.clone(),
                     });
                 }
                 Ok(Some(()))
