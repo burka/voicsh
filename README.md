@@ -17,7 +17,8 @@ Offline, privacy-first voice typing. Speak into your mic, text appears in your f
 ## Quick start
 
 ```bash
-cargo install voicsh
+cargo install voicsh                   # CPU
+cargo install voicsh --features vulkan # GPU (5-10x faster)
 
 # Test with a WAV file first (no mic or runtime deps needed):
 cat file.wav | voicsh
@@ -68,8 +69,17 @@ sudo pacman -S base-devel cmake pkgconf clang alsa-lib
 For the authoritative list of system dependencies, see [`test-containers/Dockerfile.vulkan`](test-containers/Dockerfile.vulkan).
 
 ```bash
+# CPU-only (works everywhere):
 cargo install voicsh
+
+# ⚡ With GPU — 5-10x faster transcription (recommended if you have a GPU):
+cargo install voicsh --features vulkan   # AMD, Intel, NVIDIA — most universal
+cargo install voicsh --features cuda     # NVIDIA (fastest if you have CUDA)
+cargo install voicsh --features hipblas  # AMD discrete (ROCm)
 ```
+
+> **Have a GPU? Use it.** CPU mode works but is noticeably slower on larger models.
+> Run `voicsh check` after install to verify your GPU is detected and active.
 
 If you only need pipe mode (WAV → text, no microphone) and want to skip the ALSA dependency:
 
@@ -78,18 +88,14 @@ cargo install voicsh \
     --no-default-features --features cli,portal,model-download
 ```
 
-### GPU acceleration
-
-By default voicsh runs on CPU. Enable GPU for ~5-10x faster transcription:
+### GPU prerequisites
 
 | Backend | Flag | Prerequisites |
 |---------|------|---------------|
-| NVIDIA  | `--features cuda` | [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit) ≥ 11.0 |
-| Cross-platform | `--features vulkan` | [Vulkan SDK](https://vulkan.lunarg.com/) — on Ubuntu: `libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc` |
-| AMD (discrete) | `--features hipblas` | [ROCm](https://rocm.docs.amd.com/) |
+| Vulkan (recommended) | `--features vulkan` | [Vulkan SDK](https://vulkan.lunarg.com/) — on Ubuntu: `libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc` |
+| NVIDIA CUDA | `--features cuda` | [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit) ≥ 11.0 |
+| AMD ROCm | `--features hipblas` | [ROCm](https://rocm.docs.amd.com/) |
 | CPU optimized | `--features openblas` | `libopenblas-dev` / `openblas` |
-
-Verify with `voicsh check` (shows detected GPU hardware and compiled backend).
 
 ### Runtime dependencies (mic mode only)
 
