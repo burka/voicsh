@@ -10,7 +10,7 @@ use crate::audio::wav::WavAudioSource;
 use crate::config::{Config, resolve_hallucination_filters};
 use crate::defaults;
 use crate::error::{Result, VoicshError};
-use crate::input::injector::SystemCommandExecutor;
+use crate::inject::injector::SystemCommandExecutor;
 use crate::models::catalog::{english_variant, get_model, resolve_model_for_language};
 use crate::models::download::{
     download_model, find_any_installed_model, is_model_installed, model_path,
@@ -27,7 +27,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 #[cfg(feature = "portal")]
-use crate::input::portal::PortalSession;
+use crate::inject::portal::PortalSession;
 
 /// Convert a buffer duration (seconds) to a chunk channel capacity.
 ///
@@ -113,6 +113,7 @@ pub async fn run_pipe_command(
 /// * `device` - Optional device override from CLI
 /// * `model` - Optional model override from CLI
 /// * `language` - Optional language override from CLI
+/// * `injection_backend` - Optional injection backend override from CLI
 /// * `quiet` - Suppress status messages
 /// * `verbosity` - Verbosity level (0=default, 1=meter+results, 2=full diagnostics)
 /// * `no_download` - Prevent automatic model download
@@ -128,6 +129,7 @@ pub async fn run_record_command(
     device: Option<String>,
     model: Option<String>,
     language: Option<String>,
+    injection_backend: Option<String>,
     quiet: bool,
     verbosity: u8,
     no_download: bool,
@@ -152,35 +154,20 @@ pub async fn run_record_command(
     if let Some(l) = language {
         config.stt.language = l;
     }
+    if let Some(b) = injection_backend {
+        config.injection.backend =
+            b.parse()
+                .map_err(|msg: String| VoicshError::ConfigInvalidValue {
+                    key: "injection-backend".to_string(),
+                    message: msg,
+                })?;
+    }
     if fan_out {
         config.stt.fan_out = true;
     }
 
-    // Try to establish portal session for key injection (GNOME/KDE)
-    // Timeout after 5s — the portal D-Bus call can block the async runtime
-    // in non-interactive environments (tmux, CI, background processes).
     #[cfg(feature = "portal")]
-    let portal =
-        match tokio::time::timeout(std::time::Duration::from_secs(5), PortalSession::try_new())
-            .await
-        {
-            Ok(Ok(session)) => {
-                if verbosity >= 1 {
-                    eprintln!("Portal keyboard access granted.");
-                }
-                Some(Arc::new(session))
-            }
-            Ok(Err(e)) => {
-                if verbosity >= 2 {
-                    eprintln!("Portal unavailable ({}), using wtype/ydotool fallback.", e);
-                }
-                None
-            }
-            Err(_) => {
-                eprintln!("Portal timed out, using wtype/ydotool fallback.");
-                None
-            }
-        };
+    let portal = connect_portal(&config.injection.backend, quiet, verbosity).await?;
 
     // Load model ONCE before the loop (this is the slow part)
     if !quiet {
@@ -199,18 +186,20 @@ pub async fn run_record_command(
     #[cfg(feature = "portal")]
     let make_sink = |config: &Config| {
         InjectorSink::with_portal(
-            config.input.method.clone(),
-            config.input.paste_key.clone(),
+            config.injection.method.clone(),
+            config.injection.paste_key.clone(),
             verbosity,
             portal.clone(),
+            config.injection.backend.clone(),
         )
     };
     #[cfg(not(feature = "portal"))]
     let make_sink = |config: &Config| {
         InjectorSink::system(
-            config.input.method.clone(),
-            config.input.paste_key.clone(),
+            config.injection.method.clone(),
+            config.injection.paste_key.clone(),
             verbosity,
+            config.injection.backend.clone(),
         )
     };
 
@@ -234,6 +223,67 @@ pub async fn run_record_command(
             make_sink,
         )
         .await
+    }
+}
+
+/// Connect to the xdg-desktop-portal RemoteDesktop session if needed.
+///
+/// Returns `Some(session)` when the portal is available, `None` otherwise.
+/// Errors only when backend is explicitly Portal but connection fails.
+#[cfg(feature = "portal")]
+async fn connect_portal(
+    backend: &crate::config::InjectionBackend,
+    quiet: bool,
+    verbosity: u8,
+) -> Result<Option<Arc<PortalSession>>> {
+    use crate::config::InjectionBackend;
+    match backend {
+        InjectionBackend::Portal => {
+            if !quiet {
+                eprintln!("Connecting to desktop portal for keyboard injection...");
+                eprintln!("  You may see a \"Remote Desktop\" dialog — this is normal.");
+                eprintln!("  voicsh only simulates keyboard input, not screen sharing.");
+            }
+            match PortalSession::try_new().await {
+                Ok(session) => Ok(Some(Arc::new(session))),
+                Err(e) => Err(VoicshError::InjectionFailed {
+                    message: format!(
+                        "Portal backend selected but connection failed: {}.\n\
+                         Run 'voicsh init' to detect the best backend for your environment.",
+                        e
+                    ),
+                }),
+            }
+        }
+        InjectionBackend::Auto => {
+            if !quiet {
+                eprintln!("Trying desktop portal for keyboard injection...");
+                eprintln!("  Tip: run 'voicsh init' to auto-detect the best backend.");
+            }
+            match tokio::time::timeout(std::time::Duration::from_secs(5), PortalSession::try_new())
+                .await
+            {
+                Ok(Ok(session)) => {
+                    if verbosity >= 1 {
+                        eprintln!("Portal keyboard access granted.");
+                    }
+                    Ok(Some(Arc::new(session)))
+                }
+                Ok(Err(e)) => {
+                    if verbosity >= 2 {
+                        eprintln!("Portal unavailable ({}), using wtype/ydotool fallback.", e);
+                    }
+                    Ok(None)
+                }
+                Err(_) => {
+                    if verbosity >= 2 {
+                        eprintln!("Portal timed out, using wtype/ydotool fallback.");
+                    }
+                    Ok(None)
+                }
+            }
+        }
+        InjectionBackend::Wtype | InjectionBackend::Ydotool => Ok(None),
     }
 }
 

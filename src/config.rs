@@ -12,7 +12,8 @@ use std::path::PathBuf;
 pub struct Config {
     pub audio: AudioConfig,
     pub stt: SttConfig,
-    pub input: InputConfig,
+    #[serde(alias = "input")]
+    pub injection: InjectionConfig,
     pub voice_commands: VoiceCommandConfig,
     pub transcription: TranscriptionConfig,
 }
@@ -36,12 +37,13 @@ pub struct SttConfig {
     pub fan_out: bool,
 }
 
-/// Input method configuration
+/// Injection configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
-pub struct InputConfig {
-    pub method: InputMethod,
+pub struct InjectionConfig {
+    pub method: InjectionMethod,
     pub paste_key: String,
+    pub backend: InjectionBackend,
 }
 
 /// Voice command configuration
@@ -91,11 +93,39 @@ pub struct HallucinationFilterConfig {
     pub overrides: HashMap<String, Vec<String>>,
 }
 
-/// Input method enumeration
+/// Injection method enumeration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum InputMethod {
+pub enum InjectionMethod {
     Clipboard,
     Direct,
+}
+
+/// Injection backend selection
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum InjectionBackend {
+    #[default]
+    Auto,
+    Portal,
+    Wtype,
+    Ydotool,
+}
+
+impl std::str::FromStr for InjectionBackend {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "portal" => Ok(Self::Portal),
+            "wtype" => Ok(Self::Wtype),
+            "ydotool" => Ok(Self::Ydotool),
+            other => Err(format!(
+                "Unknown backend '{}'. Valid options: auto, portal, wtype, ydotool",
+                other
+            )),
+        }
+    }
 }
 
 impl Default for AudioConfig {
@@ -119,11 +149,12 @@ impl Default for SttConfig {
     }
 }
 
-impl Default for InputConfig {
+impl Default for InjectionConfig {
     fn default() -> Self {
         Self {
-            method: InputMethod::Clipboard,
+            method: InjectionMethod::Clipboard,
             paste_key: "auto".to_string(),
+            backend: InjectionBackend::Auto,
         }
     }
 }
@@ -168,6 +199,7 @@ impl Config {
     /// - VOICSH_MODEL → stt.model
     /// - VOICSH_LANGUAGE → stt.language
     /// - VOICSH_AUDIO_DEVICE → audio.device
+    /// - VOICSH_BACKEND → injection.backend
     pub fn with_env_overrides(mut self) -> Self {
         if let Ok(model) = std::env::var("VOICSH_MODEL")
             && !model.is_empty()
@@ -185,6 +217,15 @@ impl Config {
             && !device.is_empty()
         {
             self.audio.device = Some(device);
+        }
+
+        if let Ok(backend) = std::env::var("VOICSH_BACKEND")
+            && !backend.is_empty()
+        {
+            self.injection.backend = backend.parse().unwrap_or_else(|msg| {
+                eprintln!("Warning: {msg}, using Auto");
+                InjectionBackend::Auto
+            });
         }
 
         self
@@ -399,9 +440,10 @@ impl Config {
         out.push_str("# fan_out = false  # Run multilingual + English models in parallel\n");
         out.push('\n');
 
-        out.push_str("[input]\n");
-        out.push_str("# method = \"Clipboard\"  # Input method: Clipboard or Direct\n");
+        out.push_str("[injection]\n");
+        out.push_str("# method = \"Clipboard\"  # Injection method: Clipboard or Direct\n");
         out.push_str("# paste_key = \"auto\"  # Paste key combo (auto, ctrl+v, ctrl+shift+v)\n");
+        out.push_str("# backend = \"auto\"  # Injection backend: auto, portal, wtype, ydotool\n");
         out.push('\n');
 
         out.push_str("[voice_commands]\n");
@@ -738,6 +780,7 @@ mod tests {
         remove_env("VOICSH_MODEL");
         remove_env("VOICSH_LANGUAGE");
         remove_env("VOICSH_AUDIO_DEVICE");
+        remove_env("VOICSH_BACKEND");
     }
 
     #[test]
@@ -754,9 +797,9 @@ mod tests {
         assert_eq!(config.stt.model, "base");
         assert_eq!(config.stt.language, "auto");
 
-        // Input defaults
-        assert_eq!(config.input.method, InputMethod::Clipboard);
-        assert_eq!(config.input.paste_key, "auto");
+        // Injection defaults
+        assert_eq!(config.injection.method, InjectionMethod::Clipboard);
+        assert_eq!(config.injection.paste_key, "auto");
     }
 
     #[test]
@@ -772,7 +815,7 @@ mod tests {
             model = "large-v3"
             language = "es"
 
-            [input]
+            [injection]
             method = "Direct"
             paste_key = "ctrl+shift+v"
         "#;
@@ -790,8 +833,32 @@ mod tests {
         assert_eq!(config.stt.model, "large-v3");
         assert_eq!(config.stt.language, "es");
 
-        assert_eq!(config.input.method, InputMethod::Direct);
-        assert_eq!(config.input.paste_key, "ctrl+shift+v");
+        assert_eq!(config.injection.method, InjectionMethod::Direct);
+        assert_eq!(config.injection.paste_key, "ctrl+shift+v");
+    }
+
+    #[test]
+    fn test_load_from_toml_with_old_input_section() {
+        // Test backward compatibility: old [input] section should map to injection field
+        let toml_content = r#"
+            [stt]
+            model = "base"
+            language = "en"
+
+            [input]
+            method = "Direct"
+            paste_key = "ctrl+v"
+            backend = "portal"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+
+        assert_eq!(config.injection.method, InjectionMethod::Direct);
+        assert_eq!(config.injection.paste_key, "ctrl+v");
+        assert_eq!(config.injection.backend, InjectionBackend::Portal);
     }
 
     #[test]
@@ -815,8 +882,8 @@ mod tests {
         assert_eq!(config.audio.vad_threshold, 0.02);
         assert_eq!(config.audio.silence_duration_ms, 1500);
         assert_eq!(config.stt.language, "auto");
-        assert_eq!(config.input.method, InputMethod::Clipboard);
-        assert_eq!(config.input.paste_key, "auto");
+        assert_eq!(config.injection.method, InjectionMethod::Clipboard);
+        assert_eq!(config.injection.paste_key, "auto");
     }
 
     #[test]
@@ -876,6 +943,67 @@ mod tests {
         assert_eq!(config.stt.model, "base");
 
         clear_voicsh_env();
+    }
+
+    #[test]
+    fn test_env_override_backend() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_voicsh_env();
+
+        set_env("VOICSH_BACKEND", "portal");
+        let config = Config::default().with_env_overrides();
+        assert_eq!(config.injection.backend, InjectionBackend::Portal);
+
+        set_env("VOICSH_BACKEND", "WTYPE");
+        let config = Config::default().with_env_overrides();
+        assert_eq!(config.injection.backend, InjectionBackend::Wtype);
+
+        // Unknown backend falls back to Auto with warning
+        set_env("VOICSH_BACKEND", "nonexistent");
+        let config = Config::default().with_env_overrides();
+        assert_eq!(config.injection.backend, InjectionBackend::Auto);
+
+        clear_voicsh_env();
+    }
+
+    #[test]
+    fn test_injection_backend_from_str() {
+        assert_eq!(
+            "auto".parse::<InjectionBackend>(),
+            Ok(InjectionBackend::Auto)
+        );
+        assert_eq!(
+            "portal".parse::<InjectionBackend>(),
+            Ok(InjectionBackend::Portal)
+        );
+        assert_eq!(
+            "wtype".parse::<InjectionBackend>(),
+            Ok(InjectionBackend::Wtype)
+        );
+        assert_eq!(
+            "ydotool".parse::<InjectionBackend>(),
+            Ok(InjectionBackend::Ydotool)
+        );
+        // Case-insensitive
+        assert_eq!(
+            "PORTAL".parse::<InjectionBackend>(),
+            Ok(InjectionBackend::Portal)
+        );
+        assert_eq!(
+            "Wtype".parse::<InjectionBackend>(),
+            Ok(InjectionBackend::Wtype)
+        );
+        // Invalid
+        assert!("invalid".parse::<InjectionBackend>().is_err());
+        let err = "bogus".parse::<InjectionBackend>().unwrap_err();
+        assert!(
+            err.contains("bogus"),
+            "Error should contain the invalid value: {err}"
+        );
+        assert!(
+            err.contains("Valid options"),
+            "Error should list valid options: {err}"
+        );
     }
 
     #[test]
@@ -1471,7 +1599,10 @@ mod tests {
         let template = Config::dump_template();
         assert!(template.contains("[audio]"), "Missing [audio] section");
         assert!(template.contains("[stt]"), "Missing [stt] section");
-        assert!(template.contains("[input]"), "Missing [input] section");
+        assert!(
+            template.contains("[injection]"),
+            "Missing [injection] section"
+        );
         assert!(
             template.contains("[voice_commands]"),
             "Missing [voice_commands] section"
@@ -1694,5 +1825,28 @@ mod tests {
         let config = Config::load(temp_file.path()).unwrap();
         assert!(config.voice_commands.enabled);
         assert!(config.voice_commands.disable_defaults);
+    }
+
+    #[test]
+    fn test_injection_backend_serializes_lowercase() {
+        let config = Config {
+            injection: InjectionConfig {
+                method: InjectionMethod::Clipboard,
+                paste_key: "auto".to_string(),
+                backend: InjectionBackend::Portal,
+            },
+            ..Config::default()
+        };
+
+        let toml_str = toml::to_string(&config).unwrap();
+        // Should serialize as lowercase "portal" not "Portal"
+        assert!(
+            toml_str.contains("backend = \"portal\""),
+            "Backend should serialize as lowercase, got: {toml_str}"
+        );
+        assert!(
+            !toml_str.contains("backend = \"Portal\""),
+            "Backend should not serialize as capitalized"
+        );
     }
 }

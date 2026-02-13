@@ -5,7 +5,7 @@ use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::config::{Config, resolve_hallucination_filters};
 use crate::daemon::DaemonState;
-use crate::input::focused_window::reset_detection_cache;
+use crate::inject::focused_window::reset_detection_cache;
 use crate::ipc::protocol::{Command, DaemonEvent, Response};
 use crate::ipc::server::CommandHandler;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
@@ -135,19 +135,21 @@ impl DaemonCommandHandler {
         #[cfg(feature = "portal")]
         {
             Box::new(InjectorSink::with_portal(
-                config.input.method.clone(),
-                config.input.paste_key.clone(),
+                config.injection.method.clone(),
+                config.injection.paste_key.clone(),
                 self.verbosity,
                 self.state.portal.clone(),
+                config.injection.backend.clone(),
             ))
         }
 
         #[cfg(not(feature = "portal"))]
         {
             Box::new(InjectorSink::system(
-                config.input.method.clone(),
-                config.input.paste_key.clone(),
+                config.injection.method.clone(),
+                config.injection.paste_key.clone(),
                 self.verbosity,
+                config.injection.backend.clone(),
             ))
         }
     }

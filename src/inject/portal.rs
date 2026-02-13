@@ -207,7 +207,7 @@ impl PortalSession {
     /// Returns `Err` if the portal is unavailable or the user denies access.
     pub async fn try_new() -> Result<Self> {
         // Fix stale D-Bus in long-lived tmux/byobu/screen sessions
-        if let Some(fresh_addr) = crate::input::focused_window::fresh_gnome_dbus_address() {
+        if let Some(fresh_addr) = crate::inject::focused_window::fresh_gnome_dbus_address() {
             unsafe {
                 std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
             }
@@ -262,7 +262,7 @@ impl PortalSession {
         eprintln!("voicsh: portal key injection failed, attempting reconnect...");
 
         // Refresh D-Bus address from running gnome-shell
-        if let Some(fresh_addr) = crate::input::focused_window::fresh_gnome_dbus_address() {
+        if let Some(fresh_addr) = crate::inject::focused_window::fresh_gnome_dbus_address() {
             unsafe {
                 std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
             }

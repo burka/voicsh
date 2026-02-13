@@ -17,21 +17,19 @@ Offline, privacy-first voice typing. Speak into your mic, text appears in your f
 ## Quick start
 
 ```bash
-cargo install voicsh                   # CPU
-cargo install voicsh --features vulkan # GPU (5-10x faster)
+cargo install voicsh
 
-# Test with a WAV file first (no mic or runtime deps needed):
-cat file.wav | voicsh
+# First run — detects your desktop and picks the best model:
+voicsh init
 
-# Mic mode (requires runtime deps below):
+# Mic mode:
 voicsh                          # continuous mic → text into focused app
 voicsh --once                   # single utterance → exit
 
-# Auto-tune: benchmark hardware, pick best model:
-voicsh init
+# Pipe mode (no mic/runtime deps needed):
+cat file.wav | voicsh
 
-# For all commands and options:
-voicsh help
+voicsh help                     # all commands and options
 ```
 
 ## How it works
@@ -51,68 +49,32 @@ Pipe mode (`cat file.wav | voicsh`) skips injection and writes to stdout.
 
 ## Install
 
-### Build dependencies
-
-Rust (via [rustup](https://rustup.rs/)) plus a C toolchain, cmake, pkg-config, libclang, and ALSA headers:
-
 ```bash
-# Debian/Ubuntu:
+# Ubuntu/Debian:
 sudo apt install build-essential cmake pkg-config libclang-dev libasound2-dev
-
-# Fedora:
-sudo dnf install gcc gcc-c++ cmake pkg-config clang-devel alsa-lib-devel
-
-# Arch:
-sudo pacman -S base-devel cmake pkgconf clang alsa-lib
-```
-
-For the authoritative list of system dependencies, see [`test-containers/Dockerfile.vulkan`](test-containers/Dockerfile.vulkan).
-
-```bash
-# CPU-only (works everywhere):
 cargo install voicsh
-
-# ⚡ With GPU — 5-10x faster transcription (recommended if you have a GPU):
-cargo install voicsh --features vulkan   # AMD, Intel, NVIDIA — most universal
-cargo install voicsh --features cuda     # NVIDIA (fastest if you have CUDA)
-cargo install voicsh --features hipblas  # AMD discrete (ROCm)
 ```
 
-> **Have a GPU? Use it.** CPU mode works but is noticeably slower on larger models.
-> Run `voicsh check` after install to verify your GPU is detected and active.
+Other distros, GPU acceleration, and pipe-only builds: see [INSTALL.md](INSTALL.md).
 
-If you only need pipe mode (WAV → text, no microphone) and want to skip the ALSA dependency:
+## Text injection
 
-```bash
-cargo install voicsh \
-    --no-default-features --features cli,portal,model-download
-```
+voicsh injects transcribed text into your focused app. `voicsh init` auto-detects the best backend:
 
-### GPU prerequisites
+| Desktop | Backend | Notes |
+|---------|---------|-------|
+| GNOME 45+ | Portal (RemoteDesktop) | No extra tools needed |
+| KDE 6.1+ | Portal or wtype | |
+| Sway / Hyprland | wtype | `sudo apt install wtype` |
+| Fallback | ydotool | Needs `ydotoold` daemon |
 
-| Backend | Flag | Prerequisites |
-|---------|------|---------------|
-| Vulkan (recommended) | `--features vulkan` | [Vulkan SDK](https://vulkan.lunarg.com/) — on Ubuntu: `libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc` |
-| NVIDIA CUDA | `--features cuda` | [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit) ≥ 11.0 |
-| AMD ROCm | `--features hipblas` | [ROCm](https://rocm.docs.amd.com/) |
-| CPU optimized | `--features openblas` | `libopenblas-dev` / `openblas` |
+Override at runtime: `voicsh --injection-backend wtype`
+Override via env: `VOICSH_BACKEND=portal voicsh`
+Override in config: `[injection]` section — run `voicsh config dump` to see all options.
 
-### Runtime dependencies (mic mode only)
+`wl-clipboard` (`wl-copy`) is required for clipboard-based injection.
 
-Text injection needs **one of**:
-- **Nothing extra** on GNOME 45+ / KDE 6.1+ (uses xdg-desktop-portal)
-- `wtype` for wlroots compositors (Sway, Hyprland)
-- `ydotool` + `ydotoold` as fallback
-
-`wl-clipboard` (`wl-copy`) is required for clipboard access.
-
-> **Note:** The wtype/ydotool backends inject text by copying it to the clipboard and simulating a paste keystroke. This **overwrites your current clipboard contents**. The portal backend (GNOME 45+, KDE 6.1+) types directly and does not touch the clipboard.
-
-```bash
-voicsh check    # verify what's available
-```
-
-Pipe mode (`cat file.wav | voicsh`) has no runtime dependencies beyond the binary.
+> **Note:** wtype/ydotool inject via clipboard paste — this **overwrites your clipboard**. Portal types directly without touching the clipboard.
 
 ## Voice commands
 
@@ -146,7 +108,7 @@ voicsh config get stt.model     # single value
 voicsh config set stt.model small.en
 ```
 
-Config file: `~/.config/voicsh/config.toml`. Environment overrides: `VOICSH_MODEL=small.en voicsh`.
+Config file: `~/.config/voicsh/config.toml`. Environment overrides: `VOICSH_MODEL`, `VOICSH_LANGUAGE`, `VOICSH_BACKEND`.
 
 ## Shell integration
 

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::benchmark::{ResourceMonitor, SystemInfo, benchmark_model, compute_default_threads};
 use crate::config::Config;
+use crate::inject::environment::{detect_environment, print_environment_summary};
 use crate::models::catalog;
 use crate::models::download::{download_model, is_model_installed, models_dir};
 use crate::models::remote::fetch_remote_models;
@@ -426,7 +427,47 @@ async fn verify_or_fallback(
 
 // ── Main entry point ────────────────────────────────────────────────────
 
-/// Run the `voicsh init` auto-tuning flow.
+/// Entry point for `voicsh init`.
+///
+/// Detects the desktop environment, recommends the best injection backend,
+/// saves the recommendation to config, then runs benchmark auto-tuning.
+pub async fn run_full_init(
+    language: &str,
+    verbose: u8,
+    allow_quantized: bool,
+) -> anyhow::Result<()> {
+    // Step 1: Detect environment
+    let env = detect_environment();
+    print_environment_summary(&env);
+    println!();
+
+    // Step 2: Save recommended backend to config
+    let config_path = Config::default_path();
+    let config_exists = config_path.exists();
+
+    // Load existing config or start with defaults
+    let mut config = Config::load_or_default(&config_path);
+
+    // Init always updates the backend — that's what "init" means.
+    // force=true will also overwrite model settings in the benchmark step.
+    config.injection.backend = env.recommended_backend;
+    config
+        .save(&config_path)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    if config_exists {
+        println!("Updated injection.backend in {}", config_path.display());
+    } else {
+        println!("Created config at {}", config_path.display());
+    }
+    println!("  injection.backend = {:?}", config.injection.backend);
+    println!();
+
+    // Step 3: Run benchmark auto-tuning
+    run_init(language, verbose, allow_quantized).await
+}
+
+/// Run the `voicsh auto-tune` flow (benchmark only).
 ///
 /// Benchmarks a small probe model, estimates performance for all available
 /// models, picks the highest-quality model that runs faster than real-time,

@@ -1,5 +1,5 @@
-use crate::config::InputMethod;
-use crate::input::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
+use crate::config::{InjectionBackend, InjectionMethod};
+use crate::inject::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
 use crate::ipc::protocol::DaemonEvent;
 use crate::pipeline::error::{StationError, eprintln_clear};
 use crate::pipeline::latency::{LatencyTracker, SessionContext, TranscriptionTiming};
@@ -180,16 +180,21 @@ impl Station for SinkStation {
 /// Extracted from InjectorStation for modularity.
 pub struct InjectorSink<E: CommandExecutor> {
     injector: TextInjector<E>,
-    method: InputMethod,
+    method: InjectionMethod,
     paste_key: String,
     verbosity: u8,
 }
 
 impl InjectorSink<SystemCommandExecutor> {
     /// Create InjectorSink with system command executor (production use).
-    pub fn system(method: InputMethod, paste_key: String, verbosity: u8) -> Self {
+    pub fn system(
+        method: InjectionMethod,
+        paste_key: String,
+        verbosity: u8,
+        backend: InjectionBackend,
+    ) -> Self {
         Self {
-            injector: TextInjector::system(),
+            injector: TextInjector::system().with_backend(backend),
             method,
             paste_key,
             verbosity,
@@ -199,13 +204,16 @@ impl InjectorSink<SystemCommandExecutor> {
     /// Create InjectorSink with portal session for key injection.
     #[cfg(feature = "portal")]
     pub fn with_portal(
-        method: InputMethod,
+        method: InjectionMethod,
         paste_key: String,
         verbosity: u8,
-        portal: Option<Arc<crate::input::portal::PortalSession>>,
+        portal: Option<Arc<crate::inject::portal::PortalSession>>,
+        backend: InjectionBackend,
     ) -> Self {
         Self {
-            injector: TextInjector::system().with_portal(portal),
+            injector: TextInjector::system()
+                .with_portal(portal)
+                .with_backend(backend),
             method,
             paste_key,
             verbosity,
@@ -215,7 +223,7 @@ impl InjectorSink<SystemCommandExecutor> {
 
 impl<E: CommandExecutor> InjectorSink<E> {
     /// Create InjectorSink with custom executor (testing/library use).
-    pub fn new(injector: TextInjector<E>, method: InputMethod, paste_key: String) -> Self {
+    pub fn new(injector: TextInjector<E>, method: InjectionMethod, paste_key: String) -> Self {
         Self {
             injector,
             method,
@@ -232,13 +240,13 @@ impl<E: CommandExecutor + 'static> TextSink for InjectorSink<E> {
         let normalized = format!("{} ", text.trim_end());
 
         let paste_key =
-            crate::input::focused_window::resolve_paste_key(&self.paste_key, self.verbosity);
+            crate::inject::focused_window::resolve_paste_key(&self.paste_key, self.verbosity);
 
         match self.method {
-            InputMethod::Clipboard => {
+            InjectionMethod::Clipboard => {
                 self.injector.inject_via_clipboard(&normalized, paste_key)?;
             }
-            InputMethod::Direct => {
+            InjectionMethod::Direct => {
                 self.injector.inject_direct(&normalized)?;
             }
         }
@@ -248,17 +256,17 @@ impl<E: CommandExecutor + 'static> TextSink for InjectorSink<E> {
 
     fn handle_events(&mut self, events: &[SinkEvent]) -> crate::error::Result<()> {
         let paste_key =
-            crate::input::focused_window::resolve_paste_key(&self.paste_key, self.verbosity);
+            crate::inject::focused_window::resolve_paste_key(&self.paste_key, self.verbosity);
 
         for event in events {
             match event {
                 SinkEvent::Text(text) => {
                     let normalized = format!("{} ", text.trim_end());
                     match self.method {
-                        InputMethod::Clipboard => {
+                        InjectionMethod::Clipboard => {
                             self.injector.inject_via_clipboard(&normalized, paste_key)?;
                         }
-                        InputMethod::Direct => {
+                        InjectionMethod::Direct => {
                             self.injector.inject_direct(&normalized)?;
                         }
                     }
@@ -332,6 +340,7 @@ impl TextSink for StdoutSink {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::InjectionBackend;
     use std::sync::{Arc, Mutex};
 
     #[test]
@@ -368,7 +377,12 @@ mod tests {
 
     #[test]
     fn injector_sink_system_constructor() {
-        let sink = InjectorSink::system(InputMethod::Clipboard, "ctrl+v".to_string(), 0);
+        let sink = InjectorSink::system(
+            InjectionMethod::Clipboard,
+            "ctrl+v".to_string(),
+            0,
+            InjectionBackend::Auto,
+        );
         assert_eq!(sink.name(), "injector");
     }
 
@@ -415,7 +429,8 @@ mod tests {
     fn injector_sink_handles_clipboard_injection() {
         let executor = MockCommandExecutor::new();
         let injector = TextInjector::new(executor.clone());
-        let mut sink = InjectorSink::new(injector, InputMethod::Clipboard, "ctrl+v".to_string());
+        let mut sink =
+            InjectorSink::new(injector, InjectionMethod::Clipboard, "ctrl+v".to_string());
 
         sink.handle("Test text").unwrap();
 
@@ -433,7 +448,7 @@ mod tests {
     fn injector_sink_handles_direct_injection() {
         let executor = MockCommandExecutor::new();
         let injector = TextInjector::new(executor.clone());
-        let mut sink = InjectorSink::new(injector, InputMethod::Direct, "ctrl+v".to_string());
+        let mut sink = InjectorSink::new(injector, InjectionMethod::Direct, "ctrl+v".to_string());
 
         sink.handle("Direct text").unwrap();
 
@@ -451,7 +466,7 @@ mod tests {
     fn injector_sink_normalizes_trailing_whitespace() {
         let executor = MockCommandExecutor::new();
         let injector = TextInjector::new(executor.clone());
-        let mut sink = InjectorSink::new(injector, InputMethod::Direct, "ctrl+v".to_string());
+        let mut sink = InjectorSink::new(injector, InjectionMethod::Direct, "ctrl+v".to_string());
 
         // Input with extra trailing whitespace → trimmed to exactly one space
         sink.handle("hello   ").unwrap();
@@ -474,7 +489,8 @@ mod tests {
         let executor = MockCommandExecutor::new();
         executor.set_fail_next();
         let injector = TextInjector::new(executor.clone());
-        let mut sink = InjectorSink::new(injector, InputMethod::Clipboard, "ctrl+v".to_string());
+        let mut sink =
+            InjectorSink::new(injector, InjectionMethod::Clipboard, "ctrl+v".to_string());
 
         let result = sink.handle("Test");
         assert!(result.is_err());
@@ -518,7 +534,7 @@ mod tests {
         let executor = MockCommandExecutor::new();
         executor.set_fail_next();
         let injector = TextInjector::new(executor.clone());
-        let sink = InjectorSink::new(injector, InputMethod::Clipboard, "ctrl+v".to_string());
+        let sink = InjectorSink::new(injector, InjectionMethod::Clipboard, "ctrl+v".to_string());
 
         let (result_tx, _result_rx) = crossbeam_channel::bounded(1);
         let mut station = SinkStation::new(Box::new(sink), true, 0, result_tx);
@@ -547,7 +563,12 @@ mod tests {
 
     #[test]
     fn injector_sink_name() {
-        let sink = InjectorSink::system(InputMethod::Clipboard, "ctrl+v".to_string(), 0);
+        let sink = InjectorSink::system(
+            InjectionMethod::Clipboard,
+            "ctrl+v".to_string(),
+            0,
+            InjectionBackend::Auto,
+        );
         assert_eq!(sink.name(), "injector");
     }
 
@@ -651,7 +672,7 @@ mod tests {
         use crate::pipeline::types::SinkEvent;
         let executor = MockCommandExecutor::new();
         let injector = TextInjector::new(executor.clone());
-        let mut sink = InjectorSink::new(injector, InputMethod::Direct, "ctrl+v".to_string());
+        let mut sink = InjectorSink::new(injector, InjectionMethod::Direct, "ctrl+v".to_string());
 
         let events = vec![
             SinkEvent::Text("hello".to_string()),
@@ -670,7 +691,7 @@ mod tests {
         use crate::pipeline::types::SinkEvent;
         let executor = MockCommandExecutor::new();
         let injector = TextInjector::new(executor.clone());
-        let mut sink = InjectorSink::new(injector, InputMethod::Direct, "ctrl+v".to_string());
+        let mut sink = InjectorSink::new(injector, InjectionMethod::Direct, "ctrl+v".to_string());
 
         let events = vec![
             SinkEvent::Text("hello ".to_string()),

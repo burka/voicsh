@@ -38,6 +38,10 @@ pub struct Cli {
     #[arg(long, value_name = "LANG")]
     pub language: Option<String>,
 
+    /// Injection backend override (auto, portal, wtype, ydotool)
+    #[arg(long, value_name = "BACKEND")]
+    pub injection_backend: Option<String>,
+
     /// Prevent automatic model download if configured model is missing
     #[arg(long)]
     pub no_download: bool,
@@ -158,7 +162,7 @@ pub enum Commands {
 
     /// Auto-tune: benchmark hardware, download optimal model, configure
     #[cfg(feature = "benchmark")]
-    Init {
+    AutoTune {
         /// Language for transcription (default: auto). Examples: auto, en, de, es, fr
         #[arg(long, value_name = "LANG", default_value = "auto")]
         language: String,
@@ -187,6 +191,17 @@ pub enum Commands {
     Completions {
         /// Shell to generate completions for
         shell: Shell,
+    },
+
+    /// Detect environment, configure injection backend, and auto-tune model
+    #[cfg(feature = "benchmark")]
+    Init {
+        /// Language for transcription (default: auto)
+        #[arg(long, value_name = "LANG", default_value = "auto")]
+        language: String,
+        /// Include quantized models as candidates
+        #[arg(long)]
+        allow_quantized: bool,
     },
 }
 
@@ -240,6 +255,7 @@ mod tests {
         assert!(cli.device.is_none());
         assert!(cli.model.is_none());
         assert!(cli.language.is_none());
+        assert!(cli.injection_backend.is_none());
         assert!(!cli.no_download);
         assert!(!cli.once);
         assert!(!cli.fan_out);
@@ -635,6 +651,61 @@ mod tests {
 
     #[test]
     #[cfg(feature = "benchmark")]
+    fn test_parse_auto_tune() {
+        let cli = Cli::try_parse_from(["voicsh", "auto-tune"]).unwrap();
+        match cli.command {
+            Some(Commands::AutoTune {
+                language,
+                allow_quantized,
+            }) => {
+                assert_eq!(language, "auto");
+                assert!(!allow_quantized);
+            }
+            _ => panic!("Expected AutoTune command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_parse_auto_tune_with_language() {
+        let cli = Cli::try_parse_from(["voicsh", "auto-tune", "--language", "de"]).unwrap();
+        match cli.command {
+            Some(Commands::AutoTune {
+                language,
+                allow_quantized,
+            }) => {
+                assert_eq!(language, "de");
+                assert!(!allow_quantized);
+            }
+            _ => panic!("Expected AutoTune command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_parse_auto_tune_allow_quantized() {
+        let cli = Cli::try_parse_from([
+            "voicsh",
+            "auto-tune",
+            "--allow-quantized",
+            "--language",
+            "en",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::AutoTune {
+                language,
+                allow_quantized,
+            }) => {
+                assert_eq!(language, "en");
+                assert!(allow_quantized);
+            }
+            _ => panic!("Expected AutoTune command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
     fn test_parse_init() {
         let cli = Cli::try_parse_from(["voicsh", "init"]).unwrap();
         match cli.command {
@@ -644,39 +715,6 @@ mod tests {
             }) => {
                 assert_eq!(language, "auto");
                 assert!(!allow_quantized);
-            }
-            _ => panic!("Expected Init command"),
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "benchmark")]
-    fn test_parse_init_with_language() {
-        let cli = Cli::try_parse_from(["voicsh", "init", "--language", "de"]).unwrap();
-        match cli.command {
-            Some(Commands::Init {
-                language,
-                allow_quantized,
-            }) => {
-                assert_eq!(language, "de");
-                assert!(!allow_quantized);
-            }
-            _ => panic!("Expected Init command"),
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "benchmark")]
-    fn test_parse_init_allow_quantized() {
-        let cli = Cli::try_parse_from(["voicsh", "init", "--allow-quantized", "--language", "en"])
-            .unwrap();
-        match cli.command {
-            Some(Commands::Init {
-                language,
-                allow_quantized,
-            }) => {
-                assert_eq!(language, "en");
-                assert!(allow_quantized);
             }
             _ => panic!("Expected Init command"),
         }
@@ -976,5 +1014,17 @@ mod tests {
             msg.contains("required") || msg.contains("value"),
             "Expected missing required argument error, got: {msg}"
         );
+    }
+
+    #[test]
+    fn test_parse_injection_backend() {
+        let cli = Cli::try_parse_from(["voicsh", "--injection-backend", "wtype"]).unwrap();
+        assert_eq!(cli.injection_backend.as_deref(), Some("wtype"));
+    }
+
+    #[test]
+    fn test_parse_injection_backend_portal() {
+        let cli = Cli::try_parse_from(["voicsh", "--injection-backend", "portal"]).unwrap();
+        assert_eq!(cli.injection_backend.as_deref(), Some("portal"));
     }
 }

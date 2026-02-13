@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 #[cfg(feature = "portal")]
-use crate::input::portal::PortalSession;
+use crate::inject::portal::PortalSession;
 
 /// Daemon state: model loaded, recording state, IPC server.
 pub struct DaemonState {
@@ -719,8 +719,8 @@ mod tests {
     #[cfg(feature = "portal")]
     #[tokio::test]
     async fn test_daemon_state_portal_some() {
-        use crate::input::portal::PortalSession;
-        use crate::input::portal::testing::NoOpConnector;
+        use crate::inject::portal::PortalSession;
+        use crate::inject::portal::testing::NoOpConnector;
 
         let config = Config::default();
         let portal = PortalSession::with_connector(Box::new(NoOpConnector))

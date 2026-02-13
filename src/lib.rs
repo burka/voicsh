@@ -23,7 +23,7 @@ pub mod error;
 pub mod gnome_extension;
 #[cfg(feature = "benchmark")]
 pub mod init;
-pub mod input;
+pub mod inject;
 pub mod ipc;
 #[cfg(feature = "model-download")]
 pub mod models;
@@ -39,7 +39,7 @@ pub mod app;
 
 // Core traits (source → process → sink)
 pub use audio::recorder::AudioSource;
-pub use input::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
+pub use inject::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
 pub use pipeline::sink::{CollectorSink, InjectorSink, StdoutSink, TextSink};
 pub use stt::transcriber::Transcriber;
 
@@ -50,7 +50,7 @@ pub use pipeline::orchestrator::{Pipeline, PipelineConfig, PipelineHandle};
 pub use error::{Result, VoicshError};
 
 // Config
-pub use config::{Config, InputMethod, resolve_hallucination_filters};
+pub use config::{Config, InjectionMethod, resolve_hallucination_filters};
 
 // Station framework (for advanced users)
 pub use pipeline::error::{ErrorReporter, StationError};

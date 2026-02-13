@@ -28,6 +28,7 @@ async fn main() -> Result<()> {
                     cli.device,
                     cli.model,
                     cli.language,
+                    cli.injection_backend,
                     cli.quiet,
                     cli.verbose,
                     cli.no_download,
@@ -119,11 +120,18 @@ async fn main() -> Result<()> {
             .await?;
         }
         #[cfg(feature = "benchmark")]
-        Some(voicsh::cli::Commands::Init {
+        Some(voicsh::cli::Commands::AutoTune {
             language,
             allow_quantized,
         }) => {
             voicsh::init::run_init(&language, cli.verbose, allow_quantized).await?;
+        }
+        #[cfg(feature = "benchmark")]
+        Some(voicsh::cli::Commands::Init {
+            language,
+            allow_quantized,
+        }) => {
+            voicsh::init::run_full_init(&language, cli.verbose, allow_quantized).await?;
         }
     }
 

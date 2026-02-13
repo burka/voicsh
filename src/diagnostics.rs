@@ -9,7 +9,7 @@ use std::process::Command;
 use crate::benchmark::detect_gpu;
 
 /// Result of a dependency check.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CheckResult {
     /// Tool is installed and working
     Ok,
@@ -20,7 +20,7 @@ pub enum CheckResult {
 }
 
 /// Check if a command exists and is executable.
-fn check_command(command: &str) -> CheckResult {
+pub fn check_command(command: &str) -> CheckResult {
     match Command::new(command).arg("--version").output() {
         Ok(output) if output.status.success() => CheckResult::Ok,
         Ok(_) => CheckResult::Warning(format!("'{}' found but --version failed", command)),
@@ -30,7 +30,7 @@ fn check_command(command: &str) -> CheckResult {
 }
 
 /// Check if wtype is available (simpler Wayland typing tool).
-fn check_wtype() -> CheckResult {
+pub fn check_wtype() -> CheckResult {
     match Command::new("wtype").arg("--help").output() {
         Ok(output) if output.status.success() => CheckResult::Ok,
         Ok(_) => CheckResult::Ok, // --help might return non-zero but still work
@@ -40,7 +40,7 @@ fn check_wtype() -> CheckResult {
 }
 
 /// Check ydotool backend availability by examining its output.
-fn check_ydotool_backend() -> CheckResult {
+pub fn check_ydotool_backend() -> CheckResult {
     // Run ydotool with a simple command that triggers backend check
     match Command::new("ydotool").args(["type", "--help"]).output() {
         Ok(output) => {
@@ -64,7 +64,7 @@ fn check_ydotool_backend() -> CheckResult {
 }
 
 /// Check if xdg-desktop-portal RemoteDesktop is available.
-fn check_portal() -> CheckResult {
+pub fn check_portal() -> CheckResult {
     match Command::new("gdbus")
         .args([
             "introspect",

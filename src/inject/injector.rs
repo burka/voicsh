@@ -6,6 +6,7 @@
 //!
 //! The `CommandExecutor` trait enables full testability without external dependencies.
 
+use crate::config::InjectionBackend;
 use crate::error::{Result, VoicshError};
 use std::process::{Command, Stdio};
 #[cfg(feature = "portal")]
@@ -106,8 +107,9 @@ fn ydotool_helpful_error(e: VoicshError) -> VoicshError {
 /// Text injector that uses CommandExecutor for system interaction.
 pub struct TextInjector<E: CommandExecutor> {
     executor: E,
+    backend: InjectionBackend,
     #[cfg(feature = "portal")]
-    portal: Option<Arc<crate::input::portal::PortalSession>>,
+    portal: Option<Arc<crate::inject::portal::PortalSession>>,
 }
 
 impl<E: CommandExecutor> TextInjector<E> {
@@ -115,6 +117,7 @@ impl<E: CommandExecutor> TextInjector<E> {
     pub fn new(executor: E) -> Self {
         Self {
             executor,
+            backend: InjectionBackend::Auto,
             #[cfg(feature = "portal")]
             portal: None,
         }
@@ -122,9 +125,44 @@ impl<E: CommandExecutor> TextInjector<E> {
 
     /// Set the portal session for key injection (highest-priority backend).
     #[cfg(feature = "portal")]
-    pub fn with_portal(mut self, portal: Option<Arc<crate::input::portal::PortalSession>>) -> Self {
+    pub fn with_portal(
+        mut self,
+        portal: Option<Arc<crate::inject::portal::PortalSession>>,
+    ) -> Self {
         self.portal = portal;
         self
+    }
+
+    /// Set the injection backend to use.
+    pub fn with_backend(mut self, backend: InjectionBackend) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    /// Execute wtype with a not-found error mapped to a helpful message.
+    fn run_wtype(&self, args: &[&str]) -> Result<()> {
+        self.executor.execute("wtype", args).map_err(|e| match &e {
+            VoicshError::InjectionToolNotFound { tool } if tool == "wtype" => {
+                VoicshError::InjectionFailed {
+                    message: "wtype not found. Install: sudo apt install wtype".to_string(),
+                }
+            }
+            _ => e,
+        })
+    }
+
+    /// Execute ydotool with a not-found error mapped to a helpful message.
+    fn run_ydotool(&self, args: &[&str]) -> Result<()> {
+        self.executor
+            .execute("ydotool", args)
+            .map_err(|e| match &e {
+                VoicshError::InjectionToolNotFound { tool } if tool == "ydotool" => {
+                    VoicshError::InjectionFailed {
+                        message: "ydotool not found. Install: sudo apt install ydotool".to_string(),
+                    }
+                }
+                _ => e,
+            })
     }
 
     /// Inject text via clipboard mechanism.
@@ -143,7 +181,7 @@ impl<E: CommandExecutor> TextInjector<E> {
     /// Ubuntu/Debian: `sudo apt install wl-clipboard wtype`
     /// Arch: `sudo pacman -S wl-clipboard wtype`
     pub fn inject_via_clipboard(&self, text: &str, paste_key: &str) -> Result<()> {
-        use crate::input::focused_window::paste_key_to_wtype_args;
+        use crate::inject::focused_window::paste_key_to_wtype_args;
 
         // Copy text to clipboard using wl-copy
         self.executor
@@ -163,29 +201,45 @@ impl<E: CommandExecutor> TextInjector<E> {
         // Delay to ensure clipboard is updated before paste
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        // Try portal first (works on GNOME where wtype fails)
-        #[cfg(feature = "portal")]
-        if let Some(portal) = &self.portal
-            && portal.simulate_paste(paste_key).is_ok()
-        {
-            return Ok(());
+        match self.backend {
+            InjectionBackend::Portal => {
+                #[cfg(feature = "portal")]
+                if let Some(portal) = &self.portal
+                    && portal.simulate_paste(paste_key).is_ok()
+                {
+                    return Ok(());
+                }
+                Err(VoicshError::InjectionFailed {
+                    message: "Portal backend selected but portal session not available."
+                        .to_string(),
+                })
+            }
+            InjectionBackend::Wtype => {
+                let wtype_args = paste_key_to_wtype_args(paste_key);
+                let wtype_arg_refs: Vec<&str> = wtype_args.iter().map(String::as_str).collect();
+                self.run_wtype(&wtype_arg_refs)
+            }
+            InjectionBackend::Ydotool => self.run_ydotool(&["key", "--delay", "10", paste_key]),
+            InjectionBackend::Auto => {
+                #[cfg(feature = "portal")]
+                if let Some(portal) = &self.portal
+                    && portal.simulate_paste(paste_key).is_ok()
+                {
+                    return Ok(());
+                }
+
+                let wtype_args = paste_key_to_wtype_args(paste_key);
+                let wtype_arg_refs: Vec<&str> = wtype_args.iter().map(String::as_str).collect();
+
+                if self.executor.execute("wtype", &wtype_arg_refs).is_ok() {
+                    return Ok(());
+                }
+
+                self.executor
+                    .execute("ydotool", &["key", "--delay", "10", paste_key])
+                    .map_err(ydotool_helpful_error)
+            }
         }
-
-        // Build wtype args from paste_key
-        let wtype_args = paste_key_to_wtype_args(paste_key);
-        let wtype_arg_refs: Vec<&str> = wtype_args.iter().map(String::as_str).collect();
-
-        // Try wtype (simpler, no daemon needed)
-        if self.executor.execute("wtype", &wtype_arg_refs).is_ok() {
-            return Ok(());
-        }
-
-        // Fall back to ydotool (small delay for reliability)
-        self.executor
-            .execute("ydotool", &["key", "--delay", "10", paste_key])
-            .map_err(ydotool_helpful_error)?;
-
-        Ok(())
     }
 
     /// Inject text directly by simulating keyboard input.
@@ -199,47 +253,81 @@ impl<E: CommandExecutor> TextInjector<E> {
     /// Ubuntu/Debian: `sudo apt install wtype`
     /// Arch: `sudo pacman -S wtype`
     pub fn inject_direct(&self, text: &str) -> Result<()> {
-        // Try wtype first (simpler, no daemon needed)
-        if self.executor.execute("wtype", &[text]).is_ok() {
-            return Ok(());
-        }
+        match self.backend {
+            InjectionBackend::Wtype => self.run_wtype(&[text]),
+            InjectionBackend::Ydotool => self.run_ydotool(&["type", "--delay", "10", text]),
+            InjectionBackend::Portal => Err(VoicshError::InjectionFailed {
+                message:
+                    "Portal backend does not support direct text injection. Use clipboard method."
+                        .to_string(),
+            }),
+            InjectionBackend::Auto => {
+                if self.executor.execute("wtype", &[text]).is_ok() {
+                    return Ok(());
+                }
 
-        // Fall back to ydotool (small delay for reliability)
-        self.executor
-            .execute("ydotool", &["type", "--delay", "10", text])
-            .map_err(ydotool_helpful_error)?;
-        Ok(())
+                self.executor
+                    .execute("ydotool", &["type", "--delay", "10", text])
+                    .map_err(ydotool_helpful_error)
+            }
+        }
     }
 
     /// Inject a keyboard shortcut (e.g. "ctrl+BackSpace").
     ///
-    /// Tries portal first, then wtype, then ydotool.
+    /// Tries portal first, then wtype, then ydotool (in Auto mode).
     pub fn inject_key_combo(&self, combo: &str) -> Result<()> {
-        use crate::input::focused_window::paste_key_to_wtype_args;
+        use crate::inject::focused_window::paste_key_to_wtype_args;
 
-        // Try portal first (works on GNOME where wtype fails)
-        #[cfg(feature = "portal")]
-        if let Some(portal) = &self.portal
-            && portal.simulate_paste(combo).is_ok()
-        {
-            return Ok(());
+        match self.backend {
+            InjectionBackend::Portal => {
+                #[cfg(feature = "portal")]
+                if let Some(portal) = &self.portal
+                    && portal.simulate_paste(combo).is_ok()
+                {
+                    return Ok(());
+                }
+                #[cfg(feature = "portal")]
+                {
+                    Err(VoicshError::InjectionFailed {
+                        message: "Portal backend selected but portal session not available."
+                            .to_string(),
+                    })
+                }
+                #[cfg(not(feature = "portal"))]
+                {
+                    Err(VoicshError::InjectionFailed {
+                        message: "Portal backend requires the portal feature. Rebuild with --features portal."
+                            .to_string(),
+                    })
+                }
+            }
+            InjectionBackend::Wtype => {
+                let wtype_args = paste_key_to_wtype_args(combo);
+                let wtype_arg_refs: Vec<&str> = wtype_args.iter().map(String::as_str).collect();
+                self.run_wtype(&wtype_arg_refs)
+            }
+            InjectionBackend::Ydotool => self.run_ydotool(&["key", "--delay", "10", combo]),
+            InjectionBackend::Auto => {
+                #[cfg(feature = "portal")]
+                if let Some(portal) = &self.portal
+                    && portal.simulate_paste(combo).is_ok()
+                {
+                    return Ok(());
+                }
+
+                let wtype_args = paste_key_to_wtype_args(combo);
+                let wtype_arg_refs: Vec<&str> = wtype_args.iter().map(String::as_str).collect();
+
+                if self.executor.execute("wtype", &wtype_arg_refs).is_ok() {
+                    return Ok(());
+                }
+
+                self.executor
+                    .execute("ydotool", &["key", "--delay", "10", combo])
+                    .map_err(ydotool_helpful_error)
+            }
         }
-
-        // Build wtype args from combo
-        let wtype_args = paste_key_to_wtype_args(combo);
-        let wtype_arg_refs: Vec<&str> = wtype_args.iter().map(String::as_str).collect();
-
-        // Try wtype (simpler, no daemon needed)
-        if self.executor.execute("wtype", &wtype_arg_refs).is_ok() {
-            return Ok(());
-        }
-
-        // Fall back to ydotool
-        self.executor
-            .execute("ydotool", &["key", "--delay", "10", combo])
-            .map_err(ydotool_helpful_error)?;
-
-        Ok(())
     }
 }
 
@@ -1001,5 +1089,67 @@ mod tests {
         assert_eq!(calls[0].0, "wtype");
         assert_eq!(calls[1].0, "ydotool");
         assert_eq!(calls[1].1, vec!["key", "--delay", "10", "ctrl+BackSpace"]);
+    }
+
+    #[test]
+    fn test_inject_key_combo_wtype_backend_uses_wtype() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder).with_backend(InjectionBackend::Wtype);
+
+        injector.inject_key_combo("ctrl+v").unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 1, "Should only call wtype, no fallback");
+        assert_eq!(calls[0].0, "wtype", "Should use wtype backend");
+        assert_eq!(
+            calls[0].1,
+            vec!["-M", "ctrl", "-k", "v"],
+            "Should pass correct wtype args"
+        );
+    }
+
+    #[test]
+    fn test_inject_key_combo_ydotool_backend_uses_ydotool() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder).with_backend(InjectionBackend::Ydotool);
+
+        injector.inject_key_combo("ctrl+BackSpace").unwrap();
+
+        let calls = injector.executor.calls();
+        assert_eq!(calls.len(), 1, "Should only call ydotool, no fallback");
+        assert_eq!(calls[0].0, "ydotool", "Should use ydotool backend");
+        assert_eq!(
+            calls[0].1,
+            vec!["key", "--delay", "10", "ctrl+BackSpace"],
+            "Should pass correct ydotool args"
+        );
+    }
+
+    #[test]
+    fn test_inject_key_combo_portal_backend_without_session_errors() {
+        let recorder = RecordingExecutor::new();
+        let injector = TextInjector::new(recorder).with_backend(InjectionBackend::Portal);
+
+        let result = injector.inject_key_combo("ctrl+v");
+
+        assert!(
+            result.is_err(),
+            "Should error when portal backend selected but no session"
+        );
+        match result {
+            Err(VoicshError::InjectionFailed { message }) => {
+                #[cfg(feature = "portal")]
+                assert!(
+                    message.contains("Portal backend") && message.contains("not available"),
+                    "Error should mention portal session not available, got: {message}"
+                );
+                #[cfg(not(feature = "portal"))]
+                assert!(
+                    message.contains("Portal backend requires the portal feature"),
+                    "Error should mention portal feature required, got: {message}"
+                );
+            }
+            _ => panic!("Expected InjectionFailed error"),
+        }
     }
 }
