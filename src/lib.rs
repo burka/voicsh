@@ -27,6 +27,7 @@ pub mod inject;
 pub mod ipc;
 #[cfg(feature = "model-download")]
 pub mod models;
+pub mod output;
 pub mod pipeline;
 pub mod streaming;
 pub mod stt;

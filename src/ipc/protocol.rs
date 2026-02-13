@@ -105,6 +105,8 @@ pub enum DaemonEvent {
         level: f32,
         threshold: f32,
         is_speech: bool,
+        buffer_used: u16,
+        buffer_capacity: u16,
     },
     /// Recording state changed
     RecordingStateChanged { recording: bool },
@@ -593,6 +595,8 @@ mod tests {
             level: 0.15,
             threshold: 0.08,
             is_speech: true,
+            buffer_used: 3,
+            buffer_capacity: 8,
         };
         let json = event.to_json().expect("should serialize");
         let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
@@ -643,11 +647,15 @@ mod tests {
                 level: 0.0,
                 threshold: 0.02,
                 is_speech: false,
+                buffer_used: 0,
+                buffer_capacity: 0,
             },
             DaemonEvent::Level {
                 level: 0.5,
                 threshold: 0.1,
                 is_speech: true,
+                buffer_used: 5,
+                buffer_capacity: 10,
             },
             DaemonEvent::RecordingStateChanged { recording: false },
             DaemonEvent::RecordingStateChanged { recording: true },
@@ -694,6 +702,8 @@ mod tests {
             level: 0.123456789,
             threshold: 0.001,
             is_speech: false,
+            buffer_used: 0,
+            buffer_capacity: 0,
         };
         let json = event.to_json().expect("should serialize");
         let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
@@ -703,6 +713,8 @@ mod tests {
                 level,
                 threshold,
                 is_speech,
+                buffer_used,
+                buffer_capacity,
             } => {
                 assert!(
                     (level - 0.123456789_f32).abs() < 1e-6,
@@ -713,6 +725,8 @@ mod tests {
                     "threshold should be close"
                 );
                 assert!(!is_speech);
+                assert_eq!(buffer_used, 0);
+                assert_eq!(buffer_capacity, 0);
             }
             _ => panic!("Expected Level event"),
         }

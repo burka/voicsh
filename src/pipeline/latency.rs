@@ -207,7 +207,7 @@ impl LatencyTracker {
     pub fn print_detailed(
         &self,
         timing: &TranscriptionTiming,
-        text: &str,
+        _text: &str,
         transcription_num: usize,
     ) {
         let audio_secs = timing.audio_duration.as_secs_f64();
@@ -215,19 +215,15 @@ impl LatencyTracker {
         let transcribe = format_duration(timing.transcription_latency());
         let output = format_duration(timing.output_latency());
         eprintln!(
-            "[{}] \"{text}\" — {audio_secs:.1}s audio, {wait} wait (transcribe {transcribe} {:.1}x, output {output})",
+            "  [{}] {audio_secs:.1}s audio, {wait} wait (transcribe {transcribe} {:.1}x, output {output})",
             transcription_num,
             timing.realtime_factor(),
         );
     }
 
     /// Prints basic timing for a single transcription.
-    pub fn print_basic(&self, timing: &TranscriptionTiming, text: &str) {
-        eprintln!(
-            "\"{}\" ({} wait)",
-            text,
-            format_duration(timing.perceived_wait())
-        );
+    pub fn print_basic(&self, timing: &TranscriptionTiming, _text: &str) {
+        eprintln!("  ({} wait)", format_duration(timing.perceived_wait()));
     }
 }
 

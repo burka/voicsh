@@ -420,93 +420,17 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
 
 /// Follow daemon events and render live output.
 async fn handle_follow(socket: Option<std::path::PathBuf>) -> Result<()> {
-    use voicsh::pipeline::vad_station::format_level_bar;
-
     let socket_path = socket.unwrap_or_else(IpcServer::default_socket_path);
 
     println!("Following daemon events... (Ctrl+C to stop)");
 
     match voicsh::ipc::client::follow(&socket_path, |event| {
-        use voicsh::ipc::protocol::DaemonEvent;
-        match event {
-            DaemonEvent::Level {
-                level,
-                threshold,
-                is_speech,
-            } => {
-                let bar = format_level_bar(level, threshold);
-                let speech_indicator = if is_speech { " SPEECH" } else { "" };
-                eprint!("\r\x1b[2K{}{}", bar, speech_indicator);
-            }
-            DaemonEvent::RecordingStateChanged { recording } => {
-                eprint!("\r\x1b[2K");
-                if recording {
-                    println!("Recording started");
-                } else {
-                    println!("Recording stopped");
-                }
-            }
-            DaemonEvent::Transcription {
-                text,
-                language,
-                confidence,
-            } => {
-                eprint!("\r\x1b[2K");
-                if !language.is_empty() {
-                    println!(
-                        "{} {} {}",
-                        text,
-                        format!("[{}]", language).dimmed(),
-                        format!("{:.0}%", confidence * 100.0).dimmed()
-                    );
-                } else {
-                    println!("{}", text);
-                }
-            }
-            DaemonEvent::TranscriptionDropped {
-                text,
-                language,
-                confidence,
-                reason,
-            } => {
-                eprint!("\r\x1b[2K");
-                eprintln!(
-                    "{}",
-                    format!(
-                        "[dropped: {} | {} {:.0}%] \"{}\"",
-                        reason,
-                        language,
-                        confidence * 100.0,
-                        text
-                    )
-                    .dimmed()
-                );
-            }
-            DaemonEvent::Log { message } => {
-                eprint!("\r\x1b[2K");
-                eprintln!("[log] {}", message);
-            }
-            DaemonEvent::ConfigChanged { key, value } => {
-                eprint!("\r\x1b[2K");
-                println!("Config changed: {} = {}", key, value);
-            }
-            DaemonEvent::ModelLoading { model, progress } => {
-                eprint!("\r\x1b[2KModel {}: {}...", model, progress);
-            }
-            DaemonEvent::ModelLoaded { model } => {
-                eprint!("\r\x1b[2K");
-                println!("{}", format!("Model {} loaded", model).green());
-            }
-            DaemonEvent::ModelLoadFailed { model, error } => {
-                eprint!("\r\x1b[2K");
-                eprintln!("{}", format!("Model {} failed: {}", model, error).red());
-            }
-        }
+        voicsh::output::render_event(&event);
     })
     .await
     {
         Ok(()) => {
-            eprint!("\r\x1b[2K");
+            voicsh::output::clear_line();
             println!("Daemon connection closed");
         }
         Err(e) => {

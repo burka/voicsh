@@ -219,7 +219,7 @@ impl Pipeline {
             .with_auto_level(self.config.auto_level)
             .with_sample_rate(self.config.sample_rate);
 
-        if self.config.verbosity >= 1 {
+        if self.config.verbosity >= 1 || self.config.event_tx.is_some() {
             vad_station = vad_station.with_buffer_gauge(Box::new(move || {
                 (chunk_tx_gauge.len(), chunk_tx_gauge.capacity().unwrap_or(0))
             }));

@@ -209,7 +209,7 @@ impl SilenceDetectorStation {
     /// Clear the level display line.
     fn clear_level_display(&self) {
         if self.config.show_levels {
-            eprint!("\r{:60}\r", "");
+            crate::output::clear_line();
             let _flush = io::stderr().flush();
         }
     }

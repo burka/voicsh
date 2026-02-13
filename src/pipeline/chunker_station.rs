@@ -1,8 +1,9 @@
 //! Chunker station that segments speech into transcribable chunks.
 
 use crate::audio::vad::{Clock, SystemClock};
+use crate::output::clear_line;
 use crate::pipeline::adaptive_chunker::{AdaptiveChunker, AdaptiveChunkerConfig};
-use crate::pipeline::error::{StationError, eprintln_clear};
+use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::{AudioChunk, VadFrame};
 use std::sync::Arc;
@@ -108,10 +109,8 @@ impl ChunkerStation {
 
         // Log chunk emission if verbosity >= 2
         if self.verbosity >= 2 {
-            eprintln_clear(&format!(
-                "  [chunk: {}ms, seq {}]",
-                chunk.duration_ms, chunk.sequence
-            ));
+            clear_line();
+            eprintln!("  [chunk: {}ms, seq {}]", chunk.duration_ms, chunk.sequence);
         }
 
         // Reset timing for next chunk

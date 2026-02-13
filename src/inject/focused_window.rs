@@ -14,6 +14,7 @@ static SWAYMSG_BROKEN: AtomicBool = AtomicBool::new(false);
 static HYPRCTL_BROKEN: AtomicBool = AtomicBool::new(false);
 static GNOME_DBUS_BROKEN: AtomicBool = AtomicBool::new(false);
 static GNOME_INTROSPECT_BROKEN: AtomicBool = AtomicBool::new(false);
+static PASTE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Reset detection cache. Call when session environment may have changed
 /// (e.g. compositor restart in daemon mode).
@@ -22,6 +23,7 @@ pub fn reset_detection_cache() {
     HYPRCTL_BROKEN.store(false, Ordering::Relaxed);
     GNOME_DBUS_BROKEN.store(false, Ordering::Relaxed);
     GNOME_INTROSPECT_BROKEN.store(false, Ordering::Relaxed);
+    PASTE_LOGGED.store(false, Ordering::Relaxed);
 }
 
 /// Check if an I/O error is permanent (binary not found or permission denied).
@@ -112,7 +114,7 @@ pub fn resolve_paste_key(configured: &str, verbosity: u8) -> &str {
                 method, kind, key
             ),
         }
-    } else if verbosity >= 1 {
+    } else if verbosity >= 1 && !PASTE_LOGGED.swap(true, Ordering::Relaxed) {
         match &app_id {
             Some(id) => eprintln!("  [paste] {} → {}", id, key),
             None => eprintln!("  [paste] {} → {}", method, key),

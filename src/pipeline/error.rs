@@ -40,7 +40,7 @@ impl ErrorReporter for LogReporter {
 
 /// Print a message to stderr, clearing any active level meter line first.
 pub fn eprintln_clear(msg: &str) {
-    eprint!("\r{:60}\r", "");
+    eprint!("\r\x1b[2K");
     eprintln!("{}", msg);
 }
 

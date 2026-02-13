@@ -1,7 +1,8 @@
 use crate::config::{InjectionBackend, InjectionMethod};
 use crate::inject::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
 use crate::ipc::protocol::DaemonEvent;
-use crate::pipeline::error::{StationError, eprintln_clear};
+use crate::output::{clear_line, render_event};
+use crate::pipeline::error::StationError;
 use crate::pipeline::latency::{LatencyTracker, SessionContext, TranscriptionTiming};
 use crate::pipeline::station::Station;
 use crate::pipeline::types::{SinkEvent, TranscribedText};
@@ -133,29 +134,45 @@ impl Station for SinkStation {
 
                     if !self.quiet {
                         if self.verbosity >= 2 {
-                            // Full diagnostic breakdown
+                            // Full diagnostic breakdown - show transcription event, then detailed timing
+                            render_event(&DaemonEvent::Transcription {
+                                text: text.text.clone(),
+                                language: text.language.clone(),
+                                confidence: text.confidence,
+                            });
                             self.latency_tracker.print_detailed(
                                 &timing,
                                 &text.text,
                                 self.transcription_count,
                             );
                         } else if self.verbosity >= 1 {
-                            // Basic timing
+                            // Show transcription event, then basic timing
+                            render_event(&DaemonEvent::Transcription {
+                                text: text.text.clone(),
+                                language: text.language.clone(),
+                                confidence: text.confidence,
+                            });
                             self.latency_tracker.print_basic(&timing, &text.text);
                         }
                     }
                 } else if !self.quiet && self.verbosity == 0 {
-                    // No verbosity and no timing - just text
-                    eprintln_clear(&format!("\"{}\"", text.text));
+                    // No verbosity and no timing - just show transcription event
+                    render_event(&DaemonEvent::Transcription {
+                        text: text.text.clone(),
+                        language: text.language.clone(),
+                        confidence: text.confidence,
+                    });
                 }
                 Ok(Some(()))
             }
             Err(e) => {
                 if !self.quiet {
                     if self.verbosity >= 1 {
-                        eprintln_clear(&format!("[FAIL {}] \"{}\"", e, text.text));
+                        clear_line();
+                        eprintln!("[FAIL {}] \"{}\"", e, text.text);
                     } else {
-                        eprintln_clear(&format!("\"{}\"", text.text));
+                        clear_line();
+                        eprintln!("\"{}\"", text.text);
                     }
                 }
                 Ok(None)

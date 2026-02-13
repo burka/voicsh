@@ -1,7 +1,8 @@
 //! Transcriber station that converts audio chunks to text via Whisper.
 
 use crate::ipc::protocol::DaemonEvent;
-use crate::pipeline::error::{StationError, eprintln_clear};
+use crate::output::{clear_line, render_event};
+use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::{AudioChunk, TranscribedText};
 use crate::stt::transcriber::Transcriber;
@@ -144,7 +145,8 @@ impl Station for TranscriberStation {
 
         // Log transcription start if verbose
         if self.verbose {
-            eprintln_clear(&format!("  [transcribing {}ms...]", chunk.duration_ms));
+            clear_line();
+            eprintln!("  [transcribing {}ms...]", chunk.duration_ms);
         }
 
         let start = Instant::now();
@@ -161,9 +163,10 @@ impl Station for TranscriberStation {
             let elapsed_ms = start.elapsed().as_millis() as u32;
             if elapsed_ms > chunk_duration_ms {
                 self.warned_backpressure = true;
-                eprintln_clear(&format!(
+                clear_line();
+                eprintln!(
                     "voicsh: transcription slower than real-time ({elapsed_ms}ms for {chunk_duration_ms}ms of audio)"
-                ));
+                );
                 if cfg!(feature = "benchmark") {
                     eprintln!(
                         "  Run 'voicsh benchmark' to find the right model for your hardware."
@@ -197,7 +200,12 @@ impl Station for TranscriberStation {
                 .any(|f| f == &lower || f.trim_end_matches(['.', '!', '?', ',', ';']) == stripped)
             {
                 if self.verbose {
-                    eprintln_clear(&format!("  [dropped: hallucination] \"{}\"", cleaned_text));
+                    render_event(&DaemonEvent::TranscriptionDropped {
+                        text: cleaned_text.clone(),
+                        language: result.language.clone(),
+                        confidence: result.confidence,
+                        reason: "hallucination filter".into(),
+                    });
                 }
                 if let Some(ref tx) = self.event_tx
                     && tx
@@ -229,7 +237,12 @@ impl Station for TranscriberStation {
         {
             let reason = format!("language '{}' not in allowlist", result.language);
             if self.verbose {
-                eprintln_clear(&format!("  [dropped: {}] \"{}\"", reason, cleaned_text));
+                render_event(&DaemonEvent::TranscriptionDropped {
+                    text: cleaned_text.clone(),
+                    language: result.language.clone(),
+                    confidence: result.confidence,
+                    reason: reason.clone(),
+                });
             }
             if let Some(ref tx) = self.event_tx
                 && tx
@@ -259,7 +272,12 @@ impl Station for TranscriberStation {
                 result.confidence, min_confidence
             );
             if self.verbose {
-                eprintln_clear(&format!("  [dropped: {}] \"{}\"", reason, cleaned_text));
+                render_event(&DaemonEvent::TranscriptionDropped {
+                    text: cleaned_text.clone(),
+                    language: result.language.clone(),
+                    confidence: result.confidence,
+                    reason: reason.clone(),
+                });
             }
             if let Some(ref tx) = self.event_tx
                 && tx

@@ -2,10 +2,10 @@
 
 use crate::audio::vad::{Clock, SystemClock, Vad, VadConfig};
 use crate::ipc::protocol::DaemonEvent;
+use crate::output::render_event;
 use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::{AudioFrame, VadFrame};
-use std::io::{self, Write};
 use std::sync::Arc;
 
 /// Number of frames to wait before warning about no audio (~3 seconds at 60Hz polling).
@@ -165,18 +165,6 @@ impl VadStation {
             eprintln!();
         }
     }
-
-    /// Displays a visual level meter to stderr, with optional buffer gauge.
-    fn display_level(&self, level: f32, threshold: f32) {
-        let bar = format_level_bar(level, threshold);
-        if let Some(gauge) = &self.buffer_gauge {
-            let (len, cap) = gauge();
-            eprint!("\r{}  buf {}/{}  ", bar, len, cap);
-        } else {
-            eprint!("\r{}  ", bar);
-        }
-        io::stderr().flush().ok();
-    }
 }
 
 impl Station for VadStation {
@@ -212,16 +200,32 @@ impl Station for VadStation {
             self.adjust_threshold();
         }
 
-        // Display level meter if enabled
-        if self.show_levels {
-            self.display_level(result.level, result.threshold);
-        }
-
         // Determine if this frame contains speech
         let is_speech = matches!(
             result.event,
             crate::audio::vad::VadEvent::SpeechStart | crate::audio::vad::VadEvent::Speech
         );
+
+        // Get buffer gauge info
+        let (buf_used, buf_cap) = self
+            .buffer_gauge
+            .as_ref()
+            .map(|g| {
+                let (u, c) = g();
+                (u as u16, c as u16)
+            })
+            .unwrap_or((0, 0));
+
+        // Display level meter if enabled
+        if self.show_levels {
+            render_event(&DaemonEvent::Level {
+                level: result.level,
+                threshold: result.threshold,
+                is_speech,
+                buffer_used: buf_used,
+                buffer_capacity: buf_cap,
+            });
+        }
 
         // Emit level event for follow clients (throttled to every 4th frame ≈ 15Hz)
         if let Some(ref tx) = self.event_tx {
@@ -231,6 +235,8 @@ impl Station for VadStation {
                     level: result.level,
                     threshold: result.threshold,
                     is_speech,
+                    buffer_used: buf_used,
+                    buffer_capacity: buf_cap,
                 })
                 .ok();
             }
@@ -401,19 +407,6 @@ mod tests {
     }
 
     #[test]
-    fn test_display_level_format() {
-        let config = VadConfig::default();
-        let station = VadStation::new(config).with_show_levels(true);
-
-        // Test display at various levels
-        station.display_level(0.0, 0.02);
-        station.display_level(0.15, 0.08);
-        station.display_level(0.3, 0.05);
-
-        // Just verify it doesn't panic
-    }
-
-    #[test]
     fn test_vad_station_builder_pattern() {
         let config = VadConfig::default();
         let station = VadStation::new(config)
@@ -434,17 +427,6 @@ mod tests {
         let (len, cap) = (station.buffer_gauge.as_ref().unwrap())();
         assert_eq!(len, 3);
         assert_eq!(cap, 8);
-    }
-
-    #[test]
-    fn test_display_level_with_buffer_gauge() {
-        let config = VadConfig::default();
-        let station = VadStation::new(config)
-            .with_show_levels(true)
-            .with_buffer_gauge(Box::new(|| (2, 4)));
-
-        // Verify display with gauge doesn't panic
-        station.display_level(0.15, 0.08);
     }
 
     #[test]
