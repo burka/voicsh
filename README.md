@@ -100,6 +100,8 @@ Text injection needs **one of**:
 
 `wl-clipboard` (`wl-copy`) is required for clipboard access.
 
+> **Note:** The wtype/ydotool backends inject text by copying it to the clipboard and simulating a paste keystroke. This **overwrites your current clipboard contents**. The portal backend (GNOME 45+, KDE 6.1+) types directly and does not touch the clipboard.
+
 ```bash
 voicsh check    # verify what's available
 ```
