@@ -162,10 +162,13 @@ impl Station for TranscriberStation {
             return Ok(None);
         }
 
-        // Filter hallucinated phrases (exact match, case-insensitive)
+        // Filter hallucinated phrases (exact match, case-insensitive, punctuation-normalized)
         if !self.hallucination_filters.is_empty() {
             let lower = cleaned_text.to_lowercase();
-            if self.hallucination_filters.iter().any(|f| f == &lower) {
+            let stripped = lower.trim_end_matches(['.', '!', '?', ',', ';']);
+            if self.hallucination_filters.iter().any(|f| {
+                f == &lower || f.trim_end_matches(['.', '!', '?', ',', ';']) == stripped
+            }) {
                 return Ok(None);
             }
         }
@@ -535,6 +538,34 @@ mod tests {
         assert!(
             result.is_none(),
             "After annotation removal, remaining hallucination should be filtered"
+        );
+    }
+
+    #[test]
+    fn test_hallucination_filter_punctuation_normalized() {
+        // Filter has "thank you." but text is "Thank you" (no period)
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Thank you"));
+        let mut station = TranscriberStation::new(transcriber)
+            .with_hallucination_filters(vec!["thank you.".to_string()]);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_none(),
+            "Should match after stripping trailing punctuation from filter"
+        );
+    }
+
+    #[test]
+    fn test_hallucination_filter_exclamation_normalized() {
+        // Filter has "bye." but text is "Bye!"
+        let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Bye!"));
+        let mut station = TranscriberStation::new(transcriber)
+            .with_hallucination_filters(vec!["bye.".to_string()]);
+        let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_none(),
+            "Should match after normalizing both punctuation marks"
         );
     }
 

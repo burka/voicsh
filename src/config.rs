@@ -525,6 +525,8 @@ fn language_name(code: &str) -> &'static str {
         "ja" => "Japanese",
         "zh" => "Chinese",
         "ko" => "Korean",
+        "ar" => "Arabic",
+        "tr" => "Turkish",
         _ => "Unknown",
     }
 }
@@ -544,6 +546,14 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "Bye!".into(),
             "Goodbye.".into(),
             "you".into(),
+            "Subtitles by the Amara.org community".into(),
+            "Transcription by CastingWords".into(),
+            "Thanks for watching, please subscribe!".into(),
+            "Thank you for watching, please subscribe!".into(),
+            "I'm not sure what I'm doing here.".into(),
+            "Satsang with Mooji".into(),
+            "Closed captioning provided by the Imperial News Network".into(),
+            "For more information visit www.fema.gov".into(),
         ],
     );
     m.insert(
@@ -558,6 +568,11 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "Tschüss.".into(),
             "Tschüss!".into(),
             "Untertitel von Stephanie Geiges".into(),
+            "Untertitel im Auftrag des ZDF".into(),
+            "Untertitel im Auftrag des ZDF 2021".into(),
+            "Untertitel der Amara.org Community".into(),
+            "Copyright WDR 2021".into(),
+            "SWR 2021".into(),
         ],
     );
     m.insert(
@@ -567,7 +582,10 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "Gracias!".into(),
             "Gracias por ver.".into(),
             "Gracias por ver!".into(),
+            "Gracias por ver el video.".into(),
             "Adiós.".into(),
+            "Subtítulos por la comunidad de Amara.org".into(),
+            "Subtítulos realizados por la comunidad de Amara.org".into(),
         ],
     );
     m.insert(
@@ -579,6 +597,8 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "Merci d'avoir regardé !".into(),
             "Au revoir.".into(),
             "Sous-titrage ST' 501".into(),
+            "Sous-titres réalisés par la communauté d'Amara.org".into(),
+            "Merci d'avoir regardé cette vidéo.".into(),
         ],
     );
     m.insert(
@@ -589,7 +609,11 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "Obrigada.".into(),
             "Obrigada!".into(),
             "Tchau.".into(),
+            "Tchau!".into(),
             "Legendas pela comunidade Amara.org".into(),
+            "Legendas pela comunidade de Amara.org".into(),
+            "Legendas pela comunidade da Amara.org".into(),
+            "Obrigado por assistir.".into(),
         ],
     );
     m.insert(
@@ -601,6 +625,7 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "Grazie per aver guardato!".into(),
             "Arrivederci.".into(),
             "Sottotitoli creati dalla comunità Amara.org".into(),
+            "Sottotitoli e revisione a cura di QTSS".into(),
         ],
     );
     m.insert(
@@ -611,7 +636,11 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "Спасибо за просмотр.".into(),
             "Спасибо за просмотр!".into(),
             "До свидания.".into(),
-            "Субтитры сделал DimaTorzworworworworworworworworworworworwor".into(),
+            "Субтитры сделал DimaTorzok".into(),
+            "Субтитры создавал DimaTorzok".into(),
+            "Редактор субтитров Е.Воинова".into(),
+            "Подписывайтесь на наш канал".into(),
+            "Продолжение следует...".into(),
         ],
     );
     m.insert(
@@ -620,7 +649,11 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "ありがとうございました。".into(),
             "ありがとうございます。".into(),
             "ご視聴ありがとうございました。".into(),
+            "ご視聴ありがとうございます。".into(),
             "おやすみなさい。".into(),
+            "チャンネル登録お願いします".into(),
+            "お疲れ様でした".into(),
+            "見てくれてありがとう".into(),
         ],
     );
     m.insert(
@@ -631,6 +664,10 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "谢谢观看。".into(),
             "谢谢观看！".into(),
             "再见。".into(),
+            "感谢观看".into(),
+            "謝謝觀看".into(),
+            "由 Amara.org 社群提供的字幕".into(),
+            "字幕志愿者 杨茜茜".into(),
         ],
     );
     m.insert(
@@ -639,7 +676,53 @@ pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
             "감사합니다.".into(),
             "감사합니다!".into(),
             "시청해 주셔서 감사합니다.".into(),
+            "시청해주셔서 감사합니다.".into(),
             "안녕히 가세요.".into(),
+            "MBC 뉴스 김성현입니다".into(),
+            "MBC 뉴스 김재경입니다".into(),
+            "MBC 뉴스 이재은입니다".into(),
+            "KBS 뉴스 김성현입니다".into(),
+            "KBS 뉴스 김재경입니다".into(),
+            "SBS 뉴스 김성현입니다".into(),
+            "YTN 뉴스입니다".into(),
+            "구독해주세요".into(),
+            "구독 부탁드려요".into(),
+            "자막제작 기획 앤디 퀸즈".into(),
+        ],
+    );
+    m.insert(
+        "nl".into(),
+        vec![
+            "Bedankt voor het kijken.".into(),
+            "Ondertitels ingediend door de Amara.org gemeenschap".into(),
+            "TV Gelderland 2021".into(),
+        ],
+    );
+    m.insert(
+        "pl".into(),
+        vec![
+            "Dziękuję za oglądanie.".into(),
+            "Dzięki za oglądanie.".into(),
+            "Dzięki za uwagę.".into(),
+            "Dziękuję za uwagę.".into(),
+            "Napisy stworzone przez społeczność Amara.org".into(),
+            "Do zobaczenia w kolejnym odcinku.".into(),
+        ],
+    );
+    m.insert(
+        "ar".into(),
+        vec![
+            "شكرا على المشاهدة".into(),
+            "شكرا للمشاهدة".into(),
+            "شكرا".into(),
+        ],
+    );
+    m.insert(
+        "tr".into(),
+        vec![
+            "İzlediğiniz için teşekkür ederim.".into(),
+            "Abone ol.".into(),
+            "Bir sonraki videoda görüşürüz.".into(),
         ],
     );
     m
@@ -1431,7 +1514,9 @@ mod tests {
     #[test]
     fn test_default_hallucination_filters_has_expected_languages() {
         let defaults = default_hallucination_filters();
-        let expected_langs = ["en", "de", "es", "fr", "pt", "it", "ru", "ja", "zh", "ko"];
+        let expected_langs = [
+            "en", "de", "es", "fr", "pt", "it", "ru", "ja", "zh", "ko", "nl", "pl", "ar", "tr",
+        ];
         for lang in &expected_langs {
             assert!(
                 defaults.contains_key(*lang),
