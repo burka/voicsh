@@ -310,7 +310,7 @@ impl Station for TranscriberStation {
         let mut transcribed = TranscribedText::with_timing(cleaned_text, chunk.timing);
         transcribed.language = result.language;
         transcribed.confidence = result.confidence;
-        transcribed.word_probabilities = result.word_probabilities;
+        transcribed.token_probabilities = result.token_probabilities;
         Ok(Some(transcribed))
     }
 }

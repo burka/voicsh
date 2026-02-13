@@ -118,7 +118,7 @@ pub enum DaemonEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         wait_ms: Option<u32>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        word_probabilities: Vec<crate::stt::transcriber::WordProbability>,
+        token_probabilities: Vec<crate::stt::transcriber::TokenProbability>,
     },
     /// Transcription dropped by language/confidence filter
     TranscriptionDropped {
@@ -626,7 +626,7 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
-            word_probabilities: vec![],
+            token_probabilities: vec![],
         };
         let json = event.to_json().expect("should serialize");
         let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
@@ -670,14 +670,14 @@ mod tests {
                 language: "en".to_string(),
                 confidence: 1.0,
                 wait_ms: None,
-                word_probabilities: vec![],
+                token_probabilities: vec![],
             },
             DaemonEvent::Transcription {
                 text: "Hello 👋 World".to_string(),
                 language: "de".to_string(),
                 confidence: 0.85,
                 wait_ms: Some(300),
-                word_probabilities: vec![],
+                token_probabilities: vec![],
             },
             DaemonEvent::TranscriptionDropped {
                 text: "test".to_string(),

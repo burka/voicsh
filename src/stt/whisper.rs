@@ -13,7 +13,7 @@
 
 use crate::defaults;
 use crate::error::{Result, VoicshError};
-use crate::stt::transcriber::{Transcriber, TranscriptionResult, WordProbability};
+use crate::stt::transcriber::{TokenProbability, Transcriber, TranscriptionResult};
 use std::path::PathBuf;
 
 #[cfg(feature = "whisper")]
@@ -262,7 +262,7 @@ impl Transcriber for WhisperTranscriber {
         let mut transcription = String::new();
         let mut prob_sum = 0.0_f64;
         let mut token_count = 0u32;
-        let mut word_groups: Vec<(String, Vec<f32>)> = Vec::new(); // (word_text, token_probs)
+        let mut token_probs: Vec<TokenProbability> = Vec::new();
 
         for segment in state.as_iter() {
             if let Ok(text) = segment.to_str_lossy() {
@@ -274,7 +274,7 @@ impl Transcriber for WhisperTranscriber {
                     prob_sum += prob as f64;
                     token_count += 1;
 
-                    // Build word-level probabilities from token text
+                    // Build per-token probability data
                     let token_text = match token.to_str_lossy() {
                         Ok(t) => t.into_owned(),
                         Err(_) => continue,
@@ -286,13 +286,10 @@ impl Transcriber for WhisperTranscriber {
                     {
                         continue;
                     }
-                    // New word if starts with space, or first word
-                    if token_text.starts_with(' ') || word_groups.is_empty() {
-                        word_groups.push((token_text.trim_start().to_string(), vec![prob]));
-                    } else if let Some(last) = word_groups.last_mut() {
-                        last.0.push_str(&token_text);
-                        last.1.push(prob);
-                    }
+                    token_probs.push(TokenProbability {
+                        token: token_text,
+                        probability: prob,
+                    });
                 }
             }
         }
@@ -303,23 +300,13 @@ impl Transcriber for WhisperTranscriber {
             0.0
         };
 
-        let word_probabilities: Vec<WordProbability> = word_groups
-            .into_iter()
-            .filter(|(w, _)| !w.is_empty())
-            .map(|(word, probs)| {
-                let avg = probs.iter().sum::<f32>() / probs.len() as f32;
-                WordProbability {
-                    word,
-                    probability: avg,
-                }
-            })
-            .collect();
+        let token_probabilities = token_probs;
 
         Ok(TranscriptionResult {
             text: transcription.trim().to_string(),
             language,
             confidence,
-            word_probabilities,
+            token_probabilities,
         })
     }
 

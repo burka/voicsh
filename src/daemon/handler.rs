@@ -180,7 +180,7 @@ impl DaemonCommandHandler {
                     language: String::new(),
                     confidence: 1.0,
                     wait_ms: None,
-                    word_probabilities: vec![],
+                    token_probabilities: vec![],
                 });
                 Response::Transcription { text }
             } else {
@@ -707,7 +707,7 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
-            word_probabilities: vec![],
+            token_probabilities: vec![],
         });
 
         // Should receive the event
@@ -1069,7 +1069,7 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
-            word_probabilities: vec![],
+            token_probabilities: vec![],
         });
 
         // Should receive

@@ -49,7 +49,7 @@ pub fn render_event(event: &DaemonEvent) {
             language,
             confidence,
             wait_ms,
-            word_probabilities,
+            token_probabilities,
         } => {
             clear_line();
             let lang = if !language.is_empty() && *confidence < 0.99 {
@@ -63,21 +63,20 @@ pub fn render_event(event: &DaemonEvent) {
                 .map(|ms| format!(" {DIM}({ms}ms){RESET}"))
                 .unwrap_or_default();
 
-            if word_probabilities.is_empty() {
-                // Fallback: plain text (no word-level data)
+            if token_probabilities.is_empty() {
+                // Fallback: plain text (no token-level data)
                 eprintln!("{text}{lang}{wait}");
             } else {
-                // Render each word colored by probability
-                for (i, wp) in word_probabilities.iter().enumerate() {
-                    if i > 0 {
-                        eprint!(" ");
-                    }
-                    if wp.probability >= 0.8 {
-                        eprint!("{}", wp.word);
-                    } else if wp.probability >= 0.5 {
-                        eprint!("{YELLOW}{}{RESET}", wp.word);
+                // Render each token colored by probability (tokens contain leading spaces)
+                for tp in token_probabilities.iter() {
+                    if tp.probability >= 0.9 {
+                        eprint!("{GREEN}{}{RESET}", tp.token);
+                    } else if tp.probability >= 0.7 {
+                        eprint!("{}", tp.token);
+                    } else if tp.probability >= 0.5 {
+                        eprint!("{YELLOW}{}{RESET}", tp.token);
                     } else {
-                        eprint!("{RED}{}{RESET}", wp.word);
+                        eprint!("{RED}{}{RESET}", tp.token);
                     }
                 }
                 eprintln!("{lang}{wait}");
@@ -143,7 +142,7 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
-            word_probabilities: vec![],
+            token_probabilities: vec![],
         });
 
         render_event(&DaemonEvent::TranscriptionDropped {
@@ -201,29 +200,29 @@ mod tests {
             language: String::new(),
             confidence: 0.9,
             wait_ms: None,
-            word_probabilities: vec![],
+            token_probabilities: vec![],
         });
     }
 
     #[test]
-    fn test_render_transcription_with_word_probabilities() {
-        use crate::stt::transcriber::WordProbability;
+    fn test_render_transcription_with_token_probabilities() {
+        use crate::stt::transcriber::TokenProbability;
         render_event(&DaemonEvent::Transcription {
             text: "high medium low".to_string(),
             language: "en".to_string(),
             confidence: 0.7,
             wait_ms: Some(250),
-            word_probabilities: vec![
-                WordProbability {
-                    word: "high".to_string(),
+            token_probabilities: vec![
+                TokenProbability {
+                    token: " high".to_string(),
                     probability: 0.95,
                 },
-                WordProbability {
-                    word: "medium".to_string(),
+                TokenProbability {
+                    token: " medium".to_string(),
                     probability: 0.65,
                 },
-                WordProbability {
-                    word: "low".to_string(),
+                TokenProbability {
+                    token: " low".to_string(),
                     probability: 0.35,
                 },
             ],

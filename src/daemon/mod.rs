@@ -598,7 +598,7 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
-            word_probabilities: vec![],
+            token_probabilities: vec![],
         };
         let event3 = DaemonEvent::RecordingStateChanged { recording: false };
 

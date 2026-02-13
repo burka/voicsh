@@ -3,10 +3,10 @@ use crate::error::{Result, VoicshError};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Per-word probability information from transcription.
+/// Per-token probability information from transcription.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct WordProbability {
-    pub word: String,
+pub struct TokenProbability {
+    pub token: String,
     pub probability: f32,
 }
 
@@ -19,8 +19,8 @@ pub struct TranscriptionResult {
     pub language: String,
     /// Confidence score in 0.0..1.0, derived from segment probabilities.
     pub confidence: f32,
-    /// Per-word probability scores (empty if not available).
-    pub word_probabilities: Vec<WordProbability>,
+    /// Per-token probability scores (empty if not available).
+    pub token_probabilities: Vec<TokenProbability>,
 }
 
 impl TranscriptionResult {
@@ -30,7 +30,7 @@ impl TranscriptionResult {
             text,
             language: String::new(),
             confidence: 1.0,
-            word_probabilities: Vec::new(),
+            token_probabilities: Vec::new(),
         }
     }
 }
@@ -155,7 +155,7 @@ impl Transcriber for MockTranscriber {
                 text: self.response.clone(),
                 language: self.language.clone(),
                 confidence: self.confidence,
-                word_probabilities: Vec::new(),
+                token_probabilities: Vec::new(),
             })
         }
     }
@@ -327,41 +327,41 @@ mod tests {
     }
 
     #[test]
-    fn test_word_probability_construction() {
-        let wp = WordProbability {
-            word: "hello".to_string(),
+    fn test_token_probability_construction() {
+        let tp = TokenProbability {
+            token: "hello".to_string(),
             probability: 0.95,
         };
-        assert_eq!(wp.word, "hello");
-        assert_eq!(wp.probability, 0.95);
+        assert_eq!(tp.token, "hello");
+        assert_eq!(tp.probability, 0.95);
     }
 
     #[test]
-    fn test_word_probability_clone() {
-        let wp = WordProbability {
-            word: "test".to_string(),
+    fn test_token_probability_clone() {
+        let tp = TokenProbability {
+            token: "test".to_string(),
             probability: 0.75,
         };
-        let cloned = wp.clone();
-        assert_eq!(wp.word, cloned.word);
-        assert_eq!(wp.probability, cloned.probability);
+        let cloned = tp.clone();
+        assert_eq!(tp.token, cloned.token);
+        assert_eq!(tp.probability, cloned.probability);
     }
 
     #[test]
-    fn test_word_probability_debug() {
-        let wp = WordProbability {
-            word: "debug".to_string(),
+    fn test_token_probability_debug() {
+        let tp = TokenProbability {
+            token: "debug".to_string(),
             probability: 0.85,
         };
-        let debug_str = format!("{:?}", wp);
-        assert!(debug_str.contains("WordProbability"));
+        let debug_str = format!("{:?}", tp);
+        assert!(debug_str.contains("TokenProbability"));
         assert!(debug_str.contains("debug"));
         assert!(debug_str.contains("0.85"));
     }
 
     #[test]
-    fn test_transcription_result_empty_word_probabilities() {
+    fn test_transcription_result_empty_token_probabilities() {
         let result = TranscriptionResult::from_text("test".to_string());
-        assert!(result.word_probabilities.is_empty());
+        assert!(result.token_probabilities.is_empty());
     }
 }
