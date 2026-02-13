@@ -38,6 +38,8 @@ Spoken punctuation, formatting, and keyboard control.
 - [x] Rule-based (no LLM needed)
 - [x] Multi-language: en, de, es, fr, pt, it, nl, pl, ru, ja, zh, ko
 - [x] GNOME Shell extension: install, toggle, status indicator (`voicsh install-gnome-extension`)
+- [x] Language allowlist: filter transcriptions by allowed languages + confidence threshold
+- [x] GNOME extension: "Open Debug Log" menu item (launches `voicsh follow` in terminal)
 - [ ] Voice commands working reliably end-to-end
 - [ ] GNOME Shell extension: model switcher, language picker
 
@@ -65,9 +67,19 @@ Container-based testing for GPU backends and GNOME integration.
   - Screenshots via D-Bus `org.gnome.Shell.Screenshot`
 - CI workflow for all of the above on GitHub Actions (standard runners, no GPU/KVM needed)
 
+## 0.4.0 — Overlay and sentence refinement
+
+Wayland overlay that collects dictated fragments, refines them with an LLM into complete sentences, then injects the polished result.
+
+- Wayland layer-shell overlay: recording indicator + live transcription display
+- Sentence collector: buffer dictated chunks in the overlay instead of injecting immediately
+- LLM sentence stitcher: when a sentence is complete (detected by LLM), refine and inject
+  - Context-aware: knows the previous sentence for coherent flow
+  - Uses local LLM (Ollama / llama.cpp) or cloud (Anthropic, OpenAI)
+  - Timeout + fallback to raw transcription if LLM is unavailable
+
 ## Future
 
-- Overlay feedback (Wayland layer-shell recording indicator)
 - Streaming word-by-word display
 - Push-to-talk (hold hotkey)
 - X11 support (xdotool/xsel)
