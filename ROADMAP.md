@@ -24,7 +24,7 @@ Default command, pipe mode, GPU, daemon mode.
 - [x] Hallucination filtering (configurable, language-specific)
 - [x] Fan-out mode — run English + multilingual models in parallel, pick best
 
-## 0.1.0 — Voice commands (done)
+## 0.1.0 — Voice commands (in progress)
 
 Spoken punctuation, formatting, and keyboard control.
 
@@ -37,7 +37,9 @@ Spoken punctuation, formatting, and keyboard control.
 - [x] Configurable vocabulary in config.toml (user overrides merge with built-ins)
 - [x] Rule-based (no LLM needed)
 - [x] Multi-language: en, de, es, fr, pt, it, nl, pl, ru, ja, zh, ko
-- [x] GNOME Shell extension (`voicsh install-gnome-extension`)
+- [x] GNOME Shell extension: install, toggle, status indicator (`voicsh install-gnome-extension`)
+- [ ] Voice commands working reliably end-to-end
+- [ ] GNOME Shell extension: model switcher, language picker
 
 ## 0.2.0 — Text refinement
 
