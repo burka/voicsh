@@ -17,6 +17,8 @@ pub struct ModelInfo {
     pub sha1: &'static str,
     /// Whether this model supports English only
     pub english_only: bool,
+    /// Whether this is a quantized model
+    pub quantized: bool,
 }
 
 impl ModelInfo {
@@ -36,77 +38,233 @@ impl ModelInfo {
 /// Models range from tiny (75 MB, fast, lower accuracy) to large (3094 MB, slower, highest accuracy).
 /// The `.en` suffix indicates English-only models, which are faster and smaller.
 pub const MODELS: &[ModelInfo] = &[
+    // Standard models
     ModelInfo {
         name: "tiny.en",
         size_mb: 75,
         sha1: "c78c86eb1a8faa21b369bcd33207cc90d64ae9df",
         english_only: true,
+        quantized: false,
     },
     ModelInfo {
         name: "tiny",
         size_mb: 75,
         sha1: "bd577a113a864445d4c299885e0cb97d4ba92b5f",
         english_only: false,
+        quantized: false,
     },
     ModelInfo {
         name: "base.en",
         size_mb: 142,
         sha1: "137c40403d78fd54d454da0f9bd998f78703390c",
         english_only: true,
+        quantized: false,
     },
     ModelInfo {
         name: "base",
         size_mb: 142,
         sha1: "465707469ff3a37a2b9b8d8f89f2f99de7299dac",
         english_only: false,
+        quantized: false,
     },
     ModelInfo {
         name: "small.en",
         size_mb: 466,
         sha1: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022",
         english_only: true,
+        quantized: false,
     },
     ModelInfo {
         name: "small",
         size_mb: 466,
         sha1: "55356645c2b361a969dfd0ef2c5a50d530afd8d5",
         english_only: false,
+        quantized: false,
     },
     ModelInfo {
         name: "medium.en",
         size_mb: 1533,
         sha1: "8c30f0e44ce9560643ebd10bbe50cd20eafd3723",
         english_only: true,
+        quantized: false,
     },
     ModelInfo {
         name: "medium",
         size_mb: 1533,
         sha1: "fd9727b6e1217c2f614f9b698455c4ffd82463b4",
         english_only: false,
+        quantized: false,
     },
     ModelInfo {
         name: "large-v3-turbo",
         size_mb: 1620,
         sha1: "",
         english_only: false,
+        quantized: false,
     },
     ModelInfo {
         name: "large-v1",
         size_mb: 3094,
         sha1: "",
         english_only: false,
+        quantized: false,
     },
     ModelInfo {
         name: "large-v2",
         size_mb: 3094,
         sha1: "",
         english_only: false,
+        quantized: false,
     },
     ModelInfo {
         name: "large-v3",
         size_mb: 3095,
         sha1: "",
         english_only: false,
+        quantized: false,
+    },
+    // Quantized models - Q5_1
+    ModelInfo {
+        name: "tiny-q5_1",
+        size_mb: 32,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "tiny.en-q5_1",
+        size_mb: 32,
+        sha1: "",
+        english_only: true,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "base-q5_1",
+        size_mb: 59,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "base.en-q5_1",
+        size_mb: 59,
+        sha1: "",
+        english_only: true,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "small-q5_1",
+        size_mb: 190,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "small.en-q5_1",
+        size_mb: 190,
+        sha1: "",
+        english_only: true,
+        quantized: true,
+    },
+    // Quantized models - Q5_0
+    ModelInfo {
+        name: "medium-q5_0",
+        size_mb: 539,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "medium.en-q5_0",
+        size_mb: 539,
+        sha1: "",
+        english_only: true,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "large-v2-q5_0",
+        size_mb: 1080,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "large-v3-q5_0",
+        size_mb: 1080,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    // Quantized models - Q8_0
+    ModelInfo {
+        name: "tiny-q8_0",
+        size_mb: 43,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "tiny.en-q8_0",
+        size_mb: 43,
+        sha1: "",
+        english_only: true,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "base-q8_0",
+        size_mb: 81,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "base.en-q8_0",
+        size_mb: 81,
+        sha1: "",
+        english_only: true,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "small-q8_0",
+        size_mb: 264,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "small.en-q8_0",
+        size_mb: 264,
+        sha1: "",
+        english_only: true,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "medium-q8_0",
+        size_mb: 823,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "medium.en-q8_0",
+        size_mb: 823,
+        sha1: "",
+        english_only: true,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "large-v2-q8_0",
+        size_mb: 1660,
+        sha1: "",
+        english_only: false,
+        quantized: true,
+    },
+    ModelInfo {
+        name: "large-v3-turbo-q8_0",
+        size_mb: 874,
+        sha1: "",
+        english_only: false,
+        quantized: true,
     },
 ];
 
@@ -233,7 +391,7 @@ mod tests {
     fn test_list_models_not_empty() {
         let models = list_models();
         assert!(!models.is_empty());
-        assert_eq!(models.len(), 12);
+        assert_eq!(models.len(), 32);
     }
 
     #[test]
@@ -286,8 +444,8 @@ mod tests {
         for model in list_models() {
             if model.english_only {
                 assert!(
-                    model.name.ends_with(".en"),
-                    "English-only model {} should have .en suffix",
+                    model.name.contains(".en"),
+                    "English-only model {} should contain .en in name",
                     model.name
                 );
             }
@@ -309,6 +467,27 @@ mod tests {
             ("large-v1", 3094),
             ("large-v2", 3094),
             ("large-v3", 3095),
+            // Quantized models
+            ("tiny-q5_1", 32),
+            ("tiny.en-q5_1", 32),
+            ("base-q5_1", 59),
+            ("base.en-q5_1", 59),
+            ("small-q5_1", 190),
+            ("small.en-q5_1", 190),
+            ("medium-q5_0", 539),
+            ("medium.en-q5_0", 539),
+            ("large-v2-q5_0", 1080),
+            ("large-v3-q5_0", 1080),
+            ("tiny-q8_0", 43),
+            ("tiny.en-q8_0", 43),
+            ("base-q8_0", 81),
+            ("base.en-q8_0", 81),
+            ("small-q8_0", 264),
+            ("small.en-q8_0", 264),
+            ("medium-q8_0", 823),
+            ("medium.en-q8_0", 823),
+            ("large-v2-q8_0", 1660),
+            ("large-v3-turbo-q8_0", 874),
         ];
 
         for (name, expected_size) in sizes {
@@ -403,6 +582,32 @@ mod tests {
                 "Model {} URL should be derived from name",
                 model.name
             );
+        }
+    }
+
+    #[test]
+    fn test_quantized_models_are_flagged() {
+        for model in list_models() {
+            if model.name.contains("q5") || model.name.contains("q8") {
+                assert!(
+                    model.quantized,
+                    "Model {} contains q5/q8 but quantized=false",
+                    model.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_standard_models_not_quantized() {
+        for model in list_models() {
+            if !model.name.contains("q5") && !model.name.contains("q8") {
+                assert!(
+                    !model.quantized,
+                    "Model {} does not contain q but quantized=true",
+                    model.name
+                );
+            }
         }
     }
 }

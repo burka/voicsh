@@ -35,6 +35,12 @@ pub struct SttConfig {
     pub model: String,
     pub language: String,
     pub fan_out: bool,
+    /// Language allowlist for auto-detect mode. Empty = accept all.
+    /// When non-empty, only transcriptions in these languages are accepted.
+    pub allowed_languages: Vec<String>,
+    /// Minimum confidence threshold. Transcriptions below this are dropped.
+    /// 0.0 = accept all (default).
+    pub min_confidence: f32,
 }
 
 /// Injection configuration
@@ -145,6 +151,8 @@ impl Default for SttConfig {
             model: defaults::DEFAULT_MODEL.to_string(),
             language: defaults::DEFAULT_LANGUAGE.to_string(),
             fan_out: false,
+            allowed_languages: Vec::new(),
+            min_confidence: 0.0,
         }
     }
 }
@@ -438,6 +446,12 @@ impl Config {
             defaults::DEFAULT_LANGUAGE
         ));
         out.push_str("# fan_out = false  # Run multilingual + English models in parallel\n");
+        out.push_str(
+            "# allowed_languages = [\"en\", \"de\"]  # Only accept these languages (empty = all)\n",
+        );
+        out.push_str(
+            "# min_confidence = 0.0  # Minimum confidence threshold (0.0-1.0, 0 = accept all)\n",
+        );
         out.push('\n');
 
         out.push_str("[injection]\n");
@@ -1441,6 +1455,8 @@ mod tests {
                 model: "small".to_string(),
                 language: "de".to_string(),
                 fan_out: false,
+                allowed_languages: Vec::new(),
+                min_confidence: 0.0,
             },
             ..Config::default()
         };
@@ -1463,6 +1479,8 @@ mod tests {
                 model: "tiny".to_string(),
                 language: "fr".to_string(),
                 fan_out: true,
+                allowed_languages: Vec::new(),
+                min_confidence: 0.0,
             },
             audio: AudioConfig {
                 vad_threshold: 0.05,
@@ -1933,5 +1951,33 @@ mod tests {
             !toml_str.contains("backend = \"Portal\""),
             "Backend should not serialize as capitalized"
         );
+    }
+
+    #[test]
+    fn test_stt_config_with_allowed_languages() {
+        let toml_content = r#"
+            [stt]
+            model = "base"
+            language = "auto"
+            allowed_languages = ["en", "de"]
+            min_confidence = 0.5
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert_eq!(
+            config.stt.allowed_languages,
+            vec!["en".to_string(), "de".to_string()]
+        );
+        assert_eq!(config.stt.min_confidence, 0.5);
+    }
+
+    #[test]
+    fn test_stt_config_allowed_languages_default_empty() {
+        let config = Config::default();
+        assert!(config.stt.allowed_languages.is_empty());
+        assert_eq!(config.stt.min_confidence, 0.0);
     }
 }

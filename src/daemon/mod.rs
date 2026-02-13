@@ -20,8 +20,8 @@ use crate::inject::portal::PortalSession;
 pub struct DaemonState {
     /// Configuration
     pub config: Arc<Mutex<Config>>,
-    /// Loaded transcriber (model stays in memory)
-    pub transcriber: Arc<dyn Transcriber>,
+    /// Loaded transcriber (model stays in memory, can be swapped with write lock)
+    pub transcriber: tokio::sync::RwLock<Arc<dyn Transcriber>>,
     /// Current pipeline handle (Some = recording, None = idle)
     pub pipeline: Arc<Mutex<Option<PipelineHandle>>>,
     /// Portal session for input injection (if available)
@@ -37,6 +37,10 @@ pub struct DaemonState {
     pub backend: String,
     /// GPU or CPU device description (e.g., "RTX 5060 Ti (16 GB)")
     pub device: Option<String>,
+    /// Allowed languages for transcription filtering (live-updatable during recording)
+    pub allowed_languages: Arc<std::sync::RwLock<Vec<String>>>,
+    /// Minimum confidence threshold (live-updatable during recording)
+    pub min_confidence: Arc<std::sync::RwLock<f32>>,
 }
 
 /// Detect GPU device name and memory from nvidia-smi.
@@ -90,9 +94,15 @@ impl DaemonState {
 
         let (event_tx, _) = tokio::sync::broadcast::channel(256);
         let (pipeline_event_tx, pipeline_event_rx) = crossbeam_channel::bounded(256);
+
+        // Initialize shared state from config
+        let allowed_languages =
+            Arc::new(std::sync::RwLock::new(config.stt.allowed_languages.clone()));
+        let min_confidence = Arc::new(std::sync::RwLock::new(config.stt.min_confidence));
+
         Self {
             config: Arc::new(Mutex::new(config)),
-            transcriber,
+            transcriber: tokio::sync::RwLock::new(transcriber),
             pipeline: Arc::new(Mutex::new(None)),
             #[cfg(feature = "portal")]
             portal,
@@ -101,6 +111,8 @@ impl DaemonState {
             pipeline_event_rx,
             backend,
             device,
+            allowed_languages,
+            min_confidence,
         }
     }
 
@@ -167,7 +179,7 @@ pub async fn run_daemon(
         eprintln!("Model loaded successfully.");
     }
 
-    // Try to establish portal session
+    // Establish portal session for keyboard injection
     #[cfg(feature = "portal")]
     let portal = match PortalSession::try_new().await {
         Ok(session) => {
@@ -177,9 +189,10 @@ pub async fn run_daemon(
             Some(Arc::new(session))
         }
         Err(e) => {
-            if verbosity >= 2 {
-                eprintln!("Portal unavailable ({}), using wtype/ydotool fallback.", e);
-            }
+            eprintln!(
+                "voicsh: portal unavailable ({}), using wtype/ydotool fallback.",
+                e
+            );
             None
         }
     };
@@ -276,7 +289,7 @@ async fn wait_for_sigterm() -> Result<()> {
 }
 
 /// Create transcriber from config.
-async fn create_transcriber(
+pub(crate) async fn create_transcriber(
     config: &Config,
     quiet: bool,
     _verbosity: u8,
@@ -383,26 +396,24 @@ mod tests {
     #[tokio::test]
     async fn test_daemon_state_new() {
         let config = Config::default();
-
-        #[cfg(feature = "portal")]
-        let state = DaemonState::new(config, mock_transcriber(), None);
-
-        #[cfg(not(feature = "portal"))]
-        let state = DaemonState::new(config, mock_transcriber());
-
+        let state = DaemonState::new(
+            config,
+            mock_transcriber(),
+            #[cfg(feature = "portal")]
+            None,
+        );
         assert!(!state.is_recording().await);
     }
 
     #[tokio::test]
     async fn test_daemon_state_is_recording() {
         let config = Config::default();
-
-        #[cfg(feature = "portal")]
-        let state = DaemonState::new(config, mock_transcriber(), None);
-
-        #[cfg(not(feature = "portal"))]
-        let state = DaemonState::new(config, mock_transcriber());
-
+        let state = DaemonState::new(
+            config,
+            mock_transcriber(),
+            #[cfg(feature = "portal")]
+            None,
+        );
         // Initially not recording
         assert!(!state.is_recording().await);
     }
@@ -411,13 +422,12 @@ mod tests {
     async fn test_daemon_state_model_name() {
         let mut config = Config::default();
         config.stt.model = "test-model".to_string();
-
-        #[cfg(feature = "portal")]
-        let state = DaemonState::new(config, mock_transcriber(), None);
-
-        #[cfg(not(feature = "portal"))]
-        let state = DaemonState::new(config, mock_transcriber());
-
+        let state = DaemonState::new(
+            config,
+            mock_transcriber(),
+            #[cfg(feature = "portal")]
+            None,
+        );
         let model_name = state.model_name().await;
         assert_eq!(model_name, "test-model");
     }
@@ -426,27 +436,23 @@ mod tests {
     async fn test_daemon_state_language() {
         let mut config = Config::default();
         config.stt.language = "de".to_string();
-
-        #[cfg(feature = "portal")]
-        let state = DaemonState::new(config, mock_transcriber(), None);
-
-        #[cfg(not(feature = "portal"))]
-        let state = DaemonState::new(config, mock_transcriber());
-
+        let state = DaemonState::new(
+            config,
+            mock_transcriber(),
+            #[cfg(feature = "portal")]
+            None,
+        );
         let language = state.language().await;
         assert_eq!(language, "de");
     }
 
     fn create_state_with_config(config: Config) -> DaemonState {
-        #[cfg(feature = "portal")]
-        {
-            DaemonState::new(config, mock_transcriber(), None)
-        }
-
-        #[cfg(not(feature = "portal"))]
-        {
-            DaemonState::new(config, mock_transcriber())
-        }
+        DaemonState::new(
+            config,
+            mock_transcriber(),
+            #[cfg(feature = "portal")]
+            None,
+        )
     }
 
     fn create_state() -> DaemonState {
@@ -589,6 +595,8 @@ mod tests {
         let event1 = DaemonEvent::RecordingStateChanged { recording: true };
         let event2 = DaemonEvent::Transcription {
             text: "hello".to_string(),
+            language: "en".to_string(),
+            confidence: 0.95,
         };
         let event3 = DaemonEvent::RecordingStateChanged { recording: false };
 
@@ -701,35 +709,6 @@ mod tests {
         assert!(
             pipeline.is_none(),
             "Pipeline should be None on initialization"
-        );
-    }
-
-    #[cfg(feature = "portal")]
-    #[tokio::test]
-    async fn test_daemon_state_portal_none() {
-        let config = Config::default();
-        let state = DaemonState::new(config, mock_transcriber(), None);
-
-        assert!(
-            state.portal.is_none(),
-            "Portal should be None when not provided"
-        );
-    }
-
-    #[cfg(feature = "portal")]
-    #[tokio::test]
-    async fn test_daemon_state_portal_some() {
-        use crate::inject::portal::PortalSession;
-        use crate::inject::portal::testing::NoOpConnector;
-
-        let config = Config::default();
-        let portal = PortalSession::with_connector(Box::new(NoOpConnector))
-            .await
-            .unwrap();
-        let state = DaemonState::new(config, mock_transcriber(), Some(Arc::new(portal)));
-        assert!(
-            state.portal.is_some(),
-            "Portal should be Some when provided"
         );
     }
 

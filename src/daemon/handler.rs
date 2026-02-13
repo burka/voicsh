@@ -61,6 +61,10 @@ impl DaemonCommandHandler {
         let pipeline_config = self.build_pipeline_config(&config);
 
         // Create sink
+        #[cfg(feature = "portal")]
+        let sink = self.create_sink(&config, self.state.portal.clone());
+
+        #[cfg(not(feature = "portal"))]
         let sink = self.create_sink(&config);
 
         // Build post-processors
@@ -70,7 +74,7 @@ impl DaemonCommandHandler {
         reset_detection_cache();
 
         // Start pipeline
-        let transcriber = Arc::clone(&self.state.transcriber);
+        let transcriber = self.state.transcriber.read().await.clone();
         let pipeline = Pipeline::new(pipeline_config);
 
         match pipeline.start_with_post_processors(audio_source, transcriber, sink, post_processors)
@@ -126,32 +130,37 @@ impl DaemonCommandHandler {
             sample_rate: WHISPER_SAMPLE_RATE,
             hallucination_filters,
             event_tx: Some(self.state.pipeline_event_tx.clone()),
+            allowed_languages: self.state.allowed_languages.clone(),
+            min_confidence: self.state.min_confidence.clone(),
             ..Default::default()
         }
     }
 
     /// Create sink with portal support based on config.
-    fn create_sink(&self, config: &Config) -> Box<dyn crate::pipeline::sink::TextSink> {
-        #[cfg(feature = "portal")]
-        {
-            Box::new(InjectorSink::with_portal(
-                config.injection.method.clone(),
-                config.injection.paste_key.clone(),
-                self.verbosity,
-                self.state.portal.clone(),
-                config.injection.backend.clone(),
-            ))
-        }
+    #[cfg(feature = "portal")]
+    fn create_sink(
+        &self,
+        config: &Config,
+        portal: Option<Arc<crate::inject::portal::PortalSession>>,
+    ) -> Box<dyn crate::pipeline::sink::TextSink> {
+        Box::new(InjectorSink::with_portal(
+            config.injection.method.clone(),
+            config.injection.paste_key.clone(),
+            self.verbosity,
+            portal,
+            config.injection.backend.clone(),
+        ))
+    }
 
-        #[cfg(not(feature = "portal"))]
-        {
-            Box::new(InjectorSink::system(
-                config.injection.method.clone(),
-                config.injection.paste_key.clone(),
-                self.verbosity,
-                config.injection.backend.clone(),
-            ))
-        }
+    /// Create sink without portal support.
+    #[cfg(not(feature = "portal"))]
+    fn create_sink(&self, config: &Config) -> Box<dyn crate::pipeline::sink::TextSink> {
+        Box::new(InjectorSink::system(
+            config.injection.method.clone(),
+            config.injection.paste_key.clone(),
+            self.verbosity,
+            config.injection.backend.clone(),
+        ))
     }
 
     /// Stop recording and return transcription.
@@ -166,8 +175,11 @@ impl DaemonCommandHandler {
             self.state
                 .emit(DaemonEvent::RecordingStateChanged { recording: false });
             if let Some(text) = result {
-                self.state
-                    .emit(DaemonEvent::Transcription { text: text.clone() });
+                self.state.emit(DaemonEvent::Transcription {
+                    text: text.clone(),
+                    language: String::new(),
+                    confidence: 1.0,
+                });
                 Response::Transcription { text }
             } else {
                 Response::Ok {
@@ -226,6 +238,177 @@ impl DaemonCommandHandler {
             device: self.state.device.clone(),
         }
     }
+
+    /// Handle set language command.
+    async fn handle_set_language(&self, language: String) -> Response {
+        // Validate language
+        use crate::pipeline::post_processor::SUPPORTED_LANGUAGES;
+        if language != "auto" && !SUPPORTED_LANGUAGES.contains(&language.as_str()) {
+            return Response::Error {
+                message: format!(
+                    "Unsupported language '{}'. Supported: auto, {}",
+                    language,
+                    SUPPORTED_LANGUAGES.join(", ")
+                ),
+            };
+        }
+
+        // Compute new allowed_languages list
+        let new_langs = if language == "auto" {
+            Vec::new()
+        } else {
+            vec![language.clone()]
+        };
+
+        // Update config (for persistence and next recording)
+        let mut config = self.state.config.lock().await;
+        config.stt.language = language.clone();
+        config.stt.allowed_languages = new_langs.clone();
+        drop(config);
+
+        // Update shared Arc (for live pipeline if recording)
+        // RwLock poisoning is rare and unrecoverable; if it happens we want to fail loudly.
+        #[allow(clippy::expect_used)]
+        {
+            *self
+                .state
+                .allowed_languages
+                .write()
+                .expect("allowed_languages RwLock poisoned") = new_langs;
+        }
+
+        // Emit event
+        self.state.emit(DaemonEvent::ConfigChanged {
+            key: "language".to_string(),
+            value: language,
+        });
+
+        Response::Ok {
+            message: "Language updated".to_string(),
+        }
+    }
+
+    /// Handle list languages command.
+    async fn handle_list_languages(&self) -> Response {
+        use crate::pipeline::post_processor::SUPPORTED_LANGUAGES;
+
+        let current = self.state.language().await;
+        let mut languages = vec!["auto".to_string()];
+        languages.extend(SUPPORTED_LANGUAGES.iter().map(|s| s.to_string()));
+
+        Response::Languages { languages, current }
+    }
+
+    /// Handle set model command.
+    #[cfg(feature = "whisper")]
+    async fn handle_set_model(&self, model: String) -> Response {
+        use crate::models::catalog::get_model;
+        use crate::models::download::{download_model, is_model_installed};
+
+        // Validate model exists in catalog
+        if get_model(&model).is_none() {
+            return Response::Error {
+                message: format!("Unknown model '{}'", model),
+            };
+        }
+
+        // Emit checking event
+        self.state.emit(DaemonEvent::ModelLoading {
+            model: model.clone(),
+            progress: "checking".to_string(),
+        });
+
+        // Check if installed, download if needed
+        if !is_model_installed(&model) {
+            self.state.emit(DaemonEvent::ModelLoading {
+                model: model.clone(),
+                progress: "downloading".to_string(),
+            });
+
+            if let Err(e) = download_model(&model, true).await {
+                let error_msg = format!("Download failed: {}", e);
+                self.state.emit(DaemonEvent::ModelLoadFailed {
+                    model: model.clone(),
+                    error: error_msg.clone(),
+                });
+                return Response::Error { message: error_msg };
+            }
+        }
+
+        // Emit loading event
+        self.state.emit(DaemonEvent::ModelLoading {
+            model: model.clone(),
+            progress: "loading".to_string(),
+        });
+
+        // Create new transcriber with modified config
+        let mut new_config = self.state.config.lock().await.clone();
+        new_config.stt.model = model.clone();
+
+        match crate::daemon::create_transcriber(&new_config, true, self.verbosity, false).await {
+            Ok(new_transcriber) => {
+                // Swap transcriber — safe during recording because the pipeline
+                // holds its own Arc clone (taken at start_recording). The old model
+                // stays alive via refcount until the pipeline finishes.
+                *self.state.transcriber.write().await = new_transcriber;
+
+                // Update config
+                self.state.config.lock().await.stt.model = model.clone();
+
+                // Emit success events
+                self.state.emit(DaemonEvent::ModelLoaded {
+                    model: model.clone(),
+                });
+                self.state.emit(DaemonEvent::ConfigChanged {
+                    key: "model".to_string(),
+                    value: model,
+                });
+
+                Response::Ok {
+                    message: "Model loaded".to_string(),
+                }
+            }
+            Err(e) => {
+                let error_msg = format!("Failed to load model: {}", e);
+                self.state.emit(DaemonEvent::ModelLoadFailed {
+                    model: model.clone(),
+                    error: error_msg.clone(),
+                });
+                Response::Error { message: error_msg }
+            }
+        }
+    }
+
+    /// Handle set model command (when whisper feature is disabled).
+    #[cfg(not(feature = "whisper"))]
+    async fn handle_set_model(&self, _model: String) -> Response {
+        Response::Error {
+            message: "Model switching requires the whisper feature".to_string(),
+        }
+    }
+
+    /// Handle list models command.
+    async fn handle_list_models(&self) -> Response {
+        use crate::ipc::protocol::ModelInfoResponse;
+        use crate::models::catalog::list_models;
+        use crate::models::download::is_model_installed;
+
+        let current = self.state.model_name().await;
+        let catalog = list_models();
+
+        let models: Vec<ModelInfoResponse> = catalog
+            .iter()
+            .map(|model_info| ModelInfoResponse {
+                name: model_info.name.to_string(),
+                size_mb: model_info.size_mb,
+                english_only: model_info.english_only,
+                installed: is_model_installed(model_info.name),
+                quantized: model_info.quantized,
+            })
+            .collect();
+
+        Response::Models { models, current }
+    }
 }
 
 #[async_trait::async_trait]
@@ -251,7 +434,15 @@ impl CommandHandler for DaemonCommandHandler {
                         .to_string(),
                 }
             }
+            Command::SetLanguage { language } => self.handle_set_language(language).await,
+            Command::ListLanguages => self.handle_list_languages().await,
+            Command::SetModel { model } => self.handle_set_model(model).await,
+            Command::ListModels => self.handle_list_models().await,
         }
+    }
+
+    fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<DaemonEvent>> {
+        Some(self.state.subscribe())
     }
 }
 
@@ -265,13 +456,12 @@ mod tests {
         let config = Config::default();
         let transcriber: Arc<dyn crate::stt::transcriber::Transcriber> =
             Arc::new(MockTranscriber::new("mock-test-model"));
-
-        #[cfg(feature = "portal")]
-        let state = DaemonState::new(config, transcriber, None);
-
-        #[cfg(not(feature = "portal"))]
-        let state = DaemonState::new(config, transcriber);
-
+        let state = DaemonState::new(
+            config,
+            transcriber,
+            #[cfg(feature = "portal")]
+            None,
+        );
         DaemonCommandHandler::new(state, true, 0)
     }
 
@@ -510,19 +700,26 @@ mod tests {
         let mut rx = handler.subscribe();
 
         // Emit a test event
-        handler.state.emit(DaemonEvent::Log {
-            message: "test".to_string(),
+        handler.state.emit(DaemonEvent::Transcription {
+            text: "test".to_string(),
+            language: "en".to_string(),
+            confidence: 0.95,
         });
 
         // Should receive the event
         let event = rx.recv().await.expect("Should receive event");
-        assert_eq!(
-            event,
-            DaemonEvent::Log {
-                message: "test".to_string()
-            },
-            "Should receive the exact event emitted"
-        );
+        match event {
+            DaemonEvent::Transcription {
+                text,
+                language,
+                confidence,
+            } => {
+                assert_eq!(text, "test");
+                assert_eq!(language, "en");
+                assert_eq!(confidence, 0.95);
+            }
+            _ => panic!("Expected Transcription event"),
+        }
     }
 
     #[tokio::test]
@@ -594,6 +791,14 @@ mod tests {
             "Quiet should be true in test handler"
         );
         assert!(pipeline_config.event_tx.is_some(), "Event TX should be set");
+        assert_eq!(
+            pipeline_config.allowed_languages, config.stt.allowed_languages,
+            "Allowed languages should match config"
+        );
+        assert_eq!(
+            pipeline_config.min_confidence, config.stt.min_confidence,
+            "Min confidence should match config"
+        );
     }
 
     #[tokio::test]
@@ -601,13 +806,12 @@ mod tests {
         let config = Config::default();
         let transcriber: Arc<dyn crate::stt::transcriber::Transcriber> =
             Arc::new(MockTranscriber::new("mock-test-model"));
-
-        #[cfg(feature = "portal")]
-        let state = DaemonState::new(config, transcriber, None);
-
-        #[cfg(not(feature = "portal"))]
-        let state = DaemonState::new(config, transcriber);
-
+        let state = DaemonState::new(
+            config,
+            transcriber,
+            #[cfg(feature = "portal")]
+            None,
+        );
         let handler = DaemonCommandHandler::new(state, false, 2);
 
         assert_eq!(handler.verbosity, 2, "Verbosity should be set correctly");
@@ -695,8 +899,213 @@ mod tests {
         let config = handler.state.config.lock().await.clone();
 
         // create_sink should not panic
+        #[cfg(feature = "portal")]
+        let _sink = handler.create_sink(&config, None);
+
+        #[cfg(not(feature = "portal"))]
         let _sink = handler.create_sink(&config);
 
         // Test passes if we didn't panic
+    }
+
+    // New command handler tests
+
+    #[tokio::test]
+    async fn test_handle_set_language_valid() {
+        let handler = create_test_handler();
+        let response = handler.handle_set_language("de".to_string()).await;
+
+        match response {
+            Response::Ok { message } => {
+                assert_eq!(message, "Language updated");
+            }
+            _ => panic!("Expected Ok response"),
+        }
+
+        // Verify config was updated
+        let language = handler.state.language().await;
+        assert_eq!(language, "de");
+
+        // Verify allowed_languages enforces the selected language
+        let config = handler.state.config.lock().await;
+        assert_eq!(config.stt.allowed_languages, vec!["de"]);
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_language_auto() {
+        let handler = create_test_handler();
+        // First set a specific language
+        handler.handle_set_language("de".to_string()).await;
+        // Then switch to auto
+        let response = handler.handle_set_language("auto".to_string()).await;
+
+        assert!(
+            matches!(response, Response::Ok { .. }),
+            "auto should be valid"
+        );
+
+        // Verify allowed_languages is cleared (accept all)
+        let config = handler.state.config.lock().await;
+        assert!(
+            config.stt.allowed_languages.is_empty(),
+            "auto should clear allowed_languages"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_language_invalid() {
+        let handler = create_test_handler();
+        let response = handler.handle_set_language("invalid".to_string()).await;
+
+        match response {
+            Response::Error { message } => {
+                assert!(message.contains("Unsupported language"));
+            }
+            _ => panic!("Expected Error response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_language_emits_config_changed() {
+        let handler = create_test_handler();
+        let mut rx = handler.state.subscribe();
+
+        let response = handler.handle_set_language("de".to_string()).await;
+        assert!(matches!(response, Response::Ok { .. }));
+
+        let event = rx.recv().await.expect("Should receive event");
+        assert_eq!(
+            event,
+            DaemonEvent::ConfigChanged {
+                key: "language".to_string(),
+                value: "de".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_list_languages() {
+        let handler = create_test_handler();
+        let response = handler.handle_list_languages().await;
+
+        match response {
+            Response::Languages { languages, current } => {
+                assert!(languages.contains(&"auto".to_string()));
+                assert!(languages.contains(&"en".to_string()));
+                assert!(languages.contains(&"de".to_string()));
+                assert_eq!(current, "auto");
+            }
+            _ => panic!("Expected Languages response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_list_models() {
+        let handler = create_test_handler();
+        let response = handler.handle_list_models().await;
+
+        match response {
+            Response::Models { models, current } => {
+                assert!(!models.is_empty(), "Should have at least one model");
+                assert_eq!(current, "base");
+                // Verify structure
+                for model in models {
+                    assert!(!model.name.is_empty());
+                    assert!(model.size_mb > 0);
+                }
+            }
+            _ => panic!("Expected Models response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_model_without_whisper_feature() {
+        let handler = create_test_handler();
+
+        // Without whisper feature, model switching returns a clear error
+        #[cfg(not(feature = "whisper"))]
+        {
+            let response = handler.handle_set_model("base".to_string()).await;
+            match response {
+                Response::Error { message } => {
+                    assert!(message.contains("whisper feature"));
+                }
+                _ => panic!("Expected error when whisper feature disabled"),
+            }
+        }
+
+        // With whisper feature, we can't test actual loading without model files
+        #[cfg(feature = "whisper")]
+        {
+            let _ = handler;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_returns_some() {
+        let handler = create_test_handler();
+
+        // The trait method subscribe() should return Some
+        let receiver = CommandHandler::subscribe(&handler);
+        assert!(receiver.is_some(), "subscribe() should return Some");
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_receives_events() {
+        let handler = create_test_handler();
+
+        let mut rx = CommandHandler::subscribe(&handler).expect("Should return Some");
+
+        // Emit event
+        handler.state.emit(DaemonEvent::Transcription {
+            text: "test".to_string(),
+            language: "en".to_string(),
+            confidence: 0.95,
+        });
+
+        // Should receive
+        let event = rx.recv().await.expect("Should receive event");
+        match event {
+            DaemonEvent::Transcription {
+                text,
+                language,
+                confidence,
+            } => {
+                assert_eq!(text, "test");
+                assert_eq!(language, "en");
+                assert_eq!(confidence, 0.95);
+            }
+            _ => panic!("Expected Transcription event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_new_commands_in_trait_impl() {
+        let handler = create_test_handler();
+
+        // Test SetLanguage command
+        let response = handler
+            .handle(Command::SetLanguage {
+                language: "en".to_string(),
+            })
+            .await;
+        assert!(
+            matches!(response, Response::Ok { .. }),
+            "SetLanguage should return Ok"
+        );
+
+        // Test ListLanguages command
+        let response = handler.handle(Command::ListLanguages).await;
+        assert!(
+            matches!(response, Response::Languages { .. }),
+            "ListLanguages should return Languages"
+        );
+
+        // Test ListModels command
+        let response = handler.handle(Command::ListModels).await;
+        assert!(
+            matches!(response, Response::Models { .. }),
+            "ListModels should return Models"
+        );
     }
 }

@@ -181,6 +181,20 @@ mod tests {
                 Command::Follow => Response::Ok {
                     message: "Following".to_string(),
                 },
+                Command::SetLanguage { .. } => Response::Ok {
+                    message: "Language updated".to_string(),
+                },
+                Command::ListLanguages => Response::Languages {
+                    languages: vec!["auto".to_string(), "en".to_string()],
+                    current: "auto".to_string(),
+                },
+                Command::SetModel { .. } => Response::Ok {
+                    message: "Model loaded".to_string(),
+                },
+                Command::ListModels => Response::Models {
+                    models: vec![],
+                    current: "base".to_string(),
+                },
             }
         }
     }

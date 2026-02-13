@@ -215,6 +215,25 @@ where
     Ok(())
 }
 
+/// Write a single event to the follow client.
+/// Returns false if the client disconnected.
+async fn write_event(writer: &mut tokio::net::unix::OwnedWriteHalf, event: &DaemonEvent) -> bool {
+    let json = match event.to_json() {
+        Ok(j) => j,
+        Err(_) => return true, // Serialization error, but client still connected
+    };
+    if writer.write_all(json.as_bytes()).await.is_err() {
+        return false;
+    }
+    if writer.write_all(b"\n").await.is_err() {
+        return false;
+    }
+    if writer.flush().await.is_err() {
+        return false;
+    }
+    true
+}
+
 /// Handle a follow client: subscribe to events and stream them as newline-delimited JSON.
 async fn handle_follow_client<H>(
     mut writer: tokio::net::unix::OwnedWriteHalf,
@@ -240,21 +259,49 @@ where
         }
     };
 
+    // Send initial state to the follow client
+    let status_response = handler.handle(Command::Status).await;
+    if let Response::Status {
+        recording,
+        model_name,
+        language,
+        ..
+    } = status_response
+    {
+        // Send recording state
+        let recording_event = DaemonEvent::RecordingStateChanged { recording };
+        if !write_event(&mut writer, &recording_event).await {
+            return Ok(()); // Client disconnected
+        }
+
+        // Send model if set
+        if let Some(model) = model_name {
+            let model_event = DaemonEvent::ConfigChanged {
+                key: "model".to_string(),
+                value: model,
+            };
+            if !write_event(&mut writer, &model_event).await {
+                return Ok(());
+            }
+        }
+
+        // Send language if set
+        if let Some(lang) = language {
+            let lang_event = DaemonEvent::ConfigChanged {
+                key: "language".to_string(),
+                value: lang,
+            };
+            if !write_event(&mut writer, &lang_event).await {
+                return Ok(());
+            }
+        }
+    }
+
     loop {
         match rx.recv().await {
             Ok(event) => {
-                let json = match event.to_json() {
-                    Ok(j) => j,
-                    Err(_) => continue,
-                };
-                if writer.write_all(json.as_bytes()).await.is_err() {
+                if !write_event(&mut writer, &event).await {
                     break; // Client disconnected
-                }
-                if writer.write_all(b"\n").await.is_err() {
-                    break;
-                }
-                if writer.flush().await.is_err() {
-                    break;
                 }
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -262,16 +309,8 @@ where
                 let log_event = DaemonEvent::Log {
                     message: format!("Skipped {} events (slow reader)", n),
                 };
-                if let Ok(json) = log_event.to_json() {
-                    if writer.write_all(json.as_bytes()).await.is_err() {
-                        break;
-                    }
-                    if writer.write_all(b"\n").await.is_err() {
-                        break;
-                    }
-                    if writer.flush().await.is_err() {
-                        break;
-                    }
+                if !write_event(&mut writer, &log_event).await {
+                    break;
                 }
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -322,6 +361,20 @@ mod tests {
                 },
                 Command::Follow => Response::Ok {
                     message: "Following".to_string(),
+                },
+                Command::SetLanguage { .. } => Response::Ok {
+                    message: "Language updated".to_string(),
+                },
+                Command::ListLanguages => Response::Languages {
+                    languages: vec!["auto".to_string(), "en".to_string()],
+                    current: "auto".to_string(),
+                },
+                Command::SetModel { .. } => Response::Ok {
+                    message: "Model loaded".to_string(),
+                },
+                Command::ListModels => Response::Models {
+                    models: vec![],
+                    current: "base".to_string(),
                 },
             }
         }

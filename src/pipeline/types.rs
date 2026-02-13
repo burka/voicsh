@@ -140,6 +140,10 @@ impl AudioChunk {
 pub struct TranscribedText {
     /// The transcribed text.
     pub text: String,
+    /// Detected language code (e.g. "en", "de"). Empty if unknown.
+    pub language: String,
+    /// Confidence score 0.0..1.0
+    pub confidence: f32,
     /// Timestamp when transcription completed.
     pub timestamp: Instant,
     /// Timing information (only populated when verbosity >= 1).
@@ -153,6 +157,8 @@ impl TranscribedText {
     pub fn new(text: String) -> Self {
         Self {
             text,
+            language: String::new(),
+            confidence: 1.0,
             timestamp: Instant::now(),
             timing: None,
             events: vec![],
@@ -163,6 +169,8 @@ impl TranscribedText {
     pub fn with_timing(text: String, timing: Option<Box<ChunkTiming>>) -> Self {
         Self {
             text,
+            language: String::new(),
+            confidence: 1.0,
             timestamp: Instant::now(),
             timing,
             events: vec![],

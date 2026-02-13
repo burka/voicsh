@@ -367,6 +367,39 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                     println!("  {}  {}", "Language:".dimmed(), lang);
                 }
             }
+            Response::Languages { languages, current } => {
+                println!("Languages (current: {}):", current.green());
+                for lang in &languages {
+                    if lang == &current {
+                        println!("  {} {}", "●".green(), lang);
+                    } else {
+                        println!("  ○ {}", lang);
+                    }
+                }
+            }
+            Response::Models { models, current } => {
+                println!("Models (current: {}):", current.green());
+                for m in &models {
+                    let installed = if m.installed {
+                        "installed".green().to_string()
+                    } else {
+                        "not installed".dimmed().to_string()
+                    };
+                    let lang = if m.english_only { "en-only" } else { "multi" };
+                    if m.name == current {
+                        println!(
+                            "  {} {} ({}MB, {}, {})",
+                            "●".green(),
+                            m.name,
+                            m.size_mb,
+                            lang,
+                            installed
+                        );
+                    } else {
+                        println!("  ○ {} ({}MB, {}, {})", m.name, m.size_mb, lang, installed);
+                    }
+                }
+            }
             Response::Error { message } => {
                 eprintln!("{}", format!("Error: {}", message).red());
                 std::process::exit(1);
@@ -403,32 +436,77 @@ async fn handle_follow(socket: Option<std::path::PathBuf>) -> Result<()> {
             } => {
                 let bar = format_level_bar(level, threshold);
                 let speech_indicator = if is_speech { " SPEECH" } else { "" };
-                eprint!("\r{}{}", bar, speech_indicator);
-                // Pad to clear previous longer lines
-                eprint!("          ");
+                eprint!("\r\x1b[2K{}{}", bar, speech_indicator);
             }
             DaemonEvent::RecordingStateChanged { recording } => {
-                eprintln!();
+                eprint!("\r\x1b[2K");
                 if recording {
                     println!("Recording started");
                 } else {
                     println!("Recording stopped");
                 }
             }
-            DaemonEvent::Transcription { text } => {
-                eprintln!();
-                println!("{}", text);
+            DaemonEvent::Transcription {
+                text,
+                language,
+                confidence,
+            } => {
+                eprint!("\r\x1b[2K");
+                if !language.is_empty() {
+                    println!(
+                        "{} {} {}",
+                        text,
+                        format!("[{}]", language).dimmed(),
+                        format!("{:.0}%", confidence * 100.0).dimmed()
+                    );
+                } else {
+                    println!("{}", text);
+                }
+            }
+            DaemonEvent::TranscriptionDropped {
+                text,
+                language,
+                confidence,
+                reason,
+            } => {
+                eprint!("\r\x1b[2K");
+                eprintln!(
+                    "{}",
+                    format!(
+                        "[dropped: {} | {} {:.0}%] \"{}\"",
+                        reason,
+                        language,
+                        confidence * 100.0,
+                        text
+                    )
+                    .dimmed()
+                );
             }
             DaemonEvent::Log { message } => {
-                eprintln!();
+                eprint!("\r\x1b[2K");
                 eprintln!("[log] {}", message);
+            }
+            DaemonEvent::ConfigChanged { key, value } => {
+                eprint!("\r\x1b[2K");
+                println!("Config changed: {} = {}", key, value);
+            }
+            DaemonEvent::ModelLoading { model, progress } => {
+                eprint!("\r\x1b[2KModel {}: {}...", model, progress);
+            }
+            DaemonEvent::ModelLoaded { model } => {
+                eprint!("\r\x1b[2K");
+                println!("{}", format!("Model {} loaded", model).green());
+            }
+            DaemonEvent::ModelLoadFailed { model, error } => {
+                eprint!("\r\x1b[2K");
+                eprintln!("{}", format!("Model {} failed: {}", model, error).red());
             }
         }
     })
     .await
     {
         Ok(()) => {
-            eprintln!();
+            eprint!("\r\x1b[2K");
             println!("Daemon connection closed");
         }
         Err(e) => {

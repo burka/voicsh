@@ -109,6 +109,8 @@ impl Station for SinkStation {
                     && tx
                         .try_send(DaemonEvent::Transcription {
                             text: text.text.clone(),
+                            language: text.language.clone(),
+                            confidence: text.confidence,
                         })
                         .is_err()
                 {

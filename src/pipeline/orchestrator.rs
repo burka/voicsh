@@ -44,6 +44,10 @@ pub struct PipelineConfig {
     pub post_process_buffer: usize,
     /// Optional event sender for daemon event streaming (crossbeam, non-blocking)
     pub event_tx: Option<crossbeam_channel::Sender<DaemonEvent>>,
+    /// Allowed languages for filtering (live-updatable during recording)
+    pub allowed_languages: Arc<std::sync::RwLock<Vec<String>>>,
+    /// Minimum confidence threshold (live-updatable during recording)
+    pub min_confidence: Arc<std::sync::RwLock<f32>>,
 }
 
 impl Default for PipelineConfig {
@@ -62,6 +66,8 @@ impl Default for PipelineConfig {
             transcribe_buffer: 16,
             post_process_buffer: 16,
             event_tx: None,
+            allowed_languages: Arc::new(std::sync::RwLock::new(Vec::new())),
+            min_confidence: Arc::new(std::sync::RwLock::new(0.0)),
         }
     }
 }
@@ -219,14 +225,24 @@ impl Pipeline {
             }));
         }
 
+        if let Some(ref event_tx) = self.config.event_tx {
+            vad_station = vad_station.with_event_sender(event_tx.clone());
+        }
+
         let chunker_station = ChunkerStation::with_clock(self.config.chunker, self.clock.clone())
             .with_sample_rate(self.config.sample_rate)
             .with_verbosity(self.config.verbosity)
             .with_flush_tx(chunk_tx.clone());
 
-        let transcriber_station = TranscriberStation::new(transcriber.clone())
+        let mut transcriber_station = TranscriberStation::new(transcriber.clone())
             .with_verbose(self.config.verbosity >= 2)
-            .with_hallucination_filters(self.config.hallucination_filters.clone());
+            .with_hallucination_filters(self.config.hallucination_filters.clone())
+            .with_allowed_languages(self.config.allowed_languages.clone())
+            .with_min_confidence(self.config.min_confidence.clone());
+
+        if let Some(ref event_tx) = self.config.event_tx {
+            transcriber_station = transcriber_station.with_event_sender(event_tx.clone());
+        }
 
         // Create sink station with result channel and session context
         let (result_tx, result_rx) = bounded(1);
@@ -236,6 +252,9 @@ impl Pipeline {
             let context =
                 SessionContext::detect(transcriber.model_name(), crate::defaults::gpu_backend());
             sink_station = sink_station.with_session_context(context);
+        }
+        if let Some(ref event_tx) = self.config.event_tx {
+            sink_station = sink_station.with_event_sender(event_tx.clone());
         }
 
         // Spawn station runners
@@ -520,6 +539,14 @@ mod tests {
         assert_eq!(config.verbosity, 0);
         assert!(config.auto_level);
         assert!(!config.quiet);
+        #[allow(clippy::expect_used)]
+        {
+            assert_eq!(
+                *config.allowed_languages.read().expect("lock"),
+                Vec::<String>::new()
+            );
+            assert_eq!(*config.min_confidence.read().expect("lock"), 0.0);
+        }
     }
 
     #[test]

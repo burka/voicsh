@@ -1,5 +1,6 @@
 //! Transcriber station that converts audio chunks to text via Whisper.
 
+use crate::ipc::protocol::DaemonEvent;
 use crate::pipeline::error::{StationError, eprintln_clear};
 use crate::pipeline::station::Station;
 use crate::pipeline::types::{AudioChunk, TranscribedText};
@@ -74,6 +75,9 @@ pub struct TranscriberStation {
     verbose: bool,
     warned_backpressure: bool,
     hallucination_filters: Vec<String>,
+    allowed_languages: Arc<std::sync::RwLock<Vec<String>>>,
+    min_confidence: Arc<std::sync::RwLock<f32>>,
+    event_tx: Option<crossbeam_channel::Sender<DaemonEvent>>,
 }
 
 impl TranscriberStation {
@@ -84,6 +88,9 @@ impl TranscriberStation {
             verbose: false,
             warned_backpressure: false,
             hallucination_filters: Vec::new(),
+            allowed_languages: Arc::new(std::sync::RwLock::new(Vec::new())),
+            min_confidence: Arc::new(std::sync::RwLock::new(0.0)),
+            event_tx: None,
         }
     }
 
@@ -98,6 +105,24 @@ impl TranscriberStation {
     /// Set hallucination filter phrases (pre-lowercased for O(1) runtime comparison).
     pub fn with_hallucination_filters(mut self, filters: Vec<String>) -> Self {
         self.hallucination_filters = filters.into_iter().map(|f| f.to_lowercase()).collect();
+        self
+    }
+
+    /// Set allowed languages for filtering.
+    pub fn with_allowed_languages(mut self, langs: Arc<std::sync::RwLock<Vec<String>>>) -> Self {
+        self.allowed_languages = langs;
+        self
+    }
+
+    /// Set minimum confidence threshold.
+    pub fn with_min_confidence(mut self, min: Arc<std::sync::RwLock<f32>>) -> Self {
+        self.min_confidence = min;
+        self
+    }
+
+    /// Set event sender for emitting daemon events.
+    pub fn with_event_sender(mut self, tx: crossbeam_channel::Sender<DaemonEvent>) -> Self {
+        self.event_tx = Some(tx);
         self
     }
 }
@@ -166,18 +191,96 @@ impl Station for TranscriberStation {
         if !self.hallucination_filters.is_empty() {
             let lower = cleaned_text.to_lowercase();
             let stripped = lower.trim_end_matches(['.', '!', '?', ',', ';']);
-            if self.hallucination_filters.iter().any(|f| {
-                f == &lower || f.trim_end_matches(['.', '!', '?', ',', ';']) == stripped
-            }) {
+            if self
+                .hallucination_filters
+                .iter()
+                .any(|f| f == &lower || f.trim_end_matches(['.', '!', '?', ',', ';']) == stripped)
+            {
+                if self.verbose {
+                    eprintln_clear(&format!("  [dropped: hallucination] \"{}\"", cleaned_text));
+                }
+                if let Some(ref tx) = self.event_tx
+                    && tx
+                        .try_send(DaemonEvent::TranscriptionDropped {
+                            text: cleaned_text,
+                            language: result.language,
+                            confidence: result.confidence,
+                            reason: "hallucination filter".into(),
+                        })
+                        .is_err()
+                {
+                    // Channel full or closed - OK to ignore
+                }
                 return Ok(None);
             }
         }
 
-        // Return transcribed text with timing information from chunk (if available)
-        Ok(Some(TranscribedText::with_timing(
-            cleaned_text,
-            chunk.timing,
-        )))
+        // Language allowlist filter
+        // RwLock poisoning (another thread panicked while holding the lock) is rare and unrecoverable.
+        // If it happens, we want the pipeline to fail loudly rather than silently skip filtering.
+        #[allow(clippy::expect_used)]
+        let allowed_languages = self
+            .allowed_languages
+            .read()
+            .expect("allowed_languages RwLock poisoned");
+        if !allowed_languages.is_empty()
+            && !result.language.is_empty()
+            && !allowed_languages.iter().any(|l| l == &result.language)
+        {
+            let reason = format!("language '{}' not in allowlist", result.language);
+            if self.verbose {
+                eprintln_clear(&format!("  [dropped: {}] \"{}\"", reason, cleaned_text));
+            }
+            if let Some(ref tx) = self.event_tx
+                && tx
+                    .try_send(DaemonEvent::TranscriptionDropped {
+                        text: cleaned_text,
+                        language: result.language,
+                        confidence: result.confidence,
+                        reason,
+                    })
+                    .is_err()
+            {
+                // Channel full or closed - OK to ignore
+            }
+            return Ok(None);
+        }
+        drop(allowed_languages);
+
+        // Confidence threshold filter
+        #[allow(clippy::expect_used)]
+        let min_confidence = *self
+            .min_confidence
+            .read()
+            .expect("min_confidence RwLock poisoned");
+        if min_confidence > 0.0 && result.confidence < min_confidence {
+            let reason = format!(
+                "confidence {:.2} below threshold {:.2}",
+                result.confidence, min_confidence
+            );
+            if self.verbose {
+                eprintln_clear(&format!("  [dropped: {}] \"{}\"", reason, cleaned_text));
+            }
+            if let Some(ref tx) = self.event_tx
+                && tx
+                    .try_send(DaemonEvent::TranscriptionDropped {
+                        text: cleaned_text,
+                        language: result.language,
+                        confidence: result.confidence,
+                        reason,
+                    })
+                    .is_err()
+            {
+                // Channel full or closed - OK to ignore
+            }
+            return Ok(None);
+        }
+
+        // Carry language and confidence into the result
+        let mut transcribed = TranscribedText::with_timing(cleaned_text, chunk.timing);
+        transcribed.language = result.language;
+        transcribed.confidence = result.confidence;
+        Ok(Some(transcribed))
     }
 }
 
@@ -186,6 +289,18 @@ mod tests {
     use super::*;
     use crate::stt::transcriber::MockTranscriber;
     use std::time::Instant;
+
+    // Helper to create Arc<RwLock<Vec<String>>>
+    fn arc_langs(langs: Vec<&str>) -> Arc<std::sync::RwLock<Vec<String>>> {
+        Arc::new(std::sync::RwLock::new(
+            langs.iter().map(|s| s.to_string()).collect(),
+        ))
+    }
+
+    // Helper to create Arc<RwLock<f32>>
+    fn arc_conf(conf: f32) -> Arc<std::sync::RwLock<f32>> {
+        Arc::new(std::sync::RwLock::new(conf))
+    }
 
     #[test]
     fn test_successful_transcription() {
@@ -474,7 +589,7 @@ mod tests {
     fn test_hallucination_filter_discards_match() {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Thank you."));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(vec!["Thank you.".to_string()]);
+            .with_hallucination_filters(vec!["thank you.".to_string()]);
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(result.is_none(), "Hallucinated phrase should be discarded");
@@ -484,7 +599,7 @@ mod tests {
     fn test_hallucination_filter_case_insensitive() {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("THANK YOU."));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(vec!["Thank you.".to_string()]);
+            .with_hallucination_filters(vec!["thank you.".to_string()]);
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(result.is_none(), "Filter should be case-insensitive");
@@ -494,7 +609,7 @@ mod tests {
     fn test_hallucination_filter_allows_non_match() {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Hello world"));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(vec!["Thank you.".to_string()]);
+            .with_hallucination_filters(vec!["thank you.".to_string()]);
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(result.is_some(), "Non-matching text should pass through");
@@ -506,7 +621,7 @@ mod tests {
         let transcriber =
             Arc::new(MockTranscriber::new("mock").with_response("Thank you for coming"));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(vec!["Thank you.".to_string()]);
+            .with_hallucination_filters(vec!["thank you.".to_string()]);
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -532,7 +647,7 @@ mod tests {
         let transcriber =
             Arc::new(MockTranscriber::new("mock").with_response("[MUSIC] Thank you."));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(vec!["Thank you.".to_string()]);
+            .with_hallucination_filters(vec!["thank you.".to_string()]);
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -601,5 +716,148 @@ mod tests {
         let result = station.process(chunk).unwrap();
         assert!(result.is_some(), "Speech-level chunk should be transcribed");
         assert_eq!(result.unwrap().text, "Speech");
+    }
+
+    // ── Language and confidence filtering tests ──────────────────────────────
+
+    #[test]
+    fn test_language_allowlist_filters_unwanted() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("hello")
+                .with_language("ru")
+                .with_confidence(0.9),
+        );
+        let mut station = TranscriberStation::new(transcriber)
+            .with_allowed_languages(arc_langs(vec!["en", "de"]));
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_none(),
+            "Russian should be filtered when allowlist is [en, de]"
+        );
+    }
+
+    #[test]
+    fn test_language_allowlist_passes_allowed() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("hello")
+                .with_language("en")
+                .with_confidence(0.9),
+        );
+        let mut station = TranscriberStation::new(transcriber)
+            .with_allowed_languages(arc_langs(vec!["en", "de"]));
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_some(), "English should pass when in allowlist");
+        assert_eq!(result.unwrap().text, "hello");
+    }
+
+    #[test]
+    fn test_language_allowlist_empty_passes_all() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("hello")
+                .with_language("zh")
+                .with_confidence(0.9),
+        );
+        let mut station =
+            TranscriberStation::new(transcriber).with_allowed_languages(arc_langs(vec![]));
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_some(), "Empty allowlist should pass everything");
+    }
+
+    #[test]
+    fn test_confidence_threshold_filters_low() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("hello")
+                .with_language("en")
+                .with_confidence(0.3),
+        );
+        let mut station = TranscriberStation::new(transcriber).with_min_confidence(arc_conf(0.5));
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_none(), "Low confidence should be filtered");
+    }
+
+    #[test]
+    fn test_confidence_threshold_passes_high() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("hello")
+                .with_language("en")
+                .with_confidence(0.8),
+        );
+        let mut station = TranscriberStation::new(transcriber).with_min_confidence(arc_conf(0.5));
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_some(), "High confidence should pass");
+    }
+
+    #[test]
+    fn test_confidence_threshold_zero_passes_all() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("hello")
+                .with_language("en")
+                .with_confidence(0.1),
+        );
+        let mut station = TranscriberStation::new(transcriber).with_min_confidence(arc_conf(0.0));
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_some(), "Zero threshold should pass everything");
+    }
+
+    #[test]
+    fn test_language_and_confidence_carried_through() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("hello")
+                .with_language("de")
+                .with_confidence(0.85),
+        );
+        let mut station = TranscriberStation::new(transcriber);
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap().unwrap();
+        assert_eq!(result.text, "hello");
+        assert_eq!(result.language, "de");
+        assert_eq!(result.confidence, 0.85);
+    }
+
+    #[test]
+    fn test_transcription_dropped_event_emitted() {
+        let (tx, rx) = crossbeam_channel::bounded(16);
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("hello")
+                .with_language("ru")
+                .with_confidence(0.9),
+        );
+        let mut station = TranscriberStation::new(transcriber)
+            .with_allowed_languages(arc_langs(vec!["en"]))
+            .with_event_sender(tx);
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let _result = station.process(chunk).unwrap();
+
+        let event = rx
+            .try_recv()
+            .expect("Should have emitted TranscriptionDropped event");
+        match event {
+            DaemonEvent::TranscriptionDropped {
+                text,
+                language,
+                confidence,
+                reason,
+            } => {
+                assert_eq!(text, "hello");
+                assert_eq!(language, "ru");
+                assert_eq!(confidence, 0.9);
+                assert!(reason.contains("not in allowlist"));
+            }
+            _ => panic!("Expected TranscriptionDropped event"),
+        }
     }
 }

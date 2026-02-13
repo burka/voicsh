@@ -20,6 +20,14 @@ pub enum Command {
     Shutdown,
     /// Follow daemon events (live streaming)
     Follow,
+    /// Set language for transcription
+    SetLanguage { language: String },
+    /// List supported languages
+    ListLanguages,
+    /// Set model for transcription
+    SetModel { model: String },
+    /// List available models
+    ListModels,
 }
 
 impl Command {
@@ -32,6 +40,16 @@ impl Command {
     pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(s)
     }
+}
+
+/// Model information returned to clients.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelInfoResponse {
+    pub name: String,
+    pub size_mb: u32,
+    pub english_only: bool,
+    pub installed: bool,
+    pub quantized: bool,
 }
 
 /// Responses sent by daemon to CLI.
@@ -54,6 +72,16 @@ pub enum Response {
     },
     /// Error occurred
     Error { message: String },
+    /// Supported languages list
+    Languages {
+        languages: Vec<String>,
+        current: String,
+    },
+    /// Available models list
+    Models {
+        models: Vec<ModelInfoResponse>,
+        current: String,
+    },
 }
 
 impl Response {
@@ -80,10 +108,29 @@ pub enum DaemonEvent {
     },
     /// Recording state changed
     RecordingStateChanged { recording: bool },
-    /// Transcription result
-    Transcription { text: String },
+    /// Transcription result with language and confidence
+    Transcription {
+        text: String,
+        language: String,
+        confidence: f32,
+    },
+    /// Transcription dropped by language/confidence filter
+    TranscriptionDropped {
+        text: String,
+        language: String,
+        confidence: f32,
+        reason: String,
+    },
     /// Log message from daemon
     Log { message: String },
+    /// Config value changed
+    ConfigChanged { key: String, value: String },
+    /// Model loading started or progressing
+    ModelLoading { model: String, progress: String },
+    /// Model loaded successfully
+    ModelLoaded { model: String },
+    /// Model loading failed
+    ModelLoadFailed { model: String, error: String },
 }
 
 impl DaemonEvent {
@@ -122,6 +169,14 @@ mod tests {
             Command::Status,
             Command::Shutdown,
             Command::Follow,
+            Command::SetLanguage {
+                language: "de".to_string(),
+            },
+            Command::ListLanguages,
+            Command::SetModel {
+                model: "large".to_string(),
+            },
+            Command::ListModels,
         ];
 
         for cmd in commands {
@@ -560,6 +615,8 @@ mod tests {
     fn test_daemon_event_transcription_json_roundtrip() {
         let event = DaemonEvent::Transcription {
             text: "hello world".to_string(),
+            language: "en".to_string(),
+            confidence: 0.95,
         };
         let json = event.to_json().expect("should serialize");
         let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
@@ -596,9 +653,19 @@ mod tests {
             DaemonEvent::RecordingStateChanged { recording: true },
             DaemonEvent::Transcription {
                 text: String::new(),
+                language: "en".to_string(),
+                confidence: 1.0,
             },
             DaemonEvent::Transcription {
                 text: "Hello 👋 World".to_string(),
+                language: "de".to_string(),
+                confidence: 0.85,
+            },
+            DaemonEvent::TranscriptionDropped {
+                text: "test".to_string(),
+                language: "ru".to_string(),
+                confidence: 0.3,
+                reason: "language not in allowlist".to_string(),
             },
             DaemonEvent::Log {
                 message: "test".to_string(),
@@ -649,5 +716,182 @@ mod tests {
             }
             _ => panic!("Expected Level event"),
         }
+    }
+
+    // New command variant tests
+
+    #[test]
+    fn test_command_set_language_json_roundtrip() {
+        let cmd = Command::SetLanguage {
+            language: "de".to_string(),
+        };
+        let json = cmd.to_json().expect("should serialize");
+        let deserialized = Command::from_json(&json).expect("should deserialize");
+        assert_eq!(cmd, deserialized);
+        assert_eq!(json, r#"{"type":"set_language","language":"de"}"#);
+    }
+
+    #[test]
+    fn test_command_list_languages_json_roundtrip() {
+        let cmd = Command::ListLanguages;
+        let json = cmd.to_json().expect("should serialize");
+        let deserialized = Command::from_json(&json).expect("should deserialize");
+        assert_eq!(cmd, deserialized);
+        assert_eq!(json, r#"{"type":"list_languages"}"#);
+    }
+
+    #[test]
+    fn test_command_set_model_json_roundtrip() {
+        let cmd = Command::SetModel {
+            model: "large".to_string(),
+        };
+        let json = cmd.to_json().expect("should serialize");
+        let deserialized = Command::from_json(&json).expect("should deserialize");
+        assert_eq!(cmd, deserialized);
+        assert_eq!(json, r#"{"type":"set_model","model":"large"}"#);
+    }
+
+    #[test]
+    fn test_command_list_models_json_roundtrip() {
+        let cmd = Command::ListModels;
+        let json = cmd.to_json().expect("should serialize");
+        let deserialized = Command::from_json(&json).expect("should deserialize");
+        assert_eq!(cmd, deserialized);
+        assert_eq!(json, r#"{"type":"list_models"}"#);
+    }
+
+    // New response variant tests
+
+    #[test]
+    fn test_response_languages_json_roundtrip() {
+        let resp = Response::Languages {
+            languages: vec!["auto".to_string(), "en".to_string(), "de".to_string()],
+            current: "auto".to_string(),
+        };
+        let json = resp.to_json().expect("should serialize");
+        let deserialized = Response::from_json(&json).expect("should deserialize");
+        assert_eq!(resp, deserialized);
+        assert!(json.contains(r#""type":"languages""#));
+        assert!(json.contains(r#""current":"auto""#));
+    }
+
+    #[test]
+    fn test_response_models_json_roundtrip() {
+        let resp = Response::Models {
+            models: vec![
+                ModelInfoResponse {
+                    name: "base".to_string(),
+                    size_mb: 142,
+                    english_only: false,
+                    installed: true,
+                    quantized: false,
+                },
+                ModelInfoResponse {
+                    name: "large".to_string(),
+                    size_mb: 2880,
+                    english_only: false,
+                    installed: false,
+                    quantized: false,
+                },
+            ],
+            current: "base".to_string(),
+        };
+        let json = resp.to_json().expect("should serialize");
+        let deserialized = Response::from_json(&json).expect("should deserialize");
+        assert_eq!(resp, deserialized);
+        assert!(json.contains(r#""type":"models""#));
+        assert!(json.contains(r#""current":"base""#));
+    }
+
+    #[test]
+    fn test_model_info_response_json_roundtrip() {
+        let info = ModelInfoResponse {
+            name: "base".to_string(),
+            size_mb: 142,
+            english_only: false,
+            installed: true,
+            quantized: false,
+        };
+        let json = serde_json::to_string(&info).expect("should serialize");
+        let deserialized: ModelInfoResponse =
+            serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(info, deserialized);
+        assert!(json.contains(r#""name":"base""#));
+        assert!(json.contains(r#""size_mb":142"#));
+        assert!(json.contains(r#""english_only":false"#));
+        assert!(json.contains(r#""installed":true"#));
+        assert!(json.contains(r#""quantized":false"#));
+    }
+
+    // New daemon event variant tests
+
+    #[test]
+    fn test_daemon_event_config_changed_json_roundtrip() {
+        let event = DaemonEvent::ConfigChanged {
+            key: "language".to_string(),
+            value: "de".to_string(),
+        };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+        assert_eq!(
+            json,
+            r#"{"type":"config_changed","key":"language","value":"de"}"#
+        );
+    }
+
+    #[test]
+    fn test_daemon_event_model_loading_json_roundtrip() {
+        let event = DaemonEvent::ModelLoading {
+            model: "large".to_string(),
+            progress: "downloading".to_string(),
+        };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+        assert_eq!(
+            json,
+            r#"{"type":"model_loading","model":"large","progress":"downloading"}"#
+        );
+    }
+
+    #[test]
+    fn test_daemon_event_model_loaded_json_roundtrip() {
+        let event = DaemonEvent::ModelLoaded {
+            model: "large".to_string(),
+        };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+        assert_eq!(json, r#"{"type":"model_loaded","model":"large"}"#);
+    }
+
+    #[test]
+    fn test_daemon_event_model_load_failed_json_roundtrip() {
+        let event = DaemonEvent::ModelLoadFailed {
+            model: "large".to_string(),
+            error: "Download failed".to_string(),
+        };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+        assert_eq!(
+            json,
+            r#"{"type":"model_load_failed","model":"large","error":"Download failed"}"#
+        );
+    }
+
+    #[test]
+    fn test_daemon_event_transcription_dropped_json_roundtrip() {
+        let event = DaemonEvent::TranscriptionDropped {
+            text: "hello".to_string(),
+            language: "ru".to_string(),
+            confidence: 0.3,
+            reason: "language not in allowlist".to_string(),
+        };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+        assert!(json.contains("\"type\":\"transcription_dropped\""));
     }
 }
