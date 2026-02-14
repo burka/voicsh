@@ -43,29 +43,25 @@ Spoken punctuation, formatting, and keyboard control.
 - [ ] Voice commands working reliably end-to-end
 - [ ] GNOME Shell extension: model switcher, language picker
 
-## 0.2.0 — Text refinement
+## 0.2.0 — Post-ASR error correction
 
-LLM post-processing for polished output.
+FlanEC (flan-t5-base) via candle for post-ASR error correction.
 
-- Local: Ollama, llama.cpp server (auto-detect running)
-- `--refine default|formal|casual|code`
-- Timeout + fallback to raw transcription
-- Cloud providers optional (Anthropic, OpenAI)
+- Single-best hypothesis + per-word confidence markup as input
+- Lazy-loaded ~250M param model, F16 (~500MB), timeout + fallback to raw text
+- English-only guard (passthrough for other languages)
+- `[error_correction]` config section
 
-## 0.3.0 — GPU and extension testing
+## 0.3.0 — GPU and improved correction
 
-Container-based testing for GPU backends and GNOME integration.
+GPU acceleration and enhanced error correction pipeline.
 
-- GPU compilation gates: verify `--features cuda/vulkan/hipblas` build in vendor containers
-  - CUDA: `nvidia/cuda:12.6.1-devel-ubuntu24.04` (compile-only, no GPU needed)
-  - hipblas: `rocm/dev-ubuntu-24.04:6.4-complete` (compile-only, no GPU needed)
-  - Vulkan: `libvulkan-dev` + `mesa-vulkan-drivers` on Ubuntu (compile **and** run)
-- Vulkan runtime tests via lavapipe (Mesa software Vulkan, `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json`)
-- GNOME extension integration tests via `ghcr.io/ddterm/gnome-shell-image/fedora-43` (or other distros)
-  - Headless: `gnome-shell --wayland --headless --unsafe-mode --virtual-monitor 1600x960`
-  - Install/enable via `gnome-extensions` CLI, check `journalctl` for errors
-  - Screenshots via D-Bus `org.gnome.Shell.Screenshot`
-- CI workflow for all of the above on GitHub Actions (standard runners, no GPU/KVM needed)
+- **Research task:** Evaluate candle Whisper — if viable, migrate from whisper.cpp for unified GPU context + N-best hypotheses (beam search → FlanEC gets 5-best input as trained)
+- **Alternative if candle Whisper doesn't work out:** Keep whisper.cpp, add multi-pass correction with optional smaller models to stay real-time
+- CUDA already partially working on dev machine
+- Unified `candle-core/cuda` feature covers both Whisper + FlanEC (if candle path chosen)
+- GPU compilation gates: CUDA, Vulkan, hipBLAS in CI containers
+- Vulkan runtime tests via lavapipe
 
 ## 0.4.0 — Overlay and sentence refinement
 
@@ -78,6 +74,14 @@ Wayland overlay that collects dictated fragments, refines them with an LLM into 
   - Uses local LLM (Ollama / llama.cpp) or cloud (Anthropic, OpenAI)
   - Timeout + fallback to raw transcription if LLM is unavailable
 
+## 0.5.0 — LLM assistant
+
+Voice-activated LLM: hold key + speak a question → LLM processes → answer injected as text.
+
+- Local: Ollama, llama.cpp server (auto-detect running)
+- Cloud providers optional (Anthropic, OpenAI)
+- Timeout + fallback
+
 ## Future
 
 - Streaming word-by-word display
@@ -85,6 +89,9 @@ Wayland overlay that collects dictated fragments, refines them with an LLM into 
 - X11 support (xdotool/xsel)
 - Profiles (per-app settings)
 - Daemon: listen for PipeWire/PulseAudio device changes, auto-recover or show helpful message
+- German grammar correction: t5-small-grammar-correction-german (aiassociates) via candle
+- Deepgram remote API integration (cloud ASR alternative)
+- NVIDIA Canary / NeMo support via local docker container (nvcr.io/nvidia/nemo) — high-quality local ASR alternative (~20GB+)
 
 ## Non-goals
 
