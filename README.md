@@ -6,6 +6,7 @@ cascade:
 ---
 [![crates.io](https://img.shields.io/crates/v/voicsh.svg)](https://crates.io/crates/voicsh)
 [![docs](https://img.shields.io/badge/docs-voic.sh-blue)](https://voic.sh)
+[![GitHub](https://img.shields.io/github/stars/burka/voicsh?style=social)](https://github.com/burka/voicsh)
 
 Offline, privacy-first voice typing. Speak into your mic, text appears in your focused app. Or pipe a WAV file and get text on stdout.
 
