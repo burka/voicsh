@@ -40,26 +40,37 @@ Spoken punctuation, formatting, and keyboard control.
 - [x] GNOME Shell extension: install, toggle, status indicator (`voicsh install-gnome-extension`)
 - [x] Language allowlist: filter transcriptions by allowed languages + confidence threshold
 - [x] GNOME extension: "Open Debug Log" menu item (launches `voicsh follow` in terminal)
+- [x] GNOME extension: follow mode with live audio levels, recording state, transcriptions
+- [x] GNOME extension: language picker + model switcher via IPC (SetLanguage/SetModel)
+- [x] Unified output: daemon verbose and `voicsh follow` share one renderer (DRY)
+- [x] Per-token confidence coloring: real decoder probabilities (green/default/yellow/red)
+- [x] Hallucination filter: 76+ phrases, CJK punctuation normalization, punctuation-only skip
+- [x] Quantized model support (q5_0, q5_1, q8_0 variants)
 - [ ] Voice commands working reliably end-to-end
-- [ ] GNOME Shell extension: model switcher, language picker
+- [ ] GNOME extension: portal per-recording (close RemoteDesktop session when idle, remove yellow privacy indicator)
 
 ## 0.2.0 — Post-ASR error correction
 
-FlanEC (flan-t5-base) via candle for post-ASR error correction.
+LLM-based error correction using per-token confidence as a guide.
 
-- Single-best hypothesis + per-word confidence markup as input
-- Lazy-loaded ~250M param model, F16 (~500MB), timeout + fallback to raw text
-- English-only guard (passthrough for other languages)
+- Per-token probability data already available (`TokenProbability { token, probability }`)
+- Low-probability tokens are flagged as correction candidates for the LLM
+- **Option A — Local model:** FlanEC (flan-t5-base) or instruction-tuned LLM via candle (~250M–1B params, F16)
+- **Option B — External LLM:** Ollama / llama.cpp / cloud API with token-confidence prompt
+- Lazy-loaded model, timeout + fallback to raw transcription
+- Greedy reranking: bump `best_of: 1` → `best_of: 5` for better base accuracy before correction
+- English-only guard initially (passthrough for other languages)
 - `[error_correction]` config section
 
 ## 0.3.0 — GPU and improved correction
 
 GPU acceleration and enhanced error correction pipeline.
 
-- **Research task:** Evaluate candle Whisper — if viable, migrate from whisper.cpp for unified GPU context + N-best hypotheses (beam search → FlanEC gets 5-best input as trained)
-- **Alternative if candle Whisper doesn't work out:** Keep whisper.cpp, add multi-pass correction with optional smaller models to stay real-time
+- **Research task:** Evaluate candle Whisper — if viable, migrate from whisper.cpp for unified GPU context
+- **N-best reality:** whisper-rs/whisper.cpp BeamSearch returns single-best only (no n-best extraction). True n-best requires either candle Whisper or multi-pass with different temperatures.
+- **Alternative path:** Keep whisper.cpp + BeamSearch for better single-best, feed per-token probabilities to LLM corrector (already wired)
 - CUDA already partially working on dev machine
-- Unified `candle-core/cuda` feature covers both Whisper + FlanEC (if candle path chosen)
+- Unified `candle-core/cuda` feature covers both Whisper + correction model (if candle path chosen)
 - GPU compilation gates: CUDA, Vulkan, hipBLAS in CI containers
 - Vulkan runtime tests via lavapipe
 
@@ -68,8 +79,10 @@ GPU acceleration and enhanced error correction pipeline.
 Wayland overlay that collects dictated fragments, refines them with an LLM into complete sentences, then injects the polished result.
 
 - Wayland layer-shell overlay: recording indicator + live transcription display
+- Per-token confidence visualization in overlay (color-coded, same scale as terminal)
 - Sentence collector: buffer dictated chunks in the overlay instead of injecting immediately
 - LLM sentence stitcher: when a sentence is complete (detected by LLM), refine and inject
+  - Receives token-level probabilities to focus corrections on uncertain tokens
   - Context-aware: knows the previous sentence for coherent flow
   - Uses local LLM (Ollama / llama.cpp) or cloud (Anthropic, OpenAI)
   - Timeout + fallback to raw transcription if LLM is unavailable
@@ -84,7 +97,7 @@ Voice-activated LLM: hold key + speak a question → LLM processes → answer in
 
 ## Future
 
-- Streaming word-by-word display
+- Streaming token-by-token display (live partial results during recording)
 - Push-to-talk (hold hotkey)
 - X11 support (xdotool/xsel)
 - Profiles (per-app settings)
