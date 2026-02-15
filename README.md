@@ -55,6 +55,8 @@ Pipe mode (`cat file.wav | voicsh`) skips injection and writes to stdout.
 # Ubuntu/Debian:
 sudo apt install build-essential cmake pkg-config libclang-dev libasound2-dev
 cargo install voicsh
+voicsh init                    # benchmark hardware, pick model, download
+voicsh install-gnome-extension # GNOME Shell panel indicator (optional)
 ```
 
 Other distros, GPU acceleration, and pipe-only builds: see [INSTALL.md](INSTALL.md).
@@ -87,10 +89,10 @@ Voice commands trigger only when spoken as **standalone utterances** — pause, 
 [pause] "new line" [pause]        → (line break)
 "the period of history"           → "the period of history"
 "press enter to continue"        → "press enter to continue"
-[pause] "all caps" [pause] "wow" → "WOW"
+[pause] "all caps" [pause] "wow" [pause] "end caps" → "WOW"
 ```
 
-Built-in commands are available for English, German, Spanish, French, Portuguese, Italian, Dutch, Polish, Russian, Japanese, Chinese, and Korean. Discover all commands for a language:
+Built-in commands are available for English, German, Spanish, French, Portuguese, Italian, Dutch, Polish, Russian, Japanese, Chinese, and Korean — see [post_processor.rs](src/pipeline/post_processor.rs) for the full list. Discover all commands for a language:
 
 ```bash
 voicsh config list --language=en     # English voice commands
