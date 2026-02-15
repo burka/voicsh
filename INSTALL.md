@@ -37,7 +37,7 @@ cargo install voicsh \
 
 ## GPU acceleration
 
-By default voicsh runs on CPU. Enable GPU for ~5-10x faster transcription:
+By default voicsh runs on CPU. GPU feature gates are available but **untested and unverified** — expect rough edges:
 
 | Backend | Flag | Prerequisites |
 |---------|------|---------------|
