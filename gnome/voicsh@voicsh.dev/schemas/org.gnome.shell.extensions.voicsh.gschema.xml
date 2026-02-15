@@ -6,6 +6,11 @@
       <summary>Toggle recording shortcut</summary>
       <description>Keyboard shortcut to toggle voice recording on/off</description>
     </key>
+    <key name="show-language-label" type="b">
+      <default>true</default>
+      <summary>Show language in panel</summary>
+      <description>Show a two-letter language code next to the panel icon when a language is explicitly selected</description>
+    </key>
     <key name="poll-interval" type="i">
       <default>3</default>
       <summary>Status poll interval</summary>

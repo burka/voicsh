@@ -20,12 +20,20 @@ export default class VoicshExtension extends Extension {
     enable() {
         this._indicator = new PanelMenu.Button(0.0, 'voicsh', false);
 
-        // Icon
+        // Icon + language label
+        const box = new St.BoxLayout({ style_class: 'panel-status-menu-box' });
         this._icon = new St.Icon({
             icon_name: ICON_DISCONNECTED,
             style_class: 'system-status-icon',
         });
-        this._indicator.add_child(this._icon);
+        this._langLabel = new St.Label({
+            style_class: 'voicsh-lang-label',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._langLabel.visible = false;
+        box.add_child(this._icon);
+        box.add_child(this._langLabel);
+        this._indicator.add_child(box);
 
         // State
         this._recording = false;
@@ -340,6 +348,17 @@ export default class VoicshExtension extends Extension {
             this._stopPulse();
         }
 
+        // Language indicator in panel
+        if (this._langLabel) {
+            const showLabel = this._settings?.get_boolean('show-language-label') ?? true;
+            if (showLabel && this._language && this._language !== 'auto') {
+                this._langLabel.text = this._language.substring(0, 2).toUpperCase();
+                this._langLabel.visible = true;
+            } else {
+                this._langLabel.visible = false;
+            }
+        }
+
         // Update menu labels
         const langLabel = this._language === 'auto' ? 'Auto' : (this._language || '—').toUpperCase();
         this._languageMenu.label.text = `Language: ${langLabel}`;
@@ -442,7 +461,7 @@ export default class VoicshExtension extends Extension {
             for (const model of response.models) {
                 if (model.quantized && !this._showQuantized) continue;
 
-                const suffix = model.installed ? '' : ` (${model.size_mb} MB, download)`;
+                const suffix = model.installed ? ` (${model.size_mb} MB)` : ` (${model.size_mb} MB, download)`;
                 const quantTag = model.quantized ? ' [Q]' : '';
                 const label = `${model.name}${quantTag}${suffix}`;
                 const item = new PopupMenu.PopupMenuItem(label);
