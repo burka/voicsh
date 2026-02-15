@@ -24,9 +24,9 @@ Default command, pipe mode, GPU, daemon mode.
 - [x] Hallucination filtering (configurable, language-specific)
 - [x] Fan-out mode — run English + multilingual models in parallel, pick best
 
-## 0.1.0 — Voice commands (in progress)
+## 0.1.0 — Usable voice typing (in progress)
 
-Spoken punctuation, formatting, and keyboard control.
+Multi-language support, GNOME Shell extension, spoken punctuation, per-token confidence, hallucination filtering, and quantized models.
 
 - [x] Punctuation: "period", "comma", "question mark", "exclamation mark", etc.
 - [x] Whitespace: "new line", "new paragraph", "space", "tab"
@@ -42,12 +42,11 @@ Spoken punctuation, formatting, and keyboard control.
 - [x] GNOME extension: "Open Debug Log" menu item (launches `voicsh follow` in terminal)
 - [x] GNOME extension: follow mode with live audio levels, recording state, transcriptions
 - [x] GNOME extension: language picker + model switcher via IPC (SetLanguage/SetModel)
+- [x] GNOME extension: language indicator in panel (two-letter code next to icon, configurable)
 - [x] Unified output: daemon verbose and `voicsh follow` share one renderer (DRY)
 - [x] Per-token confidence coloring: real decoder probabilities (green/default/yellow/red)
 - [x] Hallucination filter: 76+ phrases, CJK punctuation normalization, punctuation-only skip
 - [x] Quantized model support (q5_0, q5_1, q8_0 variants)
-- [ ] Voice commands working reliably end-to-end
-- [ ] GNOME extension: portal per-recording (close RemoteDesktop session when idle, remove yellow privacy indicator)
 
 ## 0.2.0 — Post-ASR error correction
 
@@ -74,10 +73,11 @@ GPU acceleration and enhanced error correction pipeline.
 - GPU compilation gates: CUDA, Vulkan, hipBLAS in CI containers
 - Vulkan runtime tests via lavapipe
 
-## 0.4.0 — Overlay and sentence refinement
+## 0.4.0 — Reliable spoken punctuation and overlay
 
-Wayland overlay that collects dictated fragments, refines them with an LLM into complete sentences, then injects the polished result.
+Spoken punctuation that works reliably. Wayland overlay for live feedback.
 
+- Reliable spoken punctuation end-to-end (building on 0.1.0 foundation + 0.2.0 error correction)
 - Wayland layer-shell overlay: recording indicator + live transcription display
 - Per-token confidence visualization in overlay (color-coded, same scale as terminal)
 - Sentence collector: buffer dictated chunks in the overlay instead of injecting immediately
@@ -87,7 +87,17 @@ Wayland overlay that collects dictated fragments, refines them with an LLM into 
   - Uses local LLM (Ollama / llama.cpp) or cloud (Anthropic, OpenAI)
   - Timeout + fallback to raw transcription if LLM is unavailable
 
-## 0.5.0 — LLM assistant
+## 0.5.0 — Voice commands
+
+Full voice commands beyond punctuation — navigation, selection, editing, app control.
+
+- Voice commands working reliably end-to-end (leveraging 0.4.0 reliable punctuation pipeline)
+- Navigation: "go to line", "scroll up/down", "page up/down"
+- Selection: "select word", "select line", "select all"
+- Editing: "undo", "redo", "copy", "paste", "cut"
+- Extensible command vocabulary via config
+
+## 0.6.0 — LLM assistant
 
 Voice-activated LLM: hold key + speak a question → LLM processes → answer injected as text.
 
@@ -105,6 +115,7 @@ Voice-activated LLM: hold key + speak a question → LLM processes → answer in
 - German grammar correction: t5-small-grammar-correction-german (aiassociates) via candle
 - Deepgram remote API integration (cloud ASR alternative)
 - NVIDIA Canary / NeMo support via local docker container (nvcr.io/nvidia/nemo) — high-quality local ASR alternative (~20GB+)
+- GNOME extension: portal per-recording (close RemoteDesktop session when idle, remove yellow privacy indicator)
 
 ## Non-goals
 
