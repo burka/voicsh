@@ -14,11 +14,7 @@ Offline, privacy-first voice typing. Speak into your mic, text appears in your f
 
 **Run (mic mode):** `sudo apt install wl-clipboard wtype ydotool` — GNOME 45+ / KDE 6.1+ work without wtype/ydotool; pipe mode has no runtime deps
 
-> **Status: Early MVP (v0.0.1)**
->
-> Free-time side project. Primary target: **Ubuntu + GNOME + Wayland** — that's what I develop and test on. Other distros, desktops, and compositors are welcome, but I can't reproduce issues outside this setup. Maintenance time is limited.
->
-> If something doesn't work, [open an issue](https://github.com/burka/voicsh/issues) so we can improve it together. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to make the most of limited maintenance bandwidth.
+> **Early stage** — free-time side project. Primary target: **Ubuntu + GNOME + Wayland**. Other distros and compositors are welcome, but I can only test on this setup. If something doesn't work, [open an issue](https://github.com/burka/voicsh/issues). See [CONTRIBUTING.md](CONTRIBUTING.md) for how to help.
 
 ## Quick start
 
