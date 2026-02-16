@@ -28,6 +28,12 @@ pub enum Command {
     SetModel { model: String },
     /// List available models
     ListModels,
+    /// Enable or disable post-ASR error correction (English only)
+    SetErrorCorrection { enabled: bool },
+    /// Set the error correction model
+    SetCorrectionModel { model: String },
+    /// List available error correction models
+    ListCorrectionModels,
 }
 
 impl Command {
@@ -52,6 +58,27 @@ pub struct ModelInfoResponse {
     pub quantized: bool,
 }
 
+/// Correction model information returned to clients.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CorrectionModelInfoResponse {
+    pub name: String,
+    pub display_name: String,
+    pub size_mb: u32,
+    pub description: String,
+}
+
+#[cfg(feature = "model-download")]
+impl From<&crate::models::correction_catalog::CorrectionModelInfo> for CorrectionModelInfoResponse {
+    fn from(m: &crate::models::correction_catalog::CorrectionModelInfo) -> Self {
+        Self {
+            name: m.name.to_string(),
+            display_name: m.display_name.to_string(),
+            size_mb: m.size_mb,
+            description: m.description.to_string(),
+        }
+    }
+}
+
 /// Responses sent by daemon to CLI.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -69,6 +96,8 @@ pub enum Response {
         daemon_version: String,
         backend: String,
         device: Option<String>,
+        error_correction_enabled: bool,
+        error_correction_model: Option<String>,
     },
     /// Error occurred
     Error { message: String },
@@ -81,6 +110,12 @@ pub enum Response {
     Models {
         models: Vec<ModelInfoResponse>,
         current: String,
+    },
+    /// Available error correction models list
+    CorrectionModels {
+        models: Vec<CorrectionModelInfoResponse>,
+        current: String,
+        enabled: bool,
     },
 }
 
@@ -103,6 +138,8 @@ pub enum TextOrigin {
     /// Direct Whisper output, unmodified.
     #[default]
     Transcription,
+    /// Post-ASR error correction applied (e.g. Flan-T5).
+    Corrected,
     /// Voice command replacement applied.
     VoiceCommand,
 }
@@ -212,6 +249,11 @@ mod tests {
                 model: "large".to_string(),
             },
             Command::ListModels,
+            Command::SetErrorCorrection { enabled: true },
+            Command::SetCorrectionModel {
+                model: "flan-t5-base".to_string(),
+            },
+            Command::ListCorrectionModels,
         ];
 
         for cmd in commands {
@@ -274,6 +316,8 @@ mod tests {
             daemon_version: "0.0.1+test".to_string(),
             backend: "CPU".to_string(),
             device: None,
+            error_correction_enabled: false,
+            error_correction_model: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -294,6 +338,8 @@ mod tests {
             daemon_version: "0.0.1".to_string(),
             backend: "CPU".to_string(),
             device: None,
+            error_correction_enabled: false,
+            error_correction_model: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -310,6 +356,8 @@ mod tests {
             daemon_version: "0.0.1+test".to_string(),
             backend: "CUDA".to_string(),
             device: Some("RTX 5060 Ti".to_string()),
+            error_correction_enabled: false,
+            error_correction_model: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -327,6 +375,8 @@ mod tests {
             daemon_version: "0.0.1".to_string(),
             backend: "CPU".to_string(),
             device: None,
+            error_correction_enabled: false,
+            error_correction_model: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -988,7 +1038,11 @@ mod tests {
 
     #[test]
     fn text_origin_json_roundtrip() {
-        let origins = vec![TextOrigin::Transcription, TextOrigin::VoiceCommand];
+        let origins = vec![
+            TextOrigin::Transcription,
+            TextOrigin::Corrected,
+            TextOrigin::VoiceCommand,
+        ];
         for origin in origins {
             let json = serde_json::to_string(&origin).expect("should serialize");
             let deserialized: TextOrigin = serde_json::from_str(&json).expect("should deserialize");
@@ -1001,6 +1055,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&TextOrigin::Transcription).unwrap(),
             r#""transcription""#
+        );
+        assert_eq!(
+            serde_json::to_string(&TextOrigin::Corrected).unwrap(),
+            r#""corrected""#
         );
         assert_eq!(
             serde_json::to_string(&TextOrigin::VoiceCommand).unwrap(),
@@ -1068,5 +1126,108 @@ mod tests {
             }
             _ => panic!("Expected Transcription event"),
         }
+    }
+
+    // Error correction command tests
+
+    #[test]
+    fn test_command_set_error_correction_json_roundtrip() {
+        let cmd = Command::SetErrorCorrection { enabled: true };
+        let json = cmd.to_json().expect("should serialize");
+        let deserialized = Command::from_json(&json).expect("should deserialize");
+        assert_eq!(cmd, deserialized);
+        assert_eq!(json, r#"{"type":"set_error_correction","enabled":true}"#);
+
+        let cmd = Command::SetErrorCorrection { enabled: false };
+        let json = cmd.to_json().expect("should serialize");
+        let deserialized = Command::from_json(&json).expect("should deserialize");
+        assert_eq!(cmd, deserialized);
+        assert_eq!(json, r#"{"type":"set_error_correction","enabled":false}"#);
+    }
+
+    #[test]
+    fn test_command_set_correction_model_json_roundtrip() {
+        let cmd = Command::SetCorrectionModel {
+            model: "flan-t5-base".to_string(),
+        };
+        let json = cmd.to_json().expect("should serialize");
+        let deserialized = Command::from_json(&json).expect("should deserialize");
+        assert_eq!(cmd, deserialized);
+        assert_eq!(
+            json,
+            r#"{"type":"set_correction_model","model":"flan-t5-base"}"#
+        );
+    }
+
+    #[test]
+    fn test_command_list_correction_models_json_roundtrip() {
+        let cmd = Command::ListCorrectionModels;
+        let json = cmd.to_json().expect("should serialize");
+        let deserialized = Command::from_json(&json).expect("should deserialize");
+        assert_eq!(cmd, deserialized);
+        assert_eq!(json, r#"{"type":"list_correction_models"}"#);
+    }
+
+    #[test]
+    fn test_correction_model_info_response_json_roundtrip() {
+        let info = CorrectionModelInfoResponse {
+            name: "flan-t5-small".to_string(),
+            display_name: "Flan-T5 Small (English, 64 MB)".to_string(),
+            size_mb: 64,
+            description: "Fast, lower quality.".to_string(),
+        };
+        let json = serde_json::to_string(&info).expect("should serialize");
+        let deserialized: CorrectionModelInfoResponse =
+            serde_json::from_str(&json).expect("should deserialize");
+        assert_eq!(info, deserialized);
+        assert!(json.contains(r#""name":"flan-t5-small""#));
+        assert!(json.contains(r#""size_mb":64"#));
+    }
+
+    #[test]
+    fn test_response_correction_models_json_roundtrip() {
+        let resp = Response::CorrectionModels {
+            models: vec![
+                CorrectionModelInfoResponse {
+                    name: "flan-t5-small".to_string(),
+                    display_name: "Flan-T5 Small".to_string(),
+                    size_mb: 64,
+                    description: "Fast".to_string(),
+                },
+                CorrectionModelInfoResponse {
+                    name: "flan-t5-base".to_string(),
+                    display_name: "Flan-T5 Base".to_string(),
+                    size_mb: 263,
+                    description: "Balanced".to_string(),
+                },
+            ],
+            current: "flan-t5-small".to_string(),
+            enabled: false,
+        };
+        let json = resp.to_json().expect("should serialize");
+        let deserialized = Response::from_json(&json).expect("should deserialize");
+        assert_eq!(resp, deserialized);
+        assert!(json.contains(r#""type":"correction_models""#));
+        assert!(json.contains(r#""current":"flan-t5-small""#));
+    }
+
+    #[test]
+    fn test_response_status_with_error_correction_fields() {
+        let resp = Response::Status {
+            recording: false,
+            model_loaded: true,
+            model_name: Some("base".to_string()),
+            language: Some("en".to_string()),
+            daemon_version: "0.1.0".to_string(),
+            backend: "CPU".to_string(),
+            device: None,
+            error_correction_enabled: true,
+            error_correction_model: Some("flan-t5-small".to_string()),
+        };
+        let json = resp.to_json().expect("should serialize");
+        let deserialized = Response::from_json(&json).expect("should deserialize");
+        assert_eq!(resp, deserialized);
+        assert!(json.contains(r#""error_correction_enabled":true"#));
+        assert!(json.contains(r#""error_correction_model":"flan-t5-small""#));
     }
 }
