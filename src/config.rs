@@ -77,11 +77,37 @@ impl Default for VoiceCommandConfig {
     }
 }
 
+/// Error correction configuration (English only, Flan-T5 via Candle).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ErrorCorrectionConfig {
+    /// Enable post-ASR error correction (English only).
+    pub enabled: bool,
+    /// T5 model size: "flan-t5-small" (64 MB), "flan-t5-base" (263 MB), "flan-t5-large" (852 MB).
+    pub model: String,
+    /// Only correct tokens with probability below this threshold (0.0-1.0).
+    pub confidence_threshold: f32,
+    /// Timeout in milliseconds — fall back to raw text if exceeded.
+    pub timeout_ms: u64,
+}
+
+impl Default for ErrorCorrectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model: "flan-t5-small".to_string(),
+            confidence_threshold: 0.85,
+            timeout_ms: 2000,
+        }
+    }
+}
+
 /// Transcription post-processing configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct TranscriptionConfig {
     pub hallucination_filters: HallucinationFilterConfig,
+    pub error_correction: ErrorCorrectionConfig,
 }
 
 /// Hallucination filter configuration.
@@ -505,6 +531,15 @@ impl Config {
                 examples.join(", ")
             ));
         }
+        out.push('\n');
+
+        out.push_str("[transcription.error_correction]\n");
+        out.push_str("# enabled = true  # Post-ASR error correction (English only)\n");
+        out.push_str("# model = \"flan-t5-small\"  # Model size: flan-t5-small (64 MB), flan-t5-base (263 MB), flan-t5-large (852 MB)\n");
+        out.push_str(
+            "# confidence_threshold = 0.85  # Only correct tokens below this probability (0.0-1.0)\n",
+        );
+        out.push_str("# timeout_ms = 2000  # Timeout in ms, falls back to raw text\n");
         out.push('\n');
 
         out.push_str("[transcription.hallucination_filters]\n");
@@ -1948,6 +1983,160 @@ mod tests {
         assert!(
             resolved.contains(&"okay".to_string()),
             "Built-in suspect phrases should still be present"
+        );
+    }
+
+    // ── Error correction config tests ─────────────────────────────────
+
+    #[test]
+    fn test_error_correction_config_defaults() {
+        let config = ErrorCorrectionConfig::default();
+        assert!(config.enabled, "Should be enabled by default");
+        assert_eq!(config.model, "flan-t5-small");
+        assert_eq!(config.confidence_threshold, 0.85);
+        assert_eq!(config.timeout_ms, 2000);
+    }
+
+    #[test]
+    fn test_error_correction_config_from_toml() {
+        let toml_content = r#"
+            [transcription.error_correction]
+            enabled = true
+            model = "flan-t5-base"
+            confidence_threshold = 0.5
+            timeout_ms = 3000
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert!(config.transcription.error_correction.enabled);
+        assert_eq!(config.transcription.error_correction.model, "flan-t5-base");
+        assert_eq!(
+            config.transcription.error_correction.confidence_threshold,
+            0.5
+        );
+        assert_eq!(config.transcription.error_correction.timeout_ms, 3000);
+    }
+
+    #[test]
+    fn test_error_correction_config_omitted_uses_defaults() {
+        let toml_content = r#"
+            [stt]
+            model = "small.en"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert!(config.transcription.error_correction.enabled);
+        assert_eq!(config.transcription.error_correction.model, "flan-t5-small");
+        assert_eq!(
+            config.transcription.error_correction.confidence_threshold,
+            0.85
+        );
+        assert_eq!(config.transcription.error_correction.timeout_ms, 2000);
+    }
+
+    #[test]
+    fn test_error_correction_get_value_by_path() {
+        let config = Config::default();
+        let enabled = config
+            .get_value_by_path("transcription.error_correction.enabled")
+            .unwrap();
+        assert_eq!(enabled, "true");
+
+        let model = config
+            .get_value_by_path("transcription.error_correction.model")
+            .unwrap();
+        assert_eq!(model, "flan-t5-small");
+
+        let threshold: f64 = config
+            .get_value_by_path("transcription.error_correction.confidence_threshold")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            (threshold - 0.85).abs() < 0.001,
+            "threshold should be ~0.85, got {threshold}"
+        );
+
+        let timeout = config
+            .get_value_by_path("transcription.error_correction.timeout_ms")
+            .unwrap();
+        assert_eq!(timeout, "2000");
+    }
+
+    #[test]
+    fn test_error_correction_set_value_by_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config::default().save(&path).unwrap();
+
+        Config::set_value_by_path(&path, "transcription.error_correction.enabled", "true")
+            .unwrap();
+        let reloaded = Config::load(&path).unwrap();
+        assert!(reloaded.transcription.error_correction.enabled);
+
+        Config::set_value_by_path(
+            &path,
+            "transcription.error_correction.model",
+            "flan-t5-large",
+        )
+        .unwrap();
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(
+            reloaded.transcription.error_correction.model,
+            "flan-t5-large"
+        );
+    }
+
+    #[test]
+    fn test_error_correction_in_dump_template() {
+        let template = Config::dump_template();
+        assert!(
+            template.contains("[transcription.error_correction]"),
+            "Missing [transcription.error_correction] section"
+        );
+        assert!(
+            template.contains("flan-t5-small"),
+            "Missing default model in template"
+        );
+        assert!(
+            template.contains("confidence_threshold"),
+            "Missing confidence_threshold in template"
+        );
+        assert!(
+            template.contains("timeout_ms"),
+            "Missing timeout_ms in template"
+        );
+    }
+
+    #[test]
+    fn test_error_correction_roundtrip() {
+        let config = Config {
+            transcription: TranscriptionConfig {
+                error_correction: ErrorCorrectionConfig {
+                    enabled: true,
+                    model: "flan-t5-large".to_string(),
+                    confidence_threshold: 0.5,
+                    timeout_ms: 5000,
+                },
+                ..TranscriptionConfig::default()
+            },
+            ..Config::default()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(
+            reloaded.transcription.error_correction,
+            config.transcription.error_correction
         );
     }
 }

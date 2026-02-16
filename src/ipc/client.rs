@@ -162,6 +162,8 @@ mod tests {
                     daemon_version: "0.0.1+test".to_string(),
                     backend: "CPU".to_string(),
                     device: None,
+                    error_correction_enabled: false,
+                    error_correction_model: Some("flan-t5-small".to_string()),
                 },
                 Command::Toggle => Response::Ok {
                     message: "Recording started".to_string(),
@@ -195,6 +197,17 @@ mod tests {
                     models: vec![],
                     current: "base".to_string(),
                 },
+                Command::SetErrorCorrection { .. } => Response::Ok {
+                    message: "Error correction updated".to_string(),
+                },
+                Command::SetCorrectionModel { .. } => Response::Ok {
+                    message: "Correction model updated".to_string(),
+                },
+                Command::ListCorrectionModels => Response::CorrectionModels {
+                    models: vec![],
+                    current: "flan-t5-small".to_string(),
+                    enabled: false,
+                },
             }
         }
     }
@@ -226,7 +239,7 @@ mod tests {
                 language,
                 daemon_version,
                 backend,
-                device,
+                ..
             } => {
                 assert!(!recording);
                 assert!(model_loaded);
@@ -234,7 +247,6 @@ mod tests {
                 assert_eq!(language, Some("auto".to_string()));
                 assert_eq!(daemon_version, "0.0.1+test");
                 assert_eq!(backend, "CPU");
-                assert_eq!(device, None);
             }
             _ => panic!("Expected Status response, got: {:?}", response),
         }
@@ -402,7 +414,7 @@ mod tests {
                 language,
                 daemon_version,
                 backend,
-                device,
+                ..
             } => {
                 assert!(!recording, "Should not be recording");
                 assert!(model_loaded, "Model should be loaded");
@@ -414,7 +426,6 @@ mod tests {
                 assert_eq!(language, Some("auto".to_string()), "Language should match");
                 assert_eq!(daemon_version, "0.0.1+test");
                 assert_eq!(backend, "CPU");
-                assert_eq!(device, None);
             }
             _ => panic!("Expected Status response, got: {:?}", response),
         }

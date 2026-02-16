@@ -15,6 +15,7 @@ static HYPRCTL_BROKEN: AtomicBool = AtomicBool::new(false);
 static GNOME_DBUS_BROKEN: AtomicBool = AtomicBool::new(false);
 static GNOME_INTROSPECT_BROKEN: AtomicBool = AtomicBool::new(false);
 static PASTE_LOGGED: AtomicBool = AtomicBool::new(false);
+static FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Reset detection cache. Call when session environment may have changed
 /// (e.g. compositor restart in daemon mode).
@@ -24,6 +25,7 @@ pub fn reset_detection_cache() {
     GNOME_DBUS_BROKEN.store(false, Ordering::Relaxed);
     GNOME_INTROSPECT_BROKEN.store(false, Ordering::Relaxed);
     PASTE_LOGGED.store(false, Ordering::Relaxed);
+    FALLBACK_LOGGED.store(false, Ordering::Relaxed);
 }
 
 /// Check if an I/O error is permanent (binary not found or permission denied).
@@ -108,11 +110,12 @@ pub fn resolve_paste_key(configured: &str, verbosity: u8) -> &str {
                 "  [paste] {} app_id=\"{}\" → {:?} → {}",
                 method, id, kind, key
             ),
-            None => eprintln!(
+            None if !PASTE_LOGGED.swap(true, Ordering::Relaxed) => eprintln!(
                 "  [paste] {} → {:?} → {}\n  \
                  Hint: Set paste_key in config if wrong: paste_key = \"ctrl+shift+v\"",
                 method, kind, key
             ),
+            None => {}
         }
     } else if verbosity >= 1 && !PASTE_LOGGED.swap(true, Ordering::Relaxed) {
         match &app_id {
@@ -166,7 +169,7 @@ fn detect_window_kind_verbose(verbose: bool) -> (WindowKind, Option<String>, &'s
     if is_gnome_desktop() {
         // On GNOME, Ctrl+Shift+V is the safer default:
         // works in terminals AND as "paste unformatted" in most GUI apps.
-        if verbose {
+        if verbose && !FALLBACK_LOGGED.swap(true, Ordering::Relaxed) {
             eprintln!("  [paste] GNOME detected, defaulting to ctrl+shift+v");
         }
         (WindowKind::Terminal, None, "gnome-fallback")
