@@ -15,6 +15,7 @@ pub mod transcriber_station;
 pub mod types;
 pub mod vad_station;
 
+pub use crate::correction::station::CorrectionStation;
 pub use chunker_station::ChunkerStation;
 pub use error::{ErrorReporter, LogReporter, StationError};
 pub use latency::{LatencyTracker, TranscriptionTiming};

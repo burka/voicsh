@@ -2,6 +2,7 @@
 
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::{Clock, SystemClock, VadConfig};
+use crate::correction::station::CorrectionStation;
 use crate::error::Result;
 use crate::ipc::protocol::DaemonEvent;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
@@ -152,11 +153,12 @@ impl PipelineHandle {
     }
 }
 
-/// Audio pipeline: AudioSource → VAD → Chunker → Transcriber → TextSink.
+/// Audio pipeline: AudioSource → VAD → Chunker → Transcriber → [Correction] → TextSink.
 pub struct Pipeline {
     config: PipelineConfig,
     error_reporter: Arc<dyn ErrorReporter>,
     clock: Arc<dyn Clock>,
+    correction_station: Option<CorrectionStation>,
 }
 
 impl Pipeline {
@@ -166,6 +168,7 @@ impl Pipeline {
             config,
             error_reporter: Arc::new(LogReporter),
             clock: Arc::new(SystemClock),
+            correction_station: None,
         }
     }
 
@@ -178,6 +181,12 @@ impl Pipeline {
     /// Sets a custom clock (for deterministic testing).
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    /// Sets an optional correction station for post-ASR error correction.
+    pub fn with_correction(mut self, station: CorrectionStation) -> Self {
+        self.correction_station = Some(station);
         self
     }
 
@@ -280,16 +289,35 @@ impl Pipeline {
             self.error_reporter.clone(),
         );
 
-        // Wire post-processor between transcriber and sink (if any processors provided)
+        // Wire correction station between transcriber and post-processors (if present)
         let mut extra_threads: Vec<JoinHandle<()>> = Vec::new();
-        let sink_input_rx = if post_processors.is_empty() {
+        let corrected_rx = if let Some(correction_station) = self.correction_station {
+            let (correction_tx, correction_rx) = bounded(self.config.transcribe_buffer);
+            let correction_runner = StationRunner::spawn(
+                correction_station,
+                transcribe_rx,
+                correction_tx,
+                self.error_reporter.clone(),
+            );
+            extra_threads.push(thread::spawn(move || {
+                if let Err(msg) = correction_runner.join() {
+                    eprintln!("voicsh: {msg}");
+                }
+            }));
+            correction_rx
+        } else {
             transcribe_rx
+        };
+
+        // Wire post-processor between correction and sink (if any processors provided)
+        let sink_input_rx = if post_processors.is_empty() {
+            corrected_rx
         } else {
             let (post_tx, post_rx) = bounded(self.config.post_process_buffer);
             let post_station = PostProcessorStation::new(post_processors);
             let post_runner = StationRunner::spawn(
                 post_station,
-                transcribe_rx,
+                corrected_rx,
                 post_tx,
                 self.error_reporter.clone(),
             );

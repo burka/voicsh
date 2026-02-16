@@ -370,6 +370,8 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                 daemon_version,
                 backend,
                 device,
+                error_correction_enabled,
+                error_correction_model,
             } => {
                 let client_version = voicsh::version_string();
 
@@ -399,6 +401,15 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                 // Language
                 if let Some(lang) = language {
                     println!("  {}  {}", "Language:".dimmed(), lang);
+                }
+                // Error correction
+                if error_correction_enabled {
+                    let model_name = error_correction_model.as_deref().unwrap_or("flan-t5-small");
+                    println!(
+                        "  {} enabled ({}, English only)",
+                        "Correction:".dimmed(),
+                        model_name
+                    );
                 }
             }
             Response::Languages { languages, current } => {
@@ -431,6 +442,31 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                         );
                     } else {
                         println!("  ○ {} ({}MB, {}, {})", m.name, m.size_mb, lang, installed);
+                    }
+                }
+            }
+            Response::CorrectionModels {
+                models,
+                current,
+                enabled,
+            } => {
+                let status = if enabled { "enabled" } else { "disabled" };
+                println!(
+                    "Error correction models (current: {}, {}):",
+                    current.green(),
+                    status
+                );
+                for m in &models {
+                    if m.name == current {
+                        println!(
+                            "  {} {} ({}MB) — {}",
+                            "●".green(),
+                            m.name,
+                            m.size_mb,
+                            m.description
+                        );
+                    } else {
+                        println!("  ○ {} ({}MB) — {}", m.name, m.size_mb, m.description);
                     }
                 }
             }

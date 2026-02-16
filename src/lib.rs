@@ -13,6 +13,7 @@ pub mod benchmark;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod config;
+pub mod correction;
 #[cfg(all(feature = "cpal-audio", feature = "model-download"))]
 pub mod daemon;
 pub mod defaults;
@@ -56,6 +57,12 @@ pub use config::{Config, InjectionMethod, resolve_hallucination_filters};
 // Station framework (for advanced users)
 pub use pipeline::error::{ErrorReporter, StationError};
 pub use pipeline::station::Station;
+
+// Correction
+#[cfg(feature = "error-correction")]
+pub use correction::candle_t5::CandleT5Corrector;
+pub use correction::corrector::Corrector;
+pub use correction::station::CorrectionStation;
 
 /// Build version string with optional git commit hash.
 ///
