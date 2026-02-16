@@ -1,5 +1,5 @@
 {
-    "uuid": "voicsh@voicsh.dev",
+    "uuid": "voicsh@voic.sh",
     "name": "voicsh",
     "description": "Voice typing indicator and control for voicsh",
     "shell-version": ["45", "46", "47", "48", "49"],

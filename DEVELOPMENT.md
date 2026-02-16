@@ -114,7 +114,7 @@ All external dependencies are behind traits with test doubles:
 
 ## GNOME Extension Development
 
-The extension lives in `gnome/voicsh@voicsh.dev/`.
+The extension lives in `gnome/voicsh@voic.sh/`.
 
 ### Nested Shell (UI and IPC iteration)
 
@@ -141,7 +141,7 @@ For testing text injection, install the extension in your real session and log o
 
 ```bash
 # Symlink is already set up by dev.sh, just enable in real session:
-gnome-extensions enable voicsh@voicsh.dev
+gnome-extensions enable voicsh@voic.sh
 # Log out and back in to load the extension
 ```
 

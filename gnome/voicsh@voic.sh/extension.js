@@ -48,10 +48,14 @@ export default class VoicshExtension extends Extension {
         this._followConnection = null;
         this._followReader = null;
         this._followCancellable = null;
+        this._binaryPath = null;
         this._followBackoff = 1;
         this._reconnectId = null;
         this._pulseId = null;
         this._showQuantized = false;
+        this._daemonVersion = null;
+        this._errorCorrectionEnabled = false;
+        this._correctionModel = null;
 
         // Settings (needed before menu for shortcut label, and before keybinding)
         this._settings = this.getSettings();
@@ -83,20 +87,21 @@ export default class VoicshExtension extends Extension {
 
         this._debugItem = new PopupMenu.PopupMenuItem('Open Debug Log');
         this._debugItem.connect('activate', () => {
+            const bin = this._binaryPath || 'voicsh';
             // Launch terminal with voicsh follow for live debugging
             try {
                 GLib.spawn_command_line_async(
-                    'gnome-terminal -- bash -c "voicsh follow; read -p \'Press Enter to close...\'"'
+                    `gnome-terminal -- bash -c "${bin} follow; read -p 'Press Enter to close...'"`,
                 );
             } catch (e) {
                 // Try alternative terminals
                 try {
                     GLib.spawn_command_line_async(
-                        'xterm -e "voicsh follow; read -p \'Press Enter to close...\'"'
+                        `xterm -e "${bin} follow; read -p 'Press Enter to close...'"`,
                     );
                 } catch (e2) {
                     // Fallback: just try to open voicsh follow
-                    GLib.spawn_command_line_async('voicsh follow');
+                    GLib.spawn_command_line_async(`${bin} follow`);
                 }
             }
         });
@@ -108,6 +113,15 @@ export default class VoicshExtension extends Extension {
         this._modelMenu = new PopupMenu.PopupSubMenuMenuItem('Model: —');
         this._indicator.menu.addMenuItem(this._modelMenu);
 
+        this._correctionMenu = new PopupMenu.PopupSubMenuMenuItem('Correction: off (English)');
+        this._indicator.menu.addMenuItem(this._correctionMenu);
+
+        this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._versionItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+        this._versionLabel = new St.Label({ text: 'voicsh', style_class: 'voicsh-version-label' });
+        this._versionItem.add_child(this._versionLabel);
+        this._indicator.menu.addMenuItem(this._versionItem);
+
         // Add to panel
         Main.panel.addToStatusArea('voicsh', this._indicator);
 
@@ -116,6 +130,7 @@ export default class VoicshExtension extends Extension {
             if (isOpen) {
                 this._populateLanguageMenu();
                 this._populateModelMenu();
+                this._populateCorrectionMenu();
                 if (this._recording) {
                     this._updateLevelBar();
                 }
@@ -257,6 +272,14 @@ export default class VoicshExtension extends Extension {
             case 'config_changed':
                 if (event.key === 'language' && event.value) this._language = event.value;
                 if (event.key === 'model' && event.value) this._modelName = event.value;
+                if (event.key === 'error_correction') {
+                    this._errorCorrectionEnabled = event.value === 'true';
+                    this._updateCorrectionMenuLabel();
+                }
+                if (event.key === 'correction_model') {
+                    this._correctionModel = event.value;
+                    this._updateCorrectionMenuLabel();
+                }
                 this._updateUi();
                 break;
             case 'model_loading':
@@ -273,6 +296,11 @@ export default class VoicshExtension extends Extension {
             case 'model_load_failed':
                 this._modelLoading = false;
                 this._updateModelMenu();
+                break;
+            case 'daemon_info':
+                this._binaryPath = event.binary_path || null;
+                this._daemonVersion = event.version || null;
+                this._updateVersionLabel();
                 break;
             case 'log':
                 // ignore
@@ -317,6 +345,10 @@ export default class VoicshExtension extends Extension {
         this._recording = false;
         this._modelName = null;
         this._language = null;
+        this._binaryPath = null;
+        this._daemonVersion = null;
+        this._errorCorrectionEnabled = false;
+        this._correctionModel = null;
         this._updateUi();
     }
 
@@ -363,6 +395,8 @@ export default class VoicshExtension extends Extension {
         const langLabel = this._language === 'auto' ? 'Auto' : (this._language || '—').toUpperCase();
         this._languageMenu.label.text = `Language: ${langLabel}`;
         this._updateModelMenu();
+        this._updateCorrectionMenuLabel();
+        this._updateVersionLabel();
     }
 
     _updateModelMenu() {
@@ -486,6 +520,70 @@ export default class VoicshExtension extends Extension {
             this._modelMenu.label.text = `Model: ${response.current}`;
         } catch (e) {
             // Keep existing label
+        }
+    }
+
+    async _populateCorrectionMenu() {
+        try {
+            const response = await this._ipcRequest({ type: 'list_correction_models' });
+            if (response?.type !== 'correction_models') return;
+
+            this._correctionMenu.menu.removeAll();
+            this._errorCorrectionEnabled = response.enabled;
+            this._correctionModel = response.current;
+
+            // Toggle on/off
+            const toggleLabel = response.enabled ? 'Disable Error Correction' : 'Enable Error Correction';
+            const toggleItem = new PopupMenu.PopupMenuItem(toggleLabel);
+            toggleItem.connect('activate', () => {
+                this._sendCommand({ type: 'set_error_correction', enabled: !response.enabled });
+            });
+            this._correctionMenu.menu.addMenuItem(toggleItem);
+
+            this._correctionMenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+            // Model picker
+            for (const model of response.models) {
+                const item = new PopupMenu.PopupMenuItem(`${model.display_name}`);
+                if (model.name === response.current) {
+                    item.setOrnament(PopupMenu.Ornament.CHECK);
+                }
+                if (!response.enabled) {
+                    item.setSensitive(false);
+                }
+                item.connect('activate', () => {
+                    this._sendCommand({ type: 'set_correction_model', model: model.name });
+                });
+                this._correctionMenu.menu.addMenuItem(item);
+            }
+
+            // Update parent label
+            this._updateCorrectionMenuLabel();
+
+            // Grey out if not English
+            const isEnglish = !this._language || this._language === 'en' || this._language === 'auto';
+            this._correctionMenu.setSensitive(isEnglish);
+        } catch (e) {
+            console.debug(`voicsh: failed to populate correction menu: ${e.message}`);
+        }
+    }
+
+    _updateCorrectionMenuLabel() {
+        if (!this._correctionMenu) return;
+        if (this._errorCorrectionEnabled) {
+            const model = this._correctionModel || 'flan-t5-small';
+            this._correctionMenu.label.text = `Correction: ${model} (English)`;
+        } else {
+            this._correctionMenu.label.text = 'Correction: off (English)';
+        }
+    }
+
+    _updateVersionLabel() {
+        if (!this._versionLabel) return;
+        if (this._connected && this._daemonVersion) {
+            this._versionLabel.text = `voicsh v${this._daemonVersion}`;
+        } else {
+            this._versionLabel.text = 'voicsh';
         }
     }
 

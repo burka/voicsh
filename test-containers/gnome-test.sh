@@ -5,7 +5,7 @@ set -euo pipefail
 # Uses ddterm/gnome-shell-image (Fedora 43, GNOME Shell 49).
 
 IMAGE="ghcr.io/ddterm/gnome-shell-image/fedora-43"
-EXT_DIR="$(cd "$(dirname "$0")/.." && pwd)/gnome/voicsh@voicsh.dev"
+EXT_DIR="$(cd "$(dirname "$0")/.." && pwd)/gnome/voicsh@voic.sh"
 CID=""
 
 cleanup() {
@@ -36,7 +36,7 @@ ENV_ARGS=(
 )
 
 echo "=== Installing voicsh extension (before Shell starts) ==="
-EXT_DEST="/root/.local/share/gnome-shell/extensions/voicsh@voicsh.dev"
+EXT_DEST="/root/.local/share/gnome-shell/extensions/voicsh@voic.sh"
 docker exec "$CID" mkdir -p "$EXT_DEST/schemas"
 docker cp "$EXT_DIR/extension.js"   "$CID:$EXT_DEST/"
 docker cp "$EXT_DIR/metadata.json"  "$CID:$EXT_DEST/"
@@ -57,7 +57,7 @@ ENV_ARGS+=("--env=DBUS_SESSION_BUS_ADDRESS=unix:path=$RUNTIME_DIR/bus")
 
 echo "=== Enabling extension via gsettings ==="
 docker exec "${ENV_ARGS[@]}" "$CID" \
-    gsettings set org.gnome.shell enabled-extensions "['voicsh@voicsh.dev']"
+    gsettings set org.gnome.shell enabled-extensions "['voicsh@voic.sh']"
 docker exec "${ENV_ARGS[@]}" "$CID" \
     gsettings set org.gnome.shell disable-user-extensions false
 
@@ -81,7 +81,7 @@ sleep 2
 
 echo "=== Checking extension status ==="
 docker exec "${ENV_ARGS[@]}" "$CID" \
-    gnome-extensions info voicsh@voicsh.dev 2>&1 || true
+    gnome-extensions info voicsh@voic.sh 2>&1 || true
 
 echo ""
 echo "=== Checking for extension errors in journal ==="
