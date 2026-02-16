@@ -259,6 +259,18 @@ where
         }
     };
 
+    // Send daemon info as first event
+    let binary_path = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let info_event = DaemonEvent::DaemonInfo {
+        binary_path,
+        version: crate::version_string(),
+    };
+    if !write_event(&mut writer, &info_event).await {
+        return Ok(());
+    }
+
     // Send initial state to the follow client
     let status_response = handler.handle(Command::Status).await;
     if let Response::Status {

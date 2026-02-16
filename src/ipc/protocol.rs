@@ -137,6 +137,11 @@ pub enum DaemonEvent {
     ModelLoaded { model: String },
     /// Model loading failed
     ModelLoadFailed { model: String, error: String },
+    /// Daemon metadata sent once on follow connect
+    DaemonInfo {
+        binary_path: String,
+        version: String,
+    },
 }
 
 impl DaemonEvent {
@@ -688,6 +693,10 @@ mod tests {
             DaemonEvent::Log {
                 message: "test".to_string(),
             },
+            DaemonEvent::DaemonInfo {
+                binary_path: "/usr/bin/voicsh".to_string(),
+                version: "0.1.0+abc1234".to_string(),
+            },
         ];
 
         for event in events {
@@ -902,6 +911,21 @@ mod tests {
         assert_eq!(
             json,
             r#"{"type":"model_load_failed","model":"large","error":"Download failed"}"#
+        );
+    }
+
+    #[test]
+    fn test_daemon_event_daemon_info_json_roundtrip() {
+        let event = DaemonEvent::DaemonInfo {
+            binary_path: "/home/user/.cargo/bin/voicsh".to_string(),
+            version: "0.1.0+abc1234".to_string(),
+        };
+        let json = event.to_json().expect("should serialize");
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+        assert_eq!(
+            json,
+            r#"{"type":"daemon_info","binary_path":"/home/user/.cargo/bin/voicsh","version":"0.1.0+abc1234"}"#
         );
     }
 

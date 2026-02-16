@@ -116,6 +116,13 @@ pub fn render_event(event: &DaemonEvent) {
             clear_line();
             eprintln!("{RED}Model {model} failed: {error}{RESET}");
         }
+        DaemonEvent::DaemonInfo {
+            binary_path,
+            version,
+        } => {
+            clear_line();
+            eprintln!("{DIM}Daemon v{version} ({binary_path}){RESET}");
+        }
     }
 }
 
@@ -173,6 +180,11 @@ mod tests {
         render_event(&DaemonEvent::ModelLoadFailed {
             model: "base".to_string(),
             error: "download failed".to_string(),
+        });
+
+        render_event(&DaemonEvent::DaemonInfo {
+            binary_path: "/usr/bin/voicsh".to_string(),
+            version: "0.1.0+abc1234".to_string(),
         });
     }
 

@@ -87,7 +87,7 @@ export default class VoicshExtension extends Extension {
 
         this._debugItem = new PopupMenu.PopupMenuItem('Open Debug Log');
         this._debugItem.connect('activate', () => {
-            const bin = this._binaryPath || 'voicsh';
+            const bin = GLib.shell_quote(this._binaryPath || 'voicsh');
             // Launch terminal with voicsh follow for live debugging
             try {
                 GLib.spawn_command_line_async(
