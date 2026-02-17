@@ -20,7 +20,44 @@ sudo pacman -S base-devel cmake pkgconf clang alsa-lib
 
 For the authoritative list of system dependencies, see [`test-containers/Dockerfile.vulkan`](test-containers/Dockerfile.vulkan).
 
-For runtime text injection, install `wl-clipboard` plus either `wtype` (wlroots) or `ydotool` (fallback).
+### Runtime Dependencies
+
+Text injection requires `wl-clipboard` plus either `wtype` (wlroots) or `ydotool` (fallback):
+
+```bash
+# Debian/Ubuntu:
+sudo apt install wl-clipboard wtype
+
+# Fedora:
+sudo dnf install wl-clipboard wtype
+
+# Arch:
+sudo pacman -S wl-clipboard wtype
+```
+
+### GPU Backend Dependencies
+
+GPU backends are optional. Add their system packages before building with `--features <backend>`.
+
+| Backend | Feature flag | System packages (Debian/Ubuntu) |
+|---------|-------------|--------------------------------|
+| Vulkan | `vulkan` | `libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc` |
+| CUDA | `cuda` | NVIDIA driver + [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (`nvcc`) |
+| HipBLAS | `hipblas` | [ROCm](https://rocm.docs.amd.com/) (`rocminfo`) |
+| OpenBLAS | `openblas` | `libopenblas-dev` |
+
+```bash
+# Vulkan (Intel/AMD/NVIDIA — Debian/Ubuntu):
+sudo apt install libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc
+
+# CUDA (NVIDIA only — see link above for toolkit install):
+# Requires: nvidia-smi, nvcc
+
+# OpenBLAS (CPU-only BLAS optimization):
+sudo apt install libopenblas-dev
+```
+
+**Vulkan build troubleshooting:** If you see `unresolved import ggml_backend_vk_*` errors, `libclang-dev` is likely missing. The `whisper-rs-sys` build uses bindgen to generate FFI bindings from `ggml-vulkan.h` — without clang's built-in headers (`stdbool.h`), bindgen silently falls back to pre-built bindings that lack Vulkan symbols. Fix: `sudo apt install libclang-dev`.
 
 ## Local Install
 

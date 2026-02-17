@@ -147,12 +147,91 @@ fn check_vulkan() {
             ╔══════════════════════════════════════════════════════════╗\n\
             ║  `vulkaninfo` not found — Vulkan SDK is not installed.   ║\n\
             ║                                                          ║\n\
-            ║  Install: https://vulkan.lunarg.com/                     ║\n\
+            ║  Install: sudo apt install libvulkan-dev                  ║\n\
+            ║           mesa-vulkan-drivers vulkan-tools glslc          ║\n\
+            ║  Or build without Vulkan: cargo build --release           ║\n\
+            ╚══════════════════════════════════════════════════════════╝\n",
+        );
+    }
+
+    // glslc compiles GLSL shaders to SPIR-V — required by ggml's Vulkan backend at build time.
+    if Command::new("glslc").arg("--version").output().is_err() {
+        panic!(
+            "\n\n\
+            ╔══════════════════════════════════════════════════════════╗\n\
+            ║  `glslc` not found — SPIR-V shader compiler missing.    ║\n\
+            ║                                                          ║\n\
+            ║  Install: sudo apt install glslc                         ║\n\
             ║  Or build without Vulkan: cargo build --release          ║\n\
             ╚══════════════════════════════════════════════════════════╝\n",
         );
     }
-    println!("cargo::warning=Vulkan SDK detected");
+
+    // whisper-rs-sys uses bindgen to generate Vulkan FFI bindings from ggml-vulkan.h.
+    // bindgen needs clang's built-in headers (stdbool.h, stddef.h, etc.) which come
+    // from libclang-dev, not the runtime libclang1-XX package. Without them, bindgen
+    // silently falls back to pre-built bindings that lack Vulkan symbols, causing
+    // unresolved import errors in whisper-rs.
+    check_libclang_headers();
+
+    println!("cargo::warning=Vulkan SDK detected (vulkaninfo + glslc)");
+}
+
+/// Verify that libclang-dev headers are available for bindgen.
+///
+/// GPU feature builds (Vulkan, CUDA, etc.) rely on bindgen to generate FFI
+/// bindings that include backend-specific symbols. The pre-built fallback
+/// bindings in whisper-rs-sys only cover the base API — missing GPU symbols
+/// cause cryptic "unresolved import" errors at compile time.
+fn check_libclang_headers() {
+    // Try the same include path resolution that bindgen/clang uses.
+    let output = Command::new("clang")
+        .args(["-E", "-x", "c", "-", "-v"])
+        .stdin(std::process::Stdio::null())
+        .output();
+
+    let has_resource_dir = match &output {
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // clang prints its resource dir include path which contains stdbool.h.
+            // If libclang-dev is installed, we'll see /usr/lib/clang/<ver>/include.
+            stderr.contains("/clang/") && stderr.contains("/include")
+        }
+        Err(_) => false,
+    };
+
+    if !has_resource_dir {
+        // Fallback: look for the resource dir directly
+        let found = std::path::Path::new("/usr/lib/clang")
+            .read_dir()
+            .ok()
+            .and_then(|mut entries| {
+                entries
+                    .any(|e| {
+                        e.ok()
+                            .map(|e| e.path().join("include/stdbool.h").exists())
+                            .unwrap_or(false)
+                    })
+                    .then_some(())
+            })
+            .is_some();
+
+        if !found {
+            panic!(
+                "\n\n\
+                ╔══════════════════════════════════════════════════════════╗\n\
+                ║  libclang-dev headers not found.                         ║\n\
+                ║                                                          ║\n\
+                ║  bindgen needs clang's built-in headers (stdbool.h) to   ║\n\
+                ║  generate Vulkan FFI bindings. Without them, Vulkan      ║\n\
+                ║  symbols will be missing and compilation will fail.      ║\n\
+                ║                                                          ║\n\
+                ║  Install: sudo apt install libclang-dev                   ║\n\
+                ║  Or build without Vulkan: cargo build --release           ║\n\
+                ╚══════════════════════════════════════════════════════════╝\n",
+            );
+        }
+    }
 }
 
 fn check_rocm() {
