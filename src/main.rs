@@ -102,12 +102,18 @@ async fn main() -> Result<()> {
         }
         #[cfg(feature = "benchmark")]
         Some(voicsh::cli::Commands::Benchmark {
+            model,
             audio,
             models,
             iterations,
             output,
             threads,
         }) => {
+            if models.is_some() {
+                eprintln!("Warning: --models is deprecated, use positional argument instead:");
+                eprintln!("  voicsh benchmark tiny.en,base.en");
+            }
+            let models = model.or(models);
             handle_benchmark_command(
                 audio,
                 models,
