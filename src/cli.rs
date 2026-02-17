@@ -242,6 +242,11 @@ pub enum ModelsAction {
         /// Model name (e.g., base.en, small.en, tiny)
         name: String,
     },
+    /// Set the default STT model
+    Use {
+        /// Model name (e.g., tiny.en, base, large-v3-turbo)
+        name: String,
+    },
 }
 
 #[cfg(test)]
@@ -457,6 +462,27 @@ mod tests {
             msg.contains("required") || msg.contains("name"),
             "Expected missing required argument error, got: {msg}"
         );
+    }
+
+    #[test]
+    fn test_parse_models_use() {
+        let cli = Cli::try_parse_from(["voicsh", "models", "use", "tiny.en"]).unwrap();
+        match cli.command {
+            Some(Commands::Models { action }) => match action {
+                ModelsAction::Use { name } => {
+                    assert_eq!(name, "tiny.en");
+                }
+                _ => panic!("Expected Use action"),
+            },
+            _ => panic!("Expected Models command"),
+        }
+    }
+
+    #[test]
+    fn test_models_use_requires_name() {
+        let result = Cli::try_parse_from(["voicsh", "models", "use"]);
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
     #[test]

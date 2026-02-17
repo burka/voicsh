@@ -11,8 +11,8 @@ use voicsh::diagnostics::check_dependencies;
 use voicsh::ipc::client::send_command;
 use voicsh::ipc::protocol::{Command, Response};
 use voicsh::ipc::server::IpcServer;
-use voicsh::models::catalog::list_models;
-use voicsh::models::download::{download_model, format_model_info};
+use voicsh::models::catalog::{get_model, list_models, resolve_name};
+use voicsh::models::download::{download_model, format_model_info, is_model_installed};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
             list_audio_devices()?;
         }
         Some(voicsh::cli::Commands::Models { action }) => {
-            handle_models_command(action).await?;
+            handle_models_command(action, cli.config.as_deref()).await?;
         }
         Some(voicsh::cli::Commands::Check) => {
             check_dependencies();
@@ -176,7 +176,10 @@ fn list_audio_devices() -> Result<()> {
 }
 
 /// Handle model management commands.
-async fn handle_models_command(action: ModelsAction) -> Result<()> {
+async fn handle_models_command(
+    action: ModelsAction,
+    custom_path: Option<&std::path::Path>,
+) -> Result<()> {
     match action {
         ModelsAction::List => {
             println!("Available models:");
@@ -217,6 +220,29 @@ async fn handle_models_command(action: ModelsAction) -> Result<()> {
             let path = download_model(&name, true).await?;
             println!("Model '{}' installed successfully", name);
             println!("Location: {}", path.display());
+        }
+        ModelsAction::Use { name } => {
+            let resolved = resolve_name(&name);
+            if resolved != name {
+                println!("Resolved '{name}' to '{resolved}'");
+            }
+            if get_model(resolved).is_none() {
+                eprintln!("Unknown model: '{name}'");
+                eprintln!("Run `voicsh models list` to see available models.");
+                std::process::exit(1);
+            }
+
+            let config_path = custom_path
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(Config::default_path);
+            Config::update_model(&config_path, resolved)?;
+            println!("Default model set to '{resolved}'");
+
+            if !is_model_installed(resolved) {
+                println!(
+                    "Note: model not yet downloaded. Run `voicsh models install {resolved}` or it will download on first use."
+                );
+            }
         }
     }
     Ok(())
