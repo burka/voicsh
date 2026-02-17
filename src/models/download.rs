@@ -8,6 +8,7 @@ use crate::models::catalog::{ModelInfo, get_model};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use sha1::{Digest, Sha1};
+use sha2::Sha256;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,31 @@ pub fn models_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".cache"))
         .join("voicsh")
         .join("models")
+}
+
+/// Get the directory where dictionaries are stored.
+///
+/// Uses `~/.cache/voicsh/dictionaries/` on Linux/Unix.
+pub fn dictionaries_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from(".cache"))
+        .join("voicsh")
+        .join("dictionaries")
+}
+
+/// Get the full path for a dictionary file.
+///
+/// Always returns a path regardless of whether the dictionary is in the catalog.
+/// The file may or may not exist on disk.
+pub fn dictionary_path(lang: &str) -> PathBuf {
+    let info = crate::dictionary::get_dictionary(lang);
+    let filename = info.map(|i| i.filename).unwrap_or("unknown.txt");
+    dictionaries_dir().join(filename)
+}
+
+/// Check if a dictionary is installed.
+pub fn is_dictionary_installed(lang: &str) -> bool {
+    dictionary_path(lang).exists()
 }
 
 /// Get the full path for a model file.
@@ -37,11 +63,12 @@ pub fn is_model_installed(name: &str) -> bool {
     model_path(name).exists()
 }
 
-/// Core download: fetch url, save to path, verify sha1 if non-empty.
+/// Core download: fetch url, save to path, verify sha1 and/or sha256 if non-empty.
 async fn download_to_path(
     name: &str,
     url: &str,
     sha1: &str,
+    sha256: &str,
     size_mb: u32,
     output_path: &Path,
     progress: bool,
@@ -89,7 +116,8 @@ async fn download_to_path(
     };
 
     // Download with streaming and hash calculation
-    let mut hasher = Sha1::new();
+    let mut sha1_hasher = Sha1::new();
+    let mut sha256_hasher = Sha256::new();
     let mut stream = response.bytes_stream();
     let mut file = fs::File::create(output_path)
         .map_err(|e| VoicshError::Other(format!("Failed to create output file: {e}")))?;
@@ -101,7 +129,8 @@ async fn download_to_path(
         file.write_all(&chunk)
             .map_err(|e| VoicshError::Other(format!("Failed to write to file: {e}")))?;
 
-        hasher.update(&chunk);
+        sha1_hasher.update(&chunk);
+        sha256_hasher.update(&chunk);
 
         if let Some(ref pb) = pb {
             pb.inc(chunk.len() as u64);
@@ -114,13 +143,29 @@ async fn download_to_path(
 
     // Verify SHA-1 checksum
     if !sha1.is_empty() {
-        let calculated_hash = format!("{:x}", hasher.finalize());
-        if calculated_hash != sha1 {
+        let calculated = format!("{:x}", sha1_hasher.finalize());
+        if calculated != sha1 {
             if let Err(e) = fs::remove_file(output_path) {
                 eprintln!("voicsh: failed to remove corrupted download: {e}");
             }
             return Err(VoicshError::Other(format!(
-                "SHA-1 checksum mismatch. Expected: {sha1}, got: {calculated_hash}"
+                "SHA-1 checksum mismatch. Expected: {sha1}, got: {calculated}"
+            )));
+        }
+        if progress {
+            eprintln!("Checksum verified");
+        }
+    }
+
+    // Verify SHA-256 checksum
+    if !sha256.is_empty() {
+        let calculated = format!("{:x}", sha256_hasher.finalize());
+        if calculated != sha256 {
+            if let Err(e) = fs::remove_file(output_path) {
+                eprintln!("voicsh: failed to remove corrupted download: {e}");
+            }
+            return Err(VoicshError::Other(format!(
+                "SHA-256 checksum mismatch. Expected: {sha256}, got: {calculated}"
             )));
         }
         if progress {
@@ -163,7 +208,16 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
 
     // Try static catalog first
     if let Some(info) = get_model(name) {
-        download_to_path(name, &info.url(), info.sha1, info.size_mb, &path, progress).await?;
+        download_to_path(
+            name,
+            &info.url(),
+            info.sha1,
+            "",
+            info.size_mb,
+            &path,
+            progress,
+        )
+        .await?;
         return Ok(path);
     }
 
@@ -188,7 +242,7 @@ async fn remote_fallback(name: &str, path: &Path, progress: bool) -> Result<Path
         ))
     })?;
 
-    download_to_path(name, &rm.url, "", rm.size_mb, path, progress).await?;
+    download_to_path(name, &rm.url, "", "", rm.size_mb, path, progress).await?;
     Ok(path.to_path_buf())
 }
 
@@ -197,6 +251,62 @@ async fn remote_fallback(name: &str, _path: &Path, _progress: bool) -> Result<Pa
     Err(VoicshError::Other(format!(
         "Model '{name}' not found in catalog.\n\
          Run 'voicsh models list' to see available models."
+    )))
+}
+
+/// Download a SymSpell frequency dictionary.
+///
+/// Returns the path to the installed dictionary.
+/// If the dictionary is already installed, returns immediately without re-downloading.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The language is not in the catalog
+/// - The download fails
+/// - The SHA-256 checksum doesn't match
+/// - The file cannot be written
+#[cfg(feature = "model-download")]
+pub async fn download_dictionary(lang: &str, progress: bool) -> Result<PathBuf> {
+    let info = crate::dictionary::get_dictionary(lang).ok_or_else(|| {
+        VoicshError::Other(format!(
+            "No dictionary available for language '{}'. Available: {}",
+            lang,
+            crate::dictionary::list_dictionaries()
+                .iter()
+                .map(|d| d.language)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    })?;
+
+    let path = dictionary_path(lang);
+    if path.exists() {
+        return Ok(path);
+    }
+
+    download_to_path(
+        &format!("{} dictionary", info.display_name),
+        info.url,
+        "", // no SHA-1 for dictionaries; SHA-256 is used instead
+        info.sha256,
+        info.size_kb.div_ceil(1024), // convert KB to MB (round up) for display
+        &path,
+        progress,
+    )
+    .await?;
+
+    Ok(path)
+}
+
+/// Download a SymSpell frequency dictionary (stub when model-download feature is disabled).
+#[cfg(not(feature = "model-download"))]
+pub async fn download_dictionary(lang: &str, _progress: bool) -> Result<PathBuf> {
+    Err(VoicshError::Other(format!(
+        "Dictionary download requires the 'model-download' feature.\n\
+         Manually place the {} dictionary at: {}",
+        lang,
+        dictionary_path(lang).display()
     )))
 }
 
@@ -387,23 +497,6 @@ mod tests {
     }
 
     #[test]
-    fn test_list_installed_models_strips_prefix_and_suffix() {
-        // If any models are installed, their names should not contain ggml- or .bin
-        for name in list_installed_models() {
-            assert!(
-                !name.starts_with("ggml-"),
-                "Model name '{}' should not have ggml- prefix",
-                name
-            );
-            assert!(
-                !name.ends_with(".bin"),
-                "Model name '{}' should not have .bin suffix",
-                name
-            );
-        }
-    }
-
-    #[test]
     fn test_list_installed_models_with_mock_directory() {
         let temp_dir = tempfile::tempdir().unwrap();
         let models = ["tiny.en", "base", "small.en"];
@@ -576,6 +669,98 @@ mod tests {
         let parent = path.parent().unwrap();
         let expected = models_dir();
         assert_eq!(parent, expected, "model_path parent should be models_dir");
+    }
+
+    // ── Dictionary tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_dictionaries_dir_is_valid_path() {
+        let dir = dictionaries_dir();
+        let dir_str = dir.to_string_lossy();
+        assert!(
+            dir_str.contains("voicsh"),
+            "dictionaries_dir should contain 'voicsh', got: {}",
+            dir_str
+        );
+        assert!(
+            dir_str.contains("dictionaries"),
+            "dictionaries_dir should contain 'dictionaries', got: {}",
+            dir_str
+        );
+    }
+
+    #[test]
+    fn test_dictionaries_dir_structure() {
+        let dir = dictionaries_dir();
+        assert_eq!(
+            dir.file_name().unwrap(),
+            "dictionaries",
+            "Last component should be 'dictionaries'"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_path_for_valid_language() {
+        let path = dictionary_path("en");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(filename, "en-80k.txt");
+    }
+
+    #[test]
+    fn test_dictionary_path_for_unknown_language() {
+        let path = dictionary_path("nonexistent");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(filename, "unknown.txt");
+    }
+
+    #[test]
+    fn test_dictionary_path_for_all_catalog_languages() {
+        for dict in crate::dictionary::list_dictionaries() {
+            let path = dictionary_path(dict.language);
+            let filename = path.file_name().unwrap().to_string_lossy();
+            assert_eq!(
+                filename, dict.filename,
+                "dictionary_path({}) should return {}",
+                dict.language, dict.filename
+            );
+        }
+    }
+
+    #[test]
+    fn test_dictionary_path_parent_is_dictionaries_dir() {
+        let path = dictionary_path("en");
+        let parent = path.parent().unwrap();
+        let expected = dictionaries_dir();
+        assert_eq!(
+            parent, expected,
+            "dictionary_path parent should be dictionaries_dir"
+        );
+    }
+
+    #[test]
+    fn test_is_dictionary_installed_returns_false_for_invalid() {
+        let installed = is_dictionary_installed("nonexistent_lang_xyz");
+        assert!(!installed);
+    }
+
+    #[test]
+    fn test_dictionary_path_consistency() {
+        let path1 = dictionary_path("en");
+        let path2 = dictionary_path("en");
+        assert_eq!(
+            path1, path2,
+            "dictionary_path should return consistent results"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_path_with_empty_string() {
+        let path = dictionary_path("");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            filename, "unknown.txt",
+            "Empty string should produce unknown.txt"
+        );
     }
 
     #[test]
