@@ -98,6 +98,8 @@ pub enum Response {
         device: Option<String>,
         error_correction_enabled: bool,
         error_correction_model: Option<String>,
+        error_correction_backend: Option<String>,
+        dictionary_language: Option<String>,
     },
     /// Error occurred
     Error { message: String },
@@ -116,6 +118,7 @@ pub enum Response {
         models: Vec<CorrectionModelInfoResponse>,
         current: String,
         enabled: bool,
+        backend: Option<String>,
     },
 }
 
@@ -318,6 +321,8 @@ mod tests {
             device: None,
             error_correction_enabled: false,
             error_correction_model: None,
+            error_correction_backend: None,
+            dictionary_language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -340,6 +345,8 @@ mod tests {
             device: None,
             error_correction_enabled: false,
             error_correction_model: None,
+            error_correction_backend: None,
+            dictionary_language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -358,6 +365,8 @@ mod tests {
             device: Some("RTX 5060 Ti".to_string()),
             error_correction_enabled: false,
             error_correction_model: None,
+            error_correction_backend: None,
+            dictionary_language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -377,6 +386,8 @@ mod tests {
             device: None,
             error_correction_enabled: false,
             error_correction_model: None,
+            error_correction_backend: None,
+            dictionary_language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -1097,6 +1108,7 @@ mod tests {
             ],
             current: "flan-t5-small".to_string(),
             enabled: false,
+            backend: Some("symspell".to_string()),
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -1116,13 +1128,15 @@ mod tests {
             backend: "CPU".to_string(),
             device: None,
             error_correction_enabled: true,
-            error_correction_model: Some("flan-t5-small".to_string()),
+            error_correction_model: Some("flan-t5-base".to_string()),
+            error_correction_backend: Some("symspell".to_string()),
+            dictionary_language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
         assert_eq!(resp, deserialized);
         assert!(json.contains(r#""error_correction_enabled":true"#));
-        assert!(json.contains(r#""error_correction_model":"flan-t5-small""#));
+        assert!(json.contains(r#""error_correction_model":"flan-t5-base""#));
     }
 
     // ── TextOrigin and provenance field tests ──────────────────────────

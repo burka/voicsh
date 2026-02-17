@@ -111,6 +111,9 @@ export default class VoicshExtension extends Extension {
         this._modelMenu = new PopupMenu.PopupSubMenuMenuItem('Model: —');
         this._indicator.menu.addMenuItem(this._modelMenu);
 
+        this._correctionMenu = new PopupMenu.PopupSubMenuMenuItem('Correction: off');
+        this._indicator.menu.addMenuItem(this._correctionMenu);
+
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._versionItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
         this._versionLabel = new St.Label({ text: 'voicsh', style_class: 'voicsh-version-label' });
@@ -503,6 +506,61 @@ export default class VoicshExtension extends Extension {
             this._modelMenu.label.text = `Model: ${response.current}`;
         } catch (e) {
             // Keep existing label
+        }
+    }
+
+    async _populateCorrectionMenu() {
+        try {
+            const response = await this._ipcRequest({ type: 'list_correction_models' });
+            if (response?.type !== 'correction_models') return;
+
+            this._correctionMenu.menu.removeAll();
+            this._errorCorrectionEnabled = response.enabled;
+            this._correctionModel = response.current;
+
+            // Toggle on/off
+            const toggleLabel = response.enabled ? 'Disable Error Correction' : 'Enable Error Correction';
+            const toggleItem = new PopupMenu.PopupMenuItem(toggleLabel);
+            toggleItem.connect('activate', () => {
+                this._sendCommand({ type: 'set_error_correction', enabled: !response.enabled });
+            });
+            this._correctionMenu.menu.addMenuItem(toggleItem);
+
+            this._correctionMenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+            // Model picker
+            for (const model of response.models) {
+                const item = new PopupMenu.PopupMenuItem(`${model.display_name}`);
+                if (model.name === response.current) {
+                    item.setOrnament(PopupMenu.Ornament.CHECK);
+                }
+                if (!response.enabled) {
+                    item.setSensitive(false);
+                }
+                item.connect('activate', () => {
+                    this._sendCommand({ type: 'set_correction_model', model: model.name });
+                });
+                this._correctionMenu.menu.addMenuItem(item);
+            }
+
+            // Update parent label
+            this._updateCorrectionMenuLabel();
+
+            const CORRECTABLE_LANGUAGES = ['de', 'en', 'es', 'fr', 'he', 'it', 'ru'];
+            const isCorrectable = !this._language || this._language === 'auto' || CORRECTABLE_LANGUAGES.includes(this._language);
+            this._correctionMenu.setSensitive(isCorrectable);
+        } catch (e) {
+            console.debug(`voicsh: failed to populate correction menu: ${e.message}`);
+        }
+    }
+
+    _updateCorrectionMenuLabel() {
+        if (!this._correctionMenu) return;
+        if (this._errorCorrectionEnabled) {
+            const model = this._correctionModel || 'flan-t5-small';
+            this._correctionMenu.label.text = `Correction: ${model}`;
+        } else {
+            this._correctionMenu.label.text = 'Correction: off';
         }
     }
 

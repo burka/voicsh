@@ -372,6 +372,8 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                 device,
                 error_correction_enabled,
                 error_correction_model,
+                error_correction_backend,
+                dictionary_language,
             } => {
                 let client_version = voicsh::version_string();
 
@@ -404,12 +406,25 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                 }
                 // Error correction
                 if error_correction_enabled {
-                    let model_name = error_correction_model.as_deref().unwrap_or("flan-t5-small");
-                    println!(
-                        "  {} enabled ({}, English only)",
-                        "Correction:".dimmed(),
-                        model_name
-                    );
+                    let backend_name = error_correction_backend.as_deref().unwrap_or("unknown");
+                    let dict_lang = dictionary_language.as_deref().unwrap_or("auto");
+                    if backend_name == "symspell" {
+                        println!(
+                            "  {} enabled (symspell, {})",
+                            "Correction:".dimmed(),
+                            dict_lang,
+                        );
+                    } else {
+                        let model_name =
+                            error_correction_model.as_deref().unwrap_or("flan-t5-base");
+                        println!(
+                            "  {} enabled ({}, {}, {})",
+                            "Correction:".dimmed(),
+                            backend_name,
+                            model_name,
+                            dict_lang,
+                        );
+                    }
                 }
             }
             Response::Languages { languages, current } => {
@@ -449,10 +464,13 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                 models,
                 current,
                 enabled,
+                backend,
             } => {
                 let status = if enabled { "enabled" } else { "disabled" };
+                let backend_name = backend.as_deref().unwrap_or("unknown");
                 println!(
-                    "Error correction models (current: {}, {}):",
+                    "Error correction models (backend: {}, current: {}, {}):",
+                    backend_name,
                     current.green(),
                     status
                 );

@@ -7,10 +7,13 @@ use crate::ipc::protocol::TextOrigin;
 use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::TranscribedText;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static LANGUAGE_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Pipeline station that applies post-ASR error correction.
 ///
-/// Only corrects English text with low-confidence tokens.
+/// Only corrects languages with a SymSpell dictionary and low-confidence tokens.
 /// Falls back to raw text on timeout or error.
 pub struct CorrectionStation {
     corrector: Box<dyn Corrector>,
@@ -29,36 +32,50 @@ impl Station for CorrectionStation {
     type Output = TranscribedText;
 
     fn process(&mut self, mut input: Self::Input) -> Result<Option<Self::Output>, StationError> {
-        // Skip if correction is disabled
         if !self.config.enabled {
             return Ok(Some(input));
         }
 
-        // Skip for non-English languages
         if !prompt::should_correct_language(&input.language) {
+            if !LANGUAGE_SKIP_LOGGED.swap(true, Ordering::Relaxed) {
+                eprintln!("voicsh: correction skipped (language '{}')", input.language);
+            }
             return Ok(Some(input));
         }
 
-        // Build correction prompt — returns None if all tokens are high confidence
-        let correction_prompt = match prompt::build_correction_prompt(
-            &input.token_probabilities,
-            self.config.confidence_threshold,
-        ) {
-            Some(p) => p,
-            None => return Ok(Some(input)),
-        };
+        if !prompt::needs_correction(&input.token_probabilities, self.config.confidence_threshold) {
+            eprintln!(
+                "voicsh: correction skipped (all tokens above confidence threshold {})",
+                self.config.confidence_threshold
+            );
+            return Ok(Some(input));
+        }
 
-        // Apply correction — fall back to raw text on error
-        match self.corrector.correct(&correction_prompt) {
-            Ok(corrected) if !corrected.is_empty() => {
+        let raw_text = prompt::extract_raw_text(&input.token_probabilities);
+
+        match self.corrector.correct(&raw_text) {
+            Ok(corrected) => {
+                // Validate: non-empty, not too divergent
+                if corrected.is_empty() {
+                    return Ok(Some(input));
+                }
+                let max_len = input.text.len().max(corrected.len());
+                if max_len > 5 {
+                    let distance = prompt::edit_distance(&input.text, &corrected);
+                    let change_ratio = distance as f64 / max_len as f64;
+                    if change_ratio > 0.4 {
+                        eprintln!(
+                            "voicsh: correction rejected (too divergent: {:.0}% > 40%)",
+                            change_ratio * 100.0
+                        );
+                        return Ok(Some(input));
+                    }
+                }
                 if corrected != input.text {
                     input.raw_text = Some(input.text.clone());
                     input.text = corrected;
                     input.text_origin = TextOrigin::Corrected;
                 }
-            }
-            Ok(_) => {
-                // Empty correction result — keep raw text
             }
             Err(e) => {
                 eprintln!(
@@ -108,16 +125,15 @@ mod tests {
     fn enabled_config(threshold: f32) -> ErrorCorrectionConfig {
         ErrorCorrectionConfig {
             enabled: true,
-            model: "flan-t5-small".to_string(),
             confidence_threshold: threshold,
-            timeout_ms: 2000,
+            ..Default::default()
         }
     }
 
     fn disabled_config() -> ErrorCorrectionConfig {
         ErrorCorrectionConfig {
             enabled: false,
-            ..enabled_config(0.7)
+            ..Default::default()
         }
     }
 
@@ -178,13 +194,13 @@ mod tests {
     }
 
     #[test]
-    fn non_english_language_passes_through() {
+    fn unsupported_language_passes_through() {
         let corrector = Box::new(FixedCorrectorForTest {
             response: "should not appear".into(),
             should_fail: false,
         });
         let mut station = CorrectionStation::new(corrector, enabled_config(0.7));
-        let input = make_input("original text", "de", low_confidence_tokens());
+        let input = make_input("original text", "ja", low_confidence_tokens());
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "original text");
     }
@@ -240,13 +256,13 @@ mod tests {
     #[test]
     fn preserves_timing_events_language_confidence() {
         let corrector = Box::new(FixedCorrectorForTest {
-            response: "corrected".into(),
+            response: "the quick brown".into(),
             should_fail: false,
         });
         let mut station = CorrectionStation::new(corrector, enabled_config(0.7));
         let timestamp = Instant::now();
         let input = TranscribedText {
-            text: "original".to_string(),
+            text: "the quik brown".to_string(),
             language: "en".to_string(),
             confidence: 0.85,
             timestamp,
@@ -257,7 +273,7 @@ mod tests {
             text_origin: TextOrigin::default(),
         };
         let result = station.process(input).unwrap().unwrap();
-        assert_eq!(result.text, "corrected");
+        assert_eq!(result.text, "the quick brown");
         assert_eq!(result.language, "en");
         assert_eq!(result.confidence, 0.85);
         assert_eq!(result.timestamp, timestamp);
@@ -279,25 +295,25 @@ mod tests {
     #[test]
     fn auto_language_triggers_correction() {
         let corrector = Box::new(FixedCorrectorForTest {
-            response: "corrected".into(),
+            response: "the quick brown".into(),
             should_fail: false,
         });
         let mut station = CorrectionStation::new(corrector, enabled_config(0.7));
-        let input = make_input("original", "auto", low_confidence_tokens());
+        let input = make_input("the quik brown", "auto", low_confidence_tokens());
         let result = station.process(input).unwrap().unwrap();
-        assert_eq!(result.text, "corrected");
+        assert_eq!(result.text, "the quick brown");
     }
 
     #[test]
     fn empty_language_triggers_correction() {
         let corrector = Box::new(FixedCorrectorForTest {
-            response: "corrected".into(),
+            response: "the quick brown".into(),
             should_fail: false,
         });
         let mut station = CorrectionStation::new(corrector, enabled_config(0.7));
-        let input = make_input("original", "", low_confidence_tokens());
+        let input = make_input("the quik brown", "", low_confidence_tokens());
         let result = station.process(input).unwrap().unwrap();
-        assert_eq!(result.text, "corrected");
+        assert_eq!(result.text, "the quick brown");
     }
 
     #[test]
@@ -337,5 +353,23 @@ mod tests {
         assert_eq!(result.text, "the quik brown");
         assert_eq!(result.raw_text, None);
         assert_eq!(result.text_origin, TextOrigin::Transcription);
+    }
+
+    #[test]
+    fn too_divergent_correction_rejected() {
+        // Model returns something completely different (edit distance > 40%)
+        let corrector = Box::new(FixedCorrectorForTest {
+            response: "es scheint die T5 weiss ueber German".into(),
+            should_fail: false,
+        });
+        let mut station = CorrectionStation::new(corrector, enabled_config(0.7));
+        let input = make_input(
+            "it seems the T5 knows about German",
+            "en",
+            low_confidence_tokens(),
+        );
+        let result = station.process(input).unwrap().unwrap();
+        assert_eq!(result.text, "it seems the T5 knows about German");
+        assert_eq!(result.raw_text, None);
     }
 }

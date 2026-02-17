@@ -16,6 +16,36 @@ use tokenizers::Tokenizer;
 /// Maximum number of tokens to generate during correction.
 const MAX_DECODE_TOKENS: usize = 128;
 
+/// Task prefix prepended to all T5 correction prompts.
+const TASK_PREFIX: &str = "correct grammar: ";
+
+/// Strip a task-like prefix ending with ": " from model output.
+fn strip_task_prefix(text: &str) -> &str {
+    if let Some(colon_pos) = text.find(": ") {
+        let prefix = &text[..colon_pos];
+        let word_count = prefix.split_whitespace().count();
+        if word_count <= 4 {
+            return &text[colon_pos + 2..];
+        }
+    }
+    text
+}
+
+/// Clean T5 model output: strip echoed task prefix and reject garbage.
+fn clean_t5_output(raw_output: &str) -> Option<String> {
+    let text = strip_task_prefix(raw_output).trim();
+    if text.is_empty() {
+        return None;
+    }
+    // Reject garbage: mostly non-alphanumeric
+    let alnum_count = text.chars().filter(|c| c.is_alphanumeric()).count();
+    let total = text.chars().count();
+    if total > 2 && alnum_count * 3 < total {
+        return None;
+    }
+    Some(text.to_string())
+}
+
 /// Flan-T5 corrector that runs quantized inference via candle.
 pub struct CandleT5Corrector {
     model: T5ForConditionalGeneration,
@@ -92,37 +122,58 @@ impl CandleT5Corrector {
             .encode(&input_tensor)
             .map_err(|e| VoicshError::Other(format!("Encoder forward: {e}")))?;
 
-        // Greedy decode with incremental KV cache.
-        // First step: feed pad token (0). Subsequent steps: feed only the new token.
-        // The KV cache accumulates key-value pairs across steps.
-        let mut decoded_ids: Vec<u32> = vec![0];
-        let mut next_input = vec![0u32]; // first step: pad token
+        // Greedy decode — follows candle's quantized-t5 example.
+        // decode() may return [batch, vocab] or [batch, seq, vocab] depending
+        // on cache state. We squeeze batch, then use argmax on the last dim.
+        let mut output_ids = vec![0u32]; // decoder_start_token_id = pad = 0
 
-        for _ in 0..MAX_DECODE_TOKENS {
-            let decoder_input = Tensor::new(next_input.as_slice(), &self.device)
-                .map_err(|e| VoicshError::Other(format!("Create decoder input: {e}")))?
-                .unsqueeze(0)
-                .map_err(|e| VoicshError::Other(format!("Unsqueeze decoder: {e}")))?;
+        for step in 0..MAX_DECODE_TOKENS {
+            let decoder_input = if step == 0 {
+                Tensor::new(output_ids.as_slice(), &self.device)
+                    .map_err(|e| VoicshError::Other(format!("Create decoder input: {e}")))?
+                    .unsqueeze(0)
+                    .map_err(|e| VoicshError::Other(format!("Unsqueeze decoder: {e}")))?
+            } else {
+                let last = output_ids[output_ids.len() - 1];
+                Tensor::new(&[last], &self.device)
+                    .map_err(|e| VoicshError::Other(format!("Create decoder input: {e}")))?
+                    .unsqueeze(0)
+                    .map_err(|e| VoicshError::Other(format!("Unsqueeze decoder: {e}")))?
+            };
 
             let logits = self
                 .model
                 .decode(&decoder_input, &encoder_output)
                 .map_err(|e| VoicshError::Other(format!("Decoder forward: {e}")))?;
 
-            // Take last token logits (seq dim = last position)
-            let seq_len = logits
-                .dim(1)
-                .map_err(|e| VoicshError::Other(format!("Get logits dim: {e}")))?;
-            let next_logits = logits
-                .get_on_dim(1, seq_len - 1)
-                .map_err(|e| VoicshError::Other(format!("Slice logits: {e}")))?;
+            // logits may be [1, V] or [1, S, V]. Squeeze batch, then take
+            // argmax over the last dimension (vocab) at the last seq position.
+            let logits = logits
+                .squeeze(0)
+                .map_err(|e| VoicshError::Other(format!("Squeeze batch: {e}")))?;
 
-            let argmax = next_logits
-                .argmax(candle_core::D::Minus1)
-                .map_err(|e| VoicshError::Other(format!("Argmax: {e}")))?;
-            let next_token = argmax
-                .reshape(())
-                .map_err(|e| VoicshError::Other(format!("Reshape argmax: {e}")))?
+            let vocab_logits = match logits.dims().len() {
+                1 => logits.clone(), // [V] — already a single position
+                2 => {
+                    // [S, V] — take last sequence position
+                    let s = logits
+                        .dim(0)
+                        .map_err(|e| VoicshError::Other(format!("Get seq dim: {e}")))?;
+                    logits
+                        .get(s - 1)
+                        .map_err(|e| VoicshError::Other(format!("Get last position: {e}")))?
+                }
+                n => {
+                    return Err(VoicshError::Other(format!(
+                        "Unexpected logits rank {n}: {:?}",
+                        logits.shape()
+                    )));
+                }
+            };
+
+            let next_token = vocab_logits
+                .argmax(0)
+                .map_err(|e| VoicshError::Other(format!("Argmax: {e}")))?
                 .to_scalar::<u32>()
                 .map_err(|e| VoicshError::Other(format!("Token scalar: {e}")))?;
 
@@ -131,14 +182,13 @@ impl CandleT5Corrector {
                 break;
             }
 
-            decoded_ids.push(next_token);
-            next_input = vec![next_token]; // incremental: only the new token
+            output_ids.push(next_token);
         }
 
         // Skip the leading pad token for decoding
         let output = self
             .tokenizer
-            .decode(&decoded_ids[1..], true)
+            .decode(&output_ids[1..], true)
             .map_err(|e| VoicshError::Other(format!("Detokenize: {e}")))?;
 
         Ok(output)
@@ -146,9 +196,15 @@ impl CandleT5Corrector {
 }
 
 impl Corrector for CandleT5Corrector {
-    fn correct(&mut self, prompt: &str) -> Result<String> {
+    fn correct(&mut self, text: &str) -> Result<String> {
         self.model.clear_kv_cache();
-        self.generate(prompt)
+        let prompt = format!("{TASK_PREFIX}{text}");
+        let raw_output = self.generate(&prompt)?;
+        // Clean T5-specific output artifacts
+        match clean_t5_output(&raw_output) {
+            Some(cleaned) => Ok(cleaned),
+            None => Ok(text.to_string()), // Fall back to input on garbage
+        }
     }
 
     fn name(&self) -> &str {
@@ -164,5 +220,45 @@ mod tests {
     fn candle_t5_corrector_is_send() {
         fn assert_send<T: Send + 'static>() {}
         assert_send::<CandleT5Corrector>();
+    }
+
+    #[test]
+    fn strip_task_prefix_removes_known_prefix() {
+        assert_eq!(strip_task_prefix("correct grammar: hello"), "hello");
+    }
+
+    #[test]
+    fn strip_task_prefix_removes_garbled_prefix() {
+        assert_eq!(strip_task_prefix("grammologie correct: hello"), "hello");
+    }
+
+    #[test]
+    fn strip_task_prefix_preserves_long_text() {
+        let text = "this is a very long prefix with many words: hello";
+        assert_eq!(strip_task_prefix(text), text);
+    }
+
+    #[test]
+    fn strip_task_prefix_no_prefix() {
+        assert_eq!(strip_task_prefix("hello world"), "hello world");
+    }
+
+    #[test]
+    fn clean_t5_output_strips_prefix() {
+        assert_eq!(
+            clean_t5_output("correct grammar: hello world"),
+            Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn clean_t5_output_rejects_garbage() {
+        assert_eq!(clean_t5_output("- - - - - - - - -"), None);
+    }
+
+    #[test]
+    fn clean_t5_output_empty_returns_none() {
+        assert_eq!(clean_t5_output(""), None);
+        assert_eq!(clean_t5_output("   "), None);
     }
 }

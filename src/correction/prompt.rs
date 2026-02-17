@@ -1,47 +1,53 @@
-//! Build correction prompts from transcription text and token probabilities.
+//! Generic utilities for correction pipeline.
 
 use crate::stt::transcriber::TokenProbability;
 
-/// Build a correction prompt with low-confidence tokens annotated.
+/// Check whether any tokens need correction (below threshold).
 ///
-/// Tokens with probability below `threshold` are marked: `word[0.34]`.
-/// Returns `None` if no tokens are below threshold (no correction needed).
-pub fn build_correction_prompt(
-    token_probabilities: &[TokenProbability],
-    threshold: f32,
-) -> Option<String> {
-    if token_probabilities.is_empty() {
-        return None;
-    }
+/// Returns false if `tokens` is empty or all tokens are at/above threshold.
+pub fn needs_correction(tokens: &[TokenProbability], threshold: f32) -> bool {
+    !tokens.is_empty() && tokens.iter().any(|tp| tp.probability < threshold)
+}
 
-    let needs_correction = token_probabilities
+/// Reconstruct raw text from token probabilities (trimmed).
+pub fn extract_raw_text(tokens: &[TokenProbability]) -> String {
+    tokens
         .iter()
-        .any(|tp| tp.probability < threshold);
-    if !needs_correction {
-        return None;
-    }
+        .map(|tp| tp.token.as_str())
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
 
-    let mut annotated = String::new();
-    for tp in token_probabilities {
-        if tp.probability < threshold {
-            annotated.push_str(&format!("{}[{:.2}]", tp.token, tp.probability));
-        } else {
-            annotated.push_str(&tp.token);
+/// Levenshtein edit distance between two strings (character-level).
+pub fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let m = a.len();
+    let n = b.len();
+
+    let mut prev = (0..=n).collect::<Vec<_>>();
+    let mut curr = vec![0; n + 1];
+
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
         }
+        std::mem::swap(&mut prev, &mut curr);
     }
 
-    Some(format!(
-        "Fix errors in this speech transcript. Words marked with [score] have low ASR confidence:\n{}",
-        annotated
-    ))
+    prev[n]
 }
 
 /// Check whether correction should be attempted for the given language.
 ///
-/// Only English is supported. Empty string and "auto" are treated as
-/// potentially English and allowed through.
+/// Allows languages that have a SymSpell dictionary available,
+/// plus empty string and "auto" which are treated as potentially
+/// correctable.
 pub fn should_correct_language(language: &str) -> bool {
-    language.is_empty() || language == "en" || language == "auto"
+    language.is_empty() || language == "auto" || crate::dictionary::has_dictionary(language)
 }
 
 #[cfg(test)]
@@ -50,13 +56,12 @@ mod tests {
     use crate::stt::transcriber::TokenProbability;
 
     #[test]
-    fn test_empty_probabilities_returns_none() {
-        let result = build_correction_prompt(&[], 0.7);
-        assert!(result.is_none(), "Empty token list should return None");
+    fn needs_correction_empty_returns_false() {
+        assert!(!needs_correction(&[], 0.7));
     }
 
     #[test]
-    fn test_all_high_confidence_returns_none() {
+    fn needs_correction_all_high_returns_false() {
         let tokens = vec![
             TokenProbability {
                 token: "hello".into(),
@@ -67,15 +72,11 @@ mod tests {
                 probability: 0.88,
             },
         ];
-        let result = build_correction_prompt(&tokens, 0.7);
-        assert!(
-            result.is_none(),
-            "All tokens above threshold should return None"
-        );
+        assert!(!needs_correction(&tokens, 0.7));
     }
 
     #[test]
-    fn test_low_confidence_tokens_annotated() {
+    fn needs_correction_some_low_returns_true() {
         let tokens = vec![
             TokenProbability {
                 token: "the".into(),
@@ -85,87 +86,56 @@ mod tests {
                 token: " quik".into(),
                 probability: 0.30,
             },
-            TokenProbability {
-                token: " brown".into(),
-                probability: 0.92,
-            },
-            TokenProbability {
-                token: " foks".into(),
-                probability: 0.25,
-            },
         ];
-        let result = build_correction_prompt(&tokens, 0.7);
-        assert!(
-            result.is_some(),
-            "Should return prompt when tokens below threshold"
-        );
-        let prompt = result.unwrap();
-        assert!(
-            prompt.contains(" quik[0.30]"),
-            "Low-confidence token should be annotated: {}",
-            prompt
-        );
-        assert!(
-            prompt.contains(" foks[0.25]"),
-            "Low-confidence token should be annotated: {}",
-            prompt
-        );
-        assert!(
-            prompt.contains("the"),
-            "High-confidence token should appear without annotation: {}",
-            prompt
-        );
-        assert!(
-            !prompt.contains("the["),
-            "High-confidence token should NOT be annotated: {}",
-            prompt
-        );
-        assert!(
-            prompt.contains("Fix errors in this speech transcript"),
-            "Should contain instruction prefix: {}",
-            prompt
-        );
+        assert!(needs_correction(&tokens, 0.7));
     }
 
     #[test]
-    fn test_single_low_confidence_token() {
-        let tokens = vec![TokenProbability {
-            token: "word".into(),
-            probability: 0.40,
-        }];
-        let prompt = build_correction_prompt(&tokens, 0.7)
-            .expect("Single low-confidence token should produce a prompt");
-        assert!(
-            prompt.contains("word[0.40]"),
-            "Single low token should be annotated: {}",
-            prompt
-        );
-    }
-
-    #[test]
-    fn test_threshold_boundary_equal_not_annotated() {
+    fn needs_correction_at_threshold_returns_false() {
         let tokens = vec![TokenProbability {
             token: "exact".into(),
             probability: 0.70,
         }];
-        let result = build_correction_prompt(&tokens, 0.70);
-        assert!(
-            result.is_none(),
-            "Token at exact threshold should NOT trigger correction"
-        );
+        assert!(!needs_correction(&tokens, 0.70));
     }
 
     #[test]
-    fn test_threshold_boundary_just_below() {
-        let tokens = vec![TokenProbability {
-            token: "close".into(),
-            probability: 0.699,
-        }];
-        let result = build_correction_prompt(&tokens, 0.70);
-        assert!(
-            result.is_some(),
-            "Token just below threshold should trigger correction"
-        );
+    fn extract_raw_text_concatenates_tokens() {
+        let tokens = vec![
+            TokenProbability {
+                token: "the".into(),
+                probability: 0.95,
+            },
+            TokenProbability {
+                token: " quick".into(),
+                probability: 0.88,
+            },
+            TokenProbability {
+                token: " brown".into(),
+                probability: 0.92,
+            },
+        ];
+        assert_eq!(extract_raw_text(&tokens), "the quick brown");
+    }
+
+    #[test]
+    fn extract_raw_text_trims_leading_whitespace() {
+        let tokens = vec![
+            TokenProbability {
+                token: " hello".into(),
+                probability: 0.95,
+            },
+            TokenProbability {
+                token: " world".into(),
+                probability: 0.88,
+            },
+        ];
+        assert_eq!(extract_raw_text(&tokens), "hello world");
+    }
+
+    #[test]
+    fn extract_raw_text_empty_returns_empty() {
+        assert_eq!(extract_raw_text(&[]), "");
     }
 
     #[test]
@@ -189,16 +159,48 @@ mod tests {
     #[test]
     fn test_should_correct_language_german() {
         assert!(
-            !should_correct_language("de"),
-            "German should NOT be corrected"
+            should_correct_language("de"),
+            "German should be corrected (dictionary available)"
         );
     }
 
     #[test]
     fn test_should_correct_language_french() {
         assert!(
-            !should_correct_language("fr"),
-            "French should NOT be corrected"
+            should_correct_language("fr"),
+            "French should be corrected (dictionary available)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_spanish() {
+        assert!(
+            should_correct_language("es"),
+            "Spanish should be corrected (dictionary available)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_italian() {
+        assert!(
+            should_correct_language("it"),
+            "Italian should be corrected (dictionary available)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_russian() {
+        assert!(
+            should_correct_language("ru"),
+            "Russian should be corrected (dictionary available)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_hebrew() {
+        assert!(
+            should_correct_language("he"),
+            "Hebrew should be corrected (dictionary available)"
         );
     }
 
@@ -206,7 +208,39 @@ mod tests {
     fn test_should_correct_language_japanese() {
         assert!(
             !should_correct_language("ja"),
-            "Japanese should NOT be corrected"
+            "Japanese should NOT be corrected (no dictionary)"
         );
+    }
+
+    #[test]
+    fn test_should_correct_language_chinese() {
+        assert!(
+            !should_correct_language("zh"),
+            "Chinese should NOT be corrected (no dictionary)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_korean() {
+        assert!(
+            !should_correct_language("ko"),
+            "Korean should NOT be corrected (no dictionary)"
+        );
+    }
+
+    #[test]
+    fn test_edit_distance_identical() {
+        assert_eq!(edit_distance("hello", "hello"), 0);
+    }
+
+    #[test]
+    fn test_edit_distance_one_char() {
+        assert_eq!(edit_distance("quik", "quick"), 1);
+    }
+
+    #[test]
+    fn test_edit_distance_completely_different() {
+        let d = edit_distance("hello world", "completely different");
+        assert!(d > 10, "Should be large: {d}");
     }
 }
