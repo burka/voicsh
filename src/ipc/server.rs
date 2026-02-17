@@ -356,7 +356,8 @@ mod tests {
                     backend: "CPU".to_string(),
                     device: None,
                     error_correction_enabled: false,
-                    error_correction_model: Some("flan-t5-small".to_string()),
+                    error_correction_model: Some("flan-t5-base".to_string()),
+                    error_correction_backend: Some("symspell".to_string()),
                 },
                 Command::Toggle => Response::Ok {
                     message: "Recording started".to_string(),
@@ -398,8 +399,9 @@ mod tests {
                 },
                 Command::ListCorrectionModels => Response::CorrectionModels {
                     models: vec![],
-                    current: "flan-t5-small".to_string(),
+                    current: "flan-t5-base".to_string(),
                     enabled: false,
+                    backend: Some("symspell".to_string()),
                 },
             }
         }
@@ -511,6 +513,7 @@ mod tests {
                 device,
                 error_correction_enabled,
                 error_correction_model,
+                error_correction_backend,
             } => {
                 assert!(!recording);
                 assert!(model_loaded);
@@ -520,7 +523,8 @@ mod tests {
                 assert_eq!(backend, "CPU");
                 assert_eq!(device, None);
                 assert!(!error_correction_enabled);
-                assert_eq!(error_correction_model, Some("flan-t5-small".to_string()));
+                assert_eq!(error_correction_model, Some("flan-t5-base".to_string()));
+                assert_eq!(error_correction_backend, Some("symspell".to_string()));
             }
             _ => panic!("Expected Status response"),
         }

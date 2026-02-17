@@ -63,6 +63,8 @@ pub use pipeline::station::Station;
 pub use correction::candle_t5::CandleT5Corrector;
 pub use correction::corrector::Corrector;
 pub use correction::station::CorrectionStation;
+#[cfg(feature = "symspell")]
+pub use correction::symspell::SymSpellCorrector;
 
 /// Build version string with optional git commit hash.
 ///

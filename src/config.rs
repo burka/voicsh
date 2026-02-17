@@ -74,12 +74,25 @@ impl Default for VoiceCommandConfig {
     }
 }
 
-/// Error correction configuration (English only, Flan-T5 via Candle).
+/// Error correction backend selection
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum CorrectionBackend {
+    /// Dictionary-based correction using SymSpell (fast, ~20 MB memory)
+    #[default]
+    Symspell,
+    /// Neural correction using Flan-T5 (slower, requires model download)
+    T5,
+}
+
+/// Error correction configuration (English only).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ErrorCorrectionConfig {
     /// Enable post-ASR error correction (English only).
     pub enabled: bool,
+    /// Backend to use for correction
+    pub backend: CorrectionBackend,
     /// T5 model size: "flan-t5-small" (64 MB), "flan-t5-base" (263 MB), "flan-t5-large" (852 MB).
     pub model: String,
     /// Only correct tokens with probability below this threshold (0.0-1.0).
@@ -92,7 +105,8 @@ impl Default for ErrorCorrectionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            model: "flan-t5-small".to_string(),
+            backend: CorrectionBackend::Symspell,
+            model: "flan-t5-base".to_string(),
             confidence_threshold: 0.85,
             timeout_ms: 2000,
         }
@@ -530,11 +544,12 @@ impl Config {
 
         out.push_str("[transcription.error_correction]\n");
         out.push_str("# enabled = true  # Post-ASR error correction (English only)\n");
-        out.push_str("# model = \"flan-t5-small\"  # Model size: flan-t5-small (64 MB), flan-t5-base (263 MB), flan-t5-large (852 MB)\n");
+        out.push_str("# backend = \"symspell\"  # Backend: symspell (fast, dictionary), t5 (neural, requires download)\n");
+        out.push_str("# model = \"flan-t5-base\"  # T5 model (only used when backend = \"t5\")\n");
         out.push_str(
             "# confidence_threshold = 0.85  # Only correct tokens below this probability (0.0-1.0)\n",
         );
-        out.push_str("# timeout_ms = 2000  # Timeout in ms, falls back to raw text\n");
+        out.push_str("# timeout_ms = 2000  # Timeout in ms (T5 only), falls back to raw text\n");
         out.push('\n');
 
         out.push_str("[transcription.hallucination_filters]\n");
@@ -1840,7 +1855,8 @@ mod tests {
     fn test_error_correction_config_defaults() {
         let config = ErrorCorrectionConfig::default();
         assert!(config.enabled, "Should be enabled by default");
-        assert_eq!(config.model, "flan-t5-small");
+        assert_eq!(config.backend, CorrectionBackend::Symspell);
+        assert_eq!(config.model, "flan-t5-base");
         assert_eq!(config.confidence_threshold, 0.85);
         assert_eq!(config.timeout_ms, 2000);
     }
@@ -1850,6 +1866,7 @@ mod tests {
         let toml_content = r#"
             [transcription.error_correction]
             enabled = true
+            backend = "t5"
             model = "flan-t5-base"
             confidence_threshold = 0.5
             timeout_ms = 3000
@@ -1860,6 +1877,10 @@ mod tests {
 
         let config = Config::load(temp_file.path()).unwrap();
         assert!(config.transcription.error_correction.enabled);
+        assert_eq!(
+            config.transcription.error_correction.backend,
+            CorrectionBackend::T5
+        );
         assert_eq!(config.transcription.error_correction.model, "flan-t5-base");
         assert_eq!(
             config.transcription.error_correction.confidence_threshold,
@@ -1880,7 +1901,11 @@ mod tests {
 
         let config = Config::load(temp_file.path()).unwrap();
         assert!(config.transcription.error_correction.enabled);
-        assert_eq!(config.transcription.error_correction.model, "flan-t5-small");
+        assert_eq!(
+            config.transcription.error_correction.backend,
+            CorrectionBackend::Symspell
+        );
+        assert_eq!(config.transcription.error_correction.model, "flan-t5-base");
         assert_eq!(
             config.transcription.error_correction.confidence_threshold,
             0.85
@@ -1899,7 +1924,7 @@ mod tests {
         let model = config
             .get_value_by_path("transcription.error_correction.model")
             .unwrap();
-        assert_eq!(model, "flan-t5-small");
+        assert_eq!(model, "flan-t5-base");
 
         let threshold: f64 = config
             .get_value_by_path("transcription.error_correction.confidence_threshold")
@@ -1948,7 +1973,11 @@ mod tests {
             "Missing [transcription.error_correction] section"
         );
         assert!(
-            template.contains("flan-t5-small"),
+            template.contains("symspell"),
+            "Missing symspell backend in template"
+        );
+        assert!(
+            template.contains("flan-t5-base"),
             "Missing default model in template"
         );
         assert!(
@@ -1967,6 +1996,7 @@ mod tests {
             transcription: TranscriptionConfig {
                 error_correction: ErrorCorrectionConfig {
                     enabled: true,
+                    backend: CorrectionBackend::T5,
                     model: "flan-t5-large".to_string(),
                     confidence_threshold: 0.5,
                     timeout_ms: 5000,
@@ -1984,6 +2014,44 @@ mod tests {
         assert_eq!(
             reloaded.transcription.error_correction,
             config.transcription.error_correction
+        );
+    }
+
+    #[test]
+    fn test_correction_backend_from_toml() {
+        // Test loading symspell backend
+        let toml = r#"
+            [transcription.error_correction]
+            backend = "symspell"
+        "#;
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml.as_bytes()).unwrap();
+        let config = Config::load(temp_file.path()).unwrap();
+        assert_eq!(
+            config.transcription.error_correction.backend,
+            CorrectionBackend::Symspell
+        );
+
+        // Test loading t5 backend
+        let toml = r#"
+            [transcription.error_correction]
+            backend = "t5"
+        "#;
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml.as_bytes()).unwrap();
+        let config = Config::load(temp_file.path()).unwrap();
+        assert_eq!(
+            config.transcription.error_correction.backend,
+            CorrectionBackend::T5
+        );
+    }
+
+    #[test]
+    fn test_correction_backend_default_is_symspell() {
+        let config = Config::default();
+        assert_eq!(
+            config.transcription.error_correction.backend,
+            CorrectionBackend::Symspell
         );
     }
 }
