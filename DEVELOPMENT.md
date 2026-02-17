@@ -5,18 +5,20 @@ weight: 4
 
 ## Build Prerequisites
 
-Requires Rust (via rustup), a C toolchain, cmake, pkg-config, libclang, and ALSA development headers:
+Requires Rust (via rustup), a C toolchain, cmake, pkg-config, clang, libclang, and ALSA development headers:
 
 ```bash
 # Debian/Ubuntu:
-sudo apt install build-essential cmake pkg-config libclang-dev libasound2-dev
+sudo apt install build-essential cmake pkg-config clang libclang-dev libasound2-dev
 
 # Fedora:
-sudo dnf install gcc gcc-c++ cmake pkg-config clang-devel alsa-lib-devel
+sudo dnf install gcc gcc-c++ cmake pkg-config clang clang-devel alsa-lib-devel
 
 # Arch:
 sudo pacman -S base-devel cmake pkgconf clang alsa-lib
 ```
+
+**Why `clang` (the binary)?** GPU builds use `bindgen` to generate FFI bindings. `bindgen` loads `libclang` as a library, but needs the `clang` binary in PATH to locate its resource directory (containing `stdbool.h`, `stddef.h`, etc.). Without it, `bindgen` silently falls back to pre-built bindings that lack GPU symbols. Some distros install only a versioned binary (e.g. `clang-20`) via `libclang-dev` — `bindgen` only looks for the unversioned `clang`.
 
 For the authoritative list of system dependencies, see [`test-containers/Dockerfile.vulkan`](test-containers/Dockerfile.vulkan).
 
@@ -57,7 +59,15 @@ sudo apt install libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc
 sudo apt install libopenblas-dev
 ```
 
-**Vulkan build troubleshooting:** If you see `unresolved import ggml_backend_vk_*` errors, `libclang-dev` is likely missing. The `whisper-rs-sys` build uses bindgen to generate FFI bindings from `ggml-vulkan.h` — without clang's built-in headers (`stdbool.h`), bindgen silently falls back to pre-built bindings that lack Vulkan symbols. Fix: `sudo apt install libclang-dev`.
+**GPU build troubleshooting:** If you see `unresolved import ggml_backend_vk_*` errors, bindgen failed to generate GPU bindings and fell back to incomplete pre-built ones. Common causes and fixes:
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `stdbool.h` not found | `clang` binary not in PATH | `sudo apt install clang` |
+| Versioned clang exists (e.g. `clang-20`) but `clang` doesn't | Distro only installed versioned binary | `sudo apt install clang` or `export CLANG_PATH=$(which clang-20)` |
+| No clang at all | libclang-dev not installed | `sudo apt install clang libclang-dev` |
+
+The build script runs preflight checks and will panic with specific guidance before compilation starts. If you need to bypass the check: `export CLANG_PATH=/usr/bin/clang-20`.
 
 ## Local Install
 
