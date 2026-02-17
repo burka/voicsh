@@ -358,6 +358,7 @@ mod tests {
                     error_correction_enabled: false,
                     error_correction_model: Some("flan-t5-base".to_string()),
                     error_correction_backend: Some("symspell".to_string()),
+                    dictionary_language: None,
                 },
                 Command::Toggle => Response::Ok {
                     message: "Recording started".to_string(),
@@ -514,6 +515,7 @@ mod tests {
                 error_correction_enabled,
                 error_correction_model,
                 error_correction_backend,
+                dictionary_language,
             } => {
                 assert!(!recording);
                 assert!(model_loaded);
@@ -525,6 +527,7 @@ mod tests {
                 assert!(!error_correction_enabled);
                 assert_eq!(error_correction_model, Some("flan-t5-base".to_string()));
                 assert_eq!(error_correction_backend, Some("symspell".to_string()));
+                assert_eq!(dictionary_language, None);
             }
             _ => panic!("Expected Status response"),
         }

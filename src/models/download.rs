@@ -22,6 +22,31 @@ pub fn models_dir() -> PathBuf {
         .join("models")
 }
 
+/// Get the directory where dictionaries are stored.
+///
+/// Uses `~/.cache/voicsh/dictionaries/` on Linux/Unix.
+pub fn dictionaries_dir() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from(".cache"))
+        .join("voicsh")
+        .join("dictionaries")
+}
+
+/// Get the full path for a dictionary file.
+///
+/// Always returns a path regardless of whether the dictionary is in the catalog.
+/// The file may or may not exist on disk.
+pub fn dictionary_path(lang: &str) -> PathBuf {
+    let info = crate::dictionary::get_dictionary(lang);
+    let filename = info.map(|i| i.filename).unwrap_or("unknown.txt");
+    dictionaries_dir().join(filename)
+}
+
+/// Check if a dictionary is installed.
+pub fn is_dictionary_installed(lang: &str) -> bool {
+    dictionary_path(lang).exists()
+}
+
 /// Get the full path for a model file.
 ///
 /// Always returns a path regardless of whether the model is in the catalog.
@@ -197,6 +222,61 @@ async fn remote_fallback(name: &str, _path: &Path, _progress: bool) -> Result<Pa
     Err(VoicshError::Other(format!(
         "Model '{name}' not found in catalog.\n\
          Run 'voicsh models list' to see available models."
+    )))
+}
+
+/// Download a SymSpell frequency dictionary.
+///
+/// Returns the path to the installed dictionary.
+/// If the dictionary is already installed, returns immediately without re-downloading.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The language is not in the catalog
+/// - The download fails
+/// - The file cannot be written
+#[cfg(feature = "model-download")]
+pub async fn download_dictionary(lang: &str, progress: bool) -> Result<PathBuf> {
+    let info = crate::dictionary::get_dictionary(lang).ok_or_else(|| {
+        VoicshError::Other(format!(
+            "No dictionary available for language '{}'. Available: {}",
+            lang,
+            crate::dictionary::list_dictionaries()
+                .iter()
+                .map(|d| d.language)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    })?;
+
+    let path = dictionary_path(lang);
+    if path.exists() {
+        return Ok(path);
+    }
+
+    // Reuse existing download_to_path with empty SHA (no stable hash from GitHub raw URLs)
+    download_to_path(
+        &format!("{} dictionary", info.display_name),
+        info.url,
+        "",                          // no SHA verification for small files
+        info.size_kb.div_ceil(1024), // convert KB to MB (round up) for display
+        &path,
+        progress,
+    )
+    .await?;
+
+    Ok(path)
+}
+
+/// Download a SymSpell frequency dictionary (stub when model-download feature is disabled).
+#[cfg(not(feature = "model-download"))]
+pub async fn download_dictionary(lang: &str, _progress: bool) -> Result<PathBuf> {
+    Err(VoicshError::Other(format!(
+        "Dictionary download requires the 'model-download' feature.\n\
+         Manually place the {} dictionary at: {}",
+        lang,
+        dictionary_path(lang).display()
     )))
 }
 
@@ -576,6 +656,98 @@ mod tests {
         let parent = path.parent().unwrap();
         let expected = models_dir();
         assert_eq!(parent, expected, "model_path parent should be models_dir");
+    }
+
+    // ── Dictionary tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_dictionaries_dir_is_valid_path() {
+        let dir = dictionaries_dir();
+        let dir_str = dir.to_string_lossy();
+        assert!(
+            dir_str.contains("voicsh"),
+            "dictionaries_dir should contain 'voicsh', got: {}",
+            dir_str
+        );
+        assert!(
+            dir_str.contains("dictionaries"),
+            "dictionaries_dir should contain 'dictionaries', got: {}",
+            dir_str
+        );
+    }
+
+    #[test]
+    fn test_dictionaries_dir_structure() {
+        let dir = dictionaries_dir();
+        assert_eq!(
+            dir.file_name().unwrap(),
+            "dictionaries",
+            "Last component should be 'dictionaries'"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_path_for_valid_language() {
+        let path = dictionary_path("en");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(filename, "en-80k.txt");
+    }
+
+    #[test]
+    fn test_dictionary_path_for_unknown_language() {
+        let path = dictionary_path("nonexistent");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(filename, "unknown.txt");
+    }
+
+    #[test]
+    fn test_dictionary_path_for_all_catalog_languages() {
+        for dict in crate::dictionary::list_dictionaries() {
+            let path = dictionary_path(dict.language);
+            let filename = path.file_name().unwrap().to_string_lossy();
+            assert_eq!(
+                filename, dict.filename,
+                "dictionary_path({}) should return {}",
+                dict.language, dict.filename
+            );
+        }
+    }
+
+    #[test]
+    fn test_dictionary_path_parent_is_dictionaries_dir() {
+        let path = dictionary_path("en");
+        let parent = path.parent().unwrap();
+        let expected = dictionaries_dir();
+        assert_eq!(
+            parent, expected,
+            "dictionary_path parent should be dictionaries_dir"
+        );
+    }
+
+    #[test]
+    fn test_is_dictionary_installed_returns_false_for_invalid() {
+        let installed = is_dictionary_installed("nonexistent_lang_xyz");
+        assert!(!installed);
+    }
+
+    #[test]
+    fn test_dictionary_path_consistency() {
+        let path1 = dictionary_path("en");
+        let path2 = dictionary_path("en");
+        assert_eq!(
+            path1, path2,
+            "dictionary_path should return consistent results"
+        );
+    }
+
+    #[test]
+    fn test_dictionary_path_with_empty_string() {
+        let path = dictionary_path("");
+        let filename = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            filename, "unknown.txt",
+            "Empty string should produce unknown.txt"
+        );
     }
 
     #[test]

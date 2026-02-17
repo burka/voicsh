@@ -43,10 +43,11 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
 
 /// Check whether correction should be attempted for the given language.
 ///
-/// Only English is supported. Empty string and "auto" are treated as
-/// potentially English and allowed through.
+/// Allows languages that have a SymSpell dictionary available,
+/// plus empty string and "auto" which are treated as potentially
+/// correctable.
 pub fn should_correct_language(language: &str) -> bool {
-    language.is_empty() || language == "en" || language == "auto"
+    language.is_empty() || language == "auto" || crate::dictionary::has_dictionary(language)
 }
 
 #[cfg(test)]
@@ -158,16 +159,48 @@ mod tests {
     #[test]
     fn test_should_correct_language_german() {
         assert!(
-            !should_correct_language("de"),
-            "German should NOT be corrected"
+            should_correct_language("de"),
+            "German should be corrected (dictionary available)"
         );
     }
 
     #[test]
     fn test_should_correct_language_french() {
         assert!(
-            !should_correct_language("fr"),
-            "French should NOT be corrected"
+            should_correct_language("fr"),
+            "French should be corrected (dictionary available)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_spanish() {
+        assert!(
+            should_correct_language("es"),
+            "Spanish should be corrected (dictionary available)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_italian() {
+        assert!(
+            should_correct_language("it"),
+            "Italian should be corrected (dictionary available)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_russian() {
+        assert!(
+            should_correct_language("ru"),
+            "Russian should be corrected (dictionary available)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_hebrew() {
+        assert!(
+            should_correct_language("he"),
+            "Hebrew should be corrected (dictionary available)"
         );
     }
 
@@ -175,7 +208,23 @@ mod tests {
     fn test_should_correct_language_japanese() {
         assert!(
             !should_correct_language("ja"),
-            "Japanese should NOT be corrected"
+            "Japanese should NOT be corrected (no dictionary)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_chinese() {
+        assert!(
+            !should_correct_language("zh"),
+            "Chinese should NOT be corrected (no dictionary)"
+        );
+    }
+
+    #[test]
+    fn test_should_correct_language_korean() {
+        assert!(
+            !should_correct_language("ko"),
+            "Korean should NOT be corrected (no dictionary)"
         );
     }
 

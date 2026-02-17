@@ -19,6 +19,7 @@ pub mod daemon;
 pub mod defaults;
 #[cfg(feature = "cli")]
 pub mod diagnostics;
+pub mod dictionary;
 pub mod error;
 #[cfg(feature = "cli")]
 pub mod gnome_extension;

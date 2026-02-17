@@ -99,6 +99,9 @@ pub struct ErrorCorrectionConfig {
     pub confidence_threshold: f32,
     /// Timeout in milliseconds — fall back to raw text if exceeded.
     pub timeout_ms: u64,
+    /// Dictionary language for SymSpell backend.
+    /// "auto" = match STT language if dictionary exists, fall back to "en".
+    pub dictionary_language: String,
 }
 
 impl Default for ErrorCorrectionConfig {
@@ -109,6 +112,7 @@ impl Default for ErrorCorrectionConfig {
             model: "flan-t5-base".to_string(),
             confidence_threshold: 0.85,
             timeout_ms: 2000,
+            dictionary_language: "auto".to_string(),
         }
     }
 }
@@ -550,6 +554,7 @@ impl Config {
             "# confidence_threshold = 0.85  # Only correct tokens below this probability (0.0-1.0)\n",
         );
         out.push_str("# timeout_ms = 2000  # Timeout in ms (T5 only), falls back to raw text\n");
+        out.push_str("# dictionary_language = \"auto\"  # SymSpell dictionary language: auto, en, de, es, fr, he, it, ru\n");
         out.push('\n');
 
         out.push_str("[transcription.hallucination_filters]\n");
@@ -2000,6 +2005,7 @@ mod tests {
                     model: "flan-t5-large".to_string(),
                     confidence_threshold: 0.5,
                     timeout_ms: 5000,
+                    dictionary_language: "auto".to_string(),
                 },
                 ..TranscriptionConfig::default()
             },
@@ -2052,6 +2058,76 @@ mod tests {
         assert_eq!(
             config.transcription.error_correction.backend,
             CorrectionBackend::Symspell
+        );
+    }
+
+    #[test]
+    fn test_error_correction_config_dictionary_language_default() {
+        let config = ErrorCorrectionConfig::default();
+        assert_eq!(config.dictionary_language, "auto");
+    }
+
+    #[test]
+    fn test_error_correction_config_dictionary_language_from_toml() {
+        let toml_content = r#"
+            [transcription.error_correction]
+            enabled = true
+            backend = "symspell"
+            dictionary_language = "de"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert_eq!(
+            config.transcription.error_correction.dictionary_language,
+            "de"
+        );
+    }
+
+    #[test]
+    fn test_error_correction_config_dictionary_language_roundtrip() {
+        let config = Config {
+            transcription: TranscriptionConfig {
+                error_correction: ErrorCorrectionConfig {
+                    enabled: true,
+                    backend: CorrectionBackend::Symspell,
+                    model: "flan-t5-base".to_string(),
+                    confidence_threshold: 0.85,
+                    timeout_ms: 2000,
+                    dictionary_language: "fr".to_string(),
+                },
+                ..TranscriptionConfig::default()
+            },
+            ..Config::default()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(
+            reloaded.transcription.error_correction.dictionary_language,
+            "fr"
+        );
+    }
+
+    #[test]
+    fn test_dump_template_contains_dictionary_language() {
+        let template = Config::dump_template();
+        assert!(
+            template.contains("dictionary_language"),
+            "Missing dictionary_language field in template"
+        );
+        assert!(
+            template.contains("auto"),
+            "Missing 'auto' default value in template"
+        );
+        assert!(
+            template.contains("en, de, es, fr, he, it, ru"),
+            "Missing language list in template"
         );
     }
 }

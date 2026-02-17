@@ -99,6 +99,7 @@ pub enum Response {
         error_correction_enabled: bool,
         error_correction_model: Option<String>,
         error_correction_backend: Option<String>,
+        dictionary_language: Option<String>,
     },
     /// Error occurred
     Error { message: String },
@@ -321,6 +322,7 @@ mod tests {
             error_correction_enabled: false,
             error_correction_model: None,
             error_correction_backend: None,
+            dictionary_language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -344,6 +346,7 @@ mod tests {
             error_correction_enabled: false,
             error_correction_model: None,
             error_correction_backend: None,
+            dictionary_language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -363,6 +366,7 @@ mod tests {
             error_correction_enabled: false,
             error_correction_model: None,
             error_correction_backend: None,
+            dictionary_language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -383,6 +387,7 @@ mod tests {
             error_correction_enabled: false,
             error_correction_model: None,
             error_correction_backend: None,
+            dictionary_language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
@@ -1125,6 +1130,7 @@ mod tests {
             error_correction_enabled: true,
             error_correction_model: Some("flan-t5-base".to_string()),
             error_correction_backend: Some("symspell".to_string()),
+            dictionary_language: None,
         };
         let json = resp.to_json().expect("should serialize");
         let deserialized = Response::from_json(&json).expect("should deserialize");
