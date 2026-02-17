@@ -3,6 +3,7 @@
 use crate::config::ErrorCorrectionConfig;
 use crate::correction::corrector::Corrector;
 use crate::correction::prompt;
+use crate::ipc::protocol::TextOrigin;
 use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::TranscribedText;
@@ -50,7 +51,11 @@ impl Station for CorrectionStation {
         // Apply correction — fall back to raw text on error
         match self.corrector.correct(&correction_prompt) {
             Ok(corrected) if !corrected.is_empty() => {
-                input.text = corrected;
+                if corrected != input.text {
+                    input.raw_text = Some(input.text.clone());
+                    input.text = corrected;
+                    input.text_origin = TextOrigin::Corrected;
+                }
             }
             Ok(_) => {
                 // Empty correction result — keep raw text
@@ -126,7 +131,7 @@ mod tests {
             events: vec![SinkEvent::Text("test".into())],
             token_probabilities: tokens,
             raw_text: None,
-            text_origin: crate::ipc::protocol::TextOrigin::default(),
+            text_origin: TextOrigin::default(),
         }
     }
 
@@ -249,7 +254,7 @@ mod tests {
             events: vec![SinkEvent::Text("event1".into())],
             token_probabilities: low_confidence_tokens(),
             raw_text: None,
-            text_origin: crate::ipc::protocol::TextOrigin::default(),
+            text_origin: TextOrigin::default(),
         };
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "corrected");
@@ -303,5 +308,34 @@ mod tests {
         });
         let station = CorrectionStation::new(corrector, disabled_config());
         assert_eq!(station.name(), "Correction");
+    }
+
+    #[test]
+    fn correction_sets_raw_text_and_origin() {
+        let corrector = Box::new(FixedCorrectorForTest {
+            response: "the quick brown".into(),
+            should_fail: false,
+        });
+        let mut station = CorrectionStation::new(corrector, enabled_config(0.7));
+        let input = make_input("the quik brown", "en", low_confidence_tokens());
+        let result = station.process(input).unwrap().unwrap();
+        assert_eq!(result.text, "the quick brown");
+        assert_eq!(result.raw_text, Some("the quik brown".to_string()));
+        assert_eq!(result.text_origin, TextOrigin::Corrected);
+    }
+
+    #[test]
+    fn no_change_preserves_default_origin() {
+        // When corrector returns identical text, provenance should stay default
+        let corrector = Box::new(FixedCorrectorForTest {
+            response: "the quik brown".into(),
+            should_fail: false,
+        });
+        let mut station = CorrectionStation::new(corrector, enabled_config(0.7));
+        let input = make_input("the quik brown", "en", low_confidence_tokens());
+        let result = station.process(input).unwrap().unwrap();
+        assert_eq!(result.text, "the quik brown");
+        assert_eq!(result.raw_text, None);
+        assert_eq!(result.text_origin, TextOrigin::Transcription);
     }
 }

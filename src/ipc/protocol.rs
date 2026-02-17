@@ -174,7 +174,7 @@ pub enum DaemonEvent {
         wait_ms: Option<u32>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         token_probabilities: Vec<crate::stt::transcriber::TokenProbability>,
-        /// Original text before voice-command replacement. Absent if unchanged.
+        /// Original text before correction/voice-command. Absent if unchanged.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         raw_text: Option<String>,
         /// How the text was produced. Absent (defaults to "transcription") if unchanged.
@@ -1022,112 +1022,6 @@ mod tests {
         assert_eq!(event, deserialized);
         assert!(json.contains("\"type\":\"transcription_dropped\""));
     }
-    // ── TextOrigin and provenance field tests ──────────────────────────────────
-
-    #[test]
-    fn text_origin_default_is_transcription() {
-        let origin = TextOrigin::default();
-        assert_eq!(origin, TextOrigin::Transcription);
-        assert!(origin.is_transcription());
-    }
-
-    #[test]
-    fn text_origin_voice_command_is_not_transcription() {
-        assert!(!TextOrigin::VoiceCommand.is_transcription());
-    }
-
-    #[test]
-    fn text_origin_json_roundtrip() {
-        let origins = vec![
-            TextOrigin::Transcription,
-            TextOrigin::Corrected,
-            TextOrigin::VoiceCommand,
-        ];
-        for origin in origins {
-            let json = serde_json::to_string(&origin).expect("should serialize");
-            let deserialized: TextOrigin = serde_json::from_str(&json).expect("should deserialize");
-            assert_eq!(origin, deserialized);
-        }
-    }
-
-    #[test]
-    fn text_origin_serializes_snake_case() {
-        assert_eq!(
-            serde_json::to_string(&TextOrigin::Transcription).unwrap(),
-            r#""transcription""#
-        );
-        assert_eq!(
-            serde_json::to_string(&TextOrigin::Corrected).unwrap(),
-            r#""corrected""#
-        );
-        assert_eq!(
-            serde_json::to_string(&TextOrigin::VoiceCommand).unwrap(),
-            r#""voice_command""#
-        );
-    }
-
-    #[test]
-    fn transcription_event_omits_defaults() {
-        // When raw_text is None and text_origin is Transcription,
-        // those fields should be absent from JSON (serde skip).
-        let event = DaemonEvent::Transcription {
-            text: "hello".to_string(),
-            language: "en".to_string(),
-            confidence: 0.95,
-            wait_ms: None,
-            token_probabilities: vec![],
-            raw_text: None,
-            text_origin: TextOrigin::Transcription,
-        };
-        let json = event.to_json().expect("should serialize");
-        assert!(!json.contains("raw_text"), "raw_text should be omitted");
-        assert!(
-            !json.contains("text_origin"),
-            "text_origin should be omitted when Transcription"
-        );
-        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
-        assert_eq!(event, deserialized);
-    }
-
-    #[test]
-    fn transcription_event_with_voice_command_roundtrip() {
-        let event = DaemonEvent::Transcription {
-            text: ".".to_string(),
-            language: "en".to_string(),
-            confidence: 0.95,
-            wait_ms: None,
-            token_probabilities: vec![],
-            raw_text: Some("period".to_string()),
-            text_origin: TextOrigin::VoiceCommand,
-        };
-        let json = event.to_json().expect("should serialize");
-        assert!(json.contains(r#""raw_text":"period""#));
-        assert!(json.contains(r#""text_origin":"voice_command""#));
-        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
-        assert_eq!(event, deserialized);
-    }
-
-    #[test]
-    fn backwards_compat_deser() {
-        // Old JSON without raw_text/text_origin must deserialize with defaults.
-        let old_json =
-            r#"{"type":"transcription","text":"hello world","language":"en","confidence":0.95}"#;
-        let event = DaemonEvent::from_json(old_json).expect("old JSON should deserialize");
-        match event {
-            DaemonEvent::Transcription {
-                text,
-                raw_text,
-                text_origin,
-                ..
-            } => {
-                assert_eq!(text, "hello world");
-                assert_eq!(raw_text, None);
-                assert_eq!(text_origin, TextOrigin::Transcription);
-            }
-            _ => panic!("Expected Transcription event"),
-        }
-    }
-
     // Error correction command tests
 
     #[test]
@@ -1229,5 +1123,135 @@ mod tests {
         assert_eq!(resp, deserialized);
         assert!(json.contains(r#""error_correction_enabled":true"#));
         assert!(json.contains(r#""error_correction_model":"flan-t5-small""#));
+    }
+
+    // ── TextOrigin and provenance field tests ──────────────────────────
+
+    #[test]
+    fn text_origin_default_is_transcription() {
+        let origin = TextOrigin::default();
+        assert_eq!(origin, TextOrigin::Transcription);
+        assert!(origin.is_transcription());
+    }
+
+    #[test]
+    fn text_origin_corrected_is_not_transcription() {
+        assert!(!TextOrigin::Corrected.is_transcription());
+    }
+
+    #[test]
+    fn text_origin_voice_command_is_not_transcription() {
+        assert!(!TextOrigin::VoiceCommand.is_transcription());
+    }
+
+    #[test]
+    fn text_origin_json_roundtrip() {
+        let origins = vec![
+            TextOrigin::Transcription,
+            TextOrigin::Corrected,
+            TextOrigin::VoiceCommand,
+        ];
+        for origin in origins {
+            let json = serde_json::to_string(&origin).expect("should serialize");
+            let deserialized: TextOrigin = serde_json::from_str(&json).expect("should deserialize");
+            assert_eq!(origin, deserialized);
+        }
+    }
+
+    #[test]
+    fn text_origin_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&TextOrigin::Transcription).unwrap(),
+            r#""transcription""#
+        );
+        assert_eq!(
+            serde_json::to_string(&TextOrigin::Corrected).unwrap(),
+            r#""corrected""#
+        );
+        assert_eq!(
+            serde_json::to_string(&TextOrigin::VoiceCommand).unwrap(),
+            r#""voice_command""#
+        );
+    }
+
+    #[test]
+    fn transcription_event_omits_defaults() {
+        // When raw_text is None and text_origin is Transcription,
+        // those fields should be absent from JSON (serde skip).
+        let event = DaemonEvent::Transcription {
+            text: "hello".to_string(),
+            language: "en".to_string(),
+            confidence: 0.95,
+            wait_ms: None,
+            token_probabilities: vec![],
+            raw_text: None,
+            text_origin: TextOrigin::Transcription,
+        };
+        let json = event.to_json().expect("should serialize");
+        assert!(!json.contains("raw_text"), "raw_text should be omitted");
+        assert!(
+            !json.contains("text_origin"),
+            "text_origin should be omitted when Transcription"
+        );
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn transcription_event_with_correction_roundtrip() {
+        let event = DaemonEvent::Transcription {
+            text: "the quick brown fox".to_string(),
+            language: "en".to_string(),
+            confidence: 0.8,
+            wait_ms: Some(200),
+            token_probabilities: vec![],
+            raw_text: Some("the quik brown fox".to_string()),
+            text_origin: TextOrigin::Corrected,
+        };
+        let json = event.to_json().expect("should serialize");
+        assert!(json.contains(r#""raw_text":"the quik brown fox""#));
+        assert!(json.contains(r#""text_origin":"corrected""#));
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn transcription_event_with_voice_command_roundtrip() {
+        let event = DaemonEvent::Transcription {
+            text: ".".to_string(),
+            language: "en".to_string(),
+            confidence: 0.95,
+            wait_ms: None,
+            token_probabilities: vec![],
+            raw_text: Some("period".to_string()),
+            text_origin: TextOrigin::VoiceCommand,
+        };
+        let json = event.to_json().expect("should serialize");
+        assert!(json.contains(r#""raw_text":"period""#));
+        assert!(json.contains(r#""text_origin":"voice_command""#));
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn transcription_event_backwards_compatible_deserialization() {
+        // Old clients send transcription events without raw_text/text_origin.
+        // Verify we can deserialize those (serde defaults kick in).
+        let old_json =
+            r#"{"type":"transcription","text":"hello","language":"en","confidence":0.95}"#;
+        let event = DaemonEvent::from_json(old_json).expect("should deserialize old format");
+        match event {
+            DaemonEvent::Transcription {
+                text,
+                raw_text,
+                text_origin,
+                ..
+            } => {
+                assert_eq!(text, "hello");
+                assert_eq!(raw_text, None);
+                assert_eq!(text_origin, TextOrigin::Transcription);
+            }
+            _ => panic!("Expected Transcription event"),
+        }
     }
 }
