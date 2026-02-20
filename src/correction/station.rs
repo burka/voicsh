@@ -7,10 +7,13 @@ use crate::ipc::protocol::TextOrigin;
 use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::TranscribedText;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static LANGUAGE_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Pipeline station that applies post-ASR error correction.
 ///
-/// Only corrects English text with low-confidence tokens.
+/// Only corrects languages with a SymSpell dictionary and low-confidence tokens.
 /// Falls back to raw text on timeout or error.
 pub struct CorrectionStation {
     corrector: Box<dyn Corrector>,
@@ -34,7 +37,9 @@ impl Station for CorrectionStation {
         }
 
         if !prompt::should_correct_language(&input.language) {
-            eprintln!("voicsh: correction skipped (language '{}')", input.language);
+            if !LANGUAGE_SKIP_LOGGED.swap(true, Ordering::Relaxed) {
+                eprintln!("voicsh: correction skipped (language '{}')", input.language);
+            }
             return Ok(Some(input));
         }
 
@@ -43,7 +48,6 @@ impl Station for CorrectionStation {
         }
 
         let raw_text = prompt::extract_raw_text(&input.token_probabilities);
-        eprintln!("voicsh: correction input: '{raw_text}'");
 
         match self.corrector.correct(&raw_text) {
             Ok(corrected) => {
@@ -56,17 +60,9 @@ impl Station for CorrectionStation {
                     let distance = prompt::edit_distance(&input.text, &corrected);
                     let change_ratio = distance as f64 / max_len as f64;
                     if change_ratio > 0.4 {
-                        eprintln!(
-                            "voicsh: correction too divergent ({:.0}%), keeping raw",
-                            change_ratio * 100.0
-                        );
                         return Ok(Some(input));
                     }
                 }
-                eprintln!(
-                    "voicsh: correction result: '{}' (raw: '{}')",
-                    corrected, input.text
-                );
                 if corrected != input.text {
                     input.raw_text = Some(input.text.clone());
                     input.text = corrected;
@@ -190,13 +186,13 @@ mod tests {
     }
 
     #[test]
-    fn non_english_language_passes_through() {
+    fn unsupported_language_passes_through() {
         let corrector = Box::new(FixedCorrectorForTest {
             response: "should not appear".into(),
             should_fail: false,
         });
         let mut station = CorrectionStation::new(corrector, enabled_config(0.7));
-        let input = make_input("original text", "de", low_confidence_tokens());
+        let input = make_input("original text", "ja", low_confidence_tokens());
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "original text");
     }

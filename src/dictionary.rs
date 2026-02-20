@@ -17,6 +17,8 @@ pub struct DictionaryInfo {
     pub url: &'static str,
     /// Approximate download size in KB.
     pub size_kb: u32,
+    /// SHA-256 checksum of the dictionary file for integrity verification.
+    pub sha256: &'static str,
 }
 
 /// Available SymSpell frequency dictionaries, ordered by language code.
@@ -27,6 +29,7 @@ pub const DICTIONARIES: &[DictionaryInfo] = &[
         filename: "de-100k.txt",
         url: "https://raw.githubusercontent.com/wolfgarbe/SymSpell/master/SymSpell.FrequencyDictionary/de-100k.txt",
         size_kb: 1200,
+        sha256: "a98c27cbe0921cb3a9927eb28639efb45fc3493f72466cca0622c64dff4e74a9",
     },
     DictionaryInfo {
         language: "en",
@@ -34,13 +37,15 @@ pub const DICTIONARIES: &[DictionaryInfo] = &[
         filename: "en-80k.txt",
         url: "https://raw.githubusercontent.com/wolfgarbe/SymSpell/master/SymSpell.FrequencyDictionary/en-80k.txt",
         size_kb: 900,
+        sha256: "f84bfae717ff3a4a3b90c824ed06ea08e4b2ed2746f7bba63d4e52f2c8bf85c3",
     },
     DictionaryInfo {
         language: "es",
         display_name: "Spanish",
-        filename: "es-100k.txt",
-        url: "https://raw.githubusercontent.com/wolfgarbe/SymSpell/master/SymSpell.FrequencyDictionary/es-100k.txt",
+        filename: "es-100l.txt",
+        url: "https://raw.githubusercontent.com/wolfgarbe/SymSpell/master/SymSpell.FrequencyDictionary/es-100l.txt",
         size_kb: 1000,
+        sha256: "fd538cb220cd00d0a9f20d2190ba6f033b76f91ee08c6c0df8fadbf46bbdf319",
     },
     DictionaryInfo {
         language: "fr",
@@ -48,6 +53,7 @@ pub const DICTIONARIES: &[DictionaryInfo] = &[
         filename: "fr-100k.txt",
         url: "https://raw.githubusercontent.com/wolfgarbe/SymSpell/master/SymSpell.FrequencyDictionary/fr-100k.txt",
         size_kb: 1100,
+        sha256: "b7dca46c0002daa0c6d70e1078bef4110815f65b0c90c35be1ae900ba2f5e9fc",
     },
     DictionaryInfo {
         language: "he",
@@ -55,6 +61,7 @@ pub const DICTIONARIES: &[DictionaryInfo] = &[
         filename: "he-100k.txt",
         url: "https://raw.githubusercontent.com/wolfgarbe/SymSpell/master/SymSpell.FrequencyDictionary/he-100k.txt",
         size_kb: 800,
+        sha256: "b1305dc929be951e20d50440585a627b4c9d95e2044122a73b33a0ba25b713d9",
     },
     DictionaryInfo {
         language: "it",
@@ -62,6 +69,7 @@ pub const DICTIONARIES: &[DictionaryInfo] = &[
         filename: "it-100k.txt",
         url: "https://raw.githubusercontent.com/wolfgarbe/SymSpell/master/SymSpell.FrequencyDictionary/it-100k.txt",
         size_kb: 1100,
+        sha256: "5f746afb7e6ae802872061ef025ce883cfa2a8779780968fa285dfd0907e9cfc",
     },
     DictionaryInfo {
         language: "ru",
@@ -69,6 +77,7 @@ pub const DICTIONARIES: &[DictionaryInfo] = &[
         filename: "ru-100k.txt",
         url: "https://raw.githubusercontent.com/wolfgarbe/SymSpell/master/SymSpell.FrequencyDictionary/ru-100k.txt",
         size_kb: 1300,
+        sha256: "2028262759546fdc346386369a59541d0464f48634c3103ff3f36d01518efcc6",
     },
 ];
 
@@ -115,7 +124,7 @@ mod tests {
         let dict = get_dictionary("es").expect("es dictionary should exist");
         assert_eq!(dict.language, "es");
         assert_eq!(dict.display_name, "Spanish");
-        assert_eq!(dict.filename, "es-100k.txt");
+        assert_eq!(dict.filename, "es-100l.txt");
         assert_eq!(dict.size_kb, 1000);
     }
 
@@ -263,6 +272,36 @@ mod tests {
                 seen.insert(dict.filename),
                 "Duplicate filename: {}",
                 dict.filename
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_sha256_hashes_non_empty() {
+        for dict in DICTIONARIES {
+            assert!(
+                !dict.sha256.is_empty(),
+                "{} dictionary should have a non-empty SHA-256 hash",
+                dict.language
+            );
+            assert_eq!(
+                dict.sha256.len(),
+                64,
+                "{} SHA-256 hash should be 64 hex characters, got {}",
+                dict.language,
+                dict.sha256.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_sha256_hashes_are_valid_hex() {
+        for dict in DICTIONARIES {
+            let all_hex = dict.sha256.chars().all(|c| c.is_ascii_hexdigit());
+            assert!(
+                all_hex,
+                "{} SHA-256 hash contains non-hex characters: {}",
+                dict.language, dict.sha256
             );
         }
     }

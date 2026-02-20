@@ -458,7 +458,7 @@ impl DaemonCommandHandler {
         if config.transcription.error_correction.backend == CorrectionBackend::Symspell {
             drop(config);
             return Response::Error {
-                message: "Cannot set correction model: backend is symspell (dictionary-based, no model selection)".to_string(),
+                message: "Cannot set correction model: current backend is symspell (only T5 backend supports model selection)".to_string(),
             };
         }
         drop(config);

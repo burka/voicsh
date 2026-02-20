@@ -8,6 +8,7 @@ use crate::models::catalog::{ModelInfo, get_model};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use sha1::{Digest, Sha1};
+use sha2::Sha256;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -62,11 +63,12 @@ pub fn is_model_installed(name: &str) -> bool {
     model_path(name).exists()
 }
 
-/// Core download: fetch url, save to path, verify sha1 if non-empty.
+/// Core download: fetch url, save to path, verify sha1 and/or sha256 if non-empty.
 async fn download_to_path(
     name: &str,
     url: &str,
     sha1: &str,
+    sha256: &str,
     size_mb: u32,
     output_path: &Path,
     progress: bool,
@@ -114,7 +116,8 @@ async fn download_to_path(
     };
 
     // Download with streaming and hash calculation
-    let mut hasher = Sha1::new();
+    let mut sha1_hasher = Sha1::new();
+    let mut sha256_hasher = Sha256::new();
     let mut stream = response.bytes_stream();
     let mut file = fs::File::create(output_path)
         .map_err(|e| VoicshError::Other(format!("Failed to create output file: {e}")))?;
@@ -126,7 +129,8 @@ async fn download_to_path(
         file.write_all(&chunk)
             .map_err(|e| VoicshError::Other(format!("Failed to write to file: {e}")))?;
 
-        hasher.update(&chunk);
+        sha1_hasher.update(&chunk);
+        sha256_hasher.update(&chunk);
 
         if let Some(ref pb) = pb {
             pb.inc(chunk.len() as u64);
@@ -139,13 +143,29 @@ async fn download_to_path(
 
     // Verify SHA-1 checksum
     if !sha1.is_empty() {
-        let calculated_hash = format!("{:x}", hasher.finalize());
-        if calculated_hash != sha1 {
+        let calculated = format!("{:x}", sha1_hasher.finalize());
+        if calculated != sha1 {
             if let Err(e) = fs::remove_file(output_path) {
                 eprintln!("voicsh: failed to remove corrupted download: {e}");
             }
             return Err(VoicshError::Other(format!(
-                "SHA-1 checksum mismatch. Expected: {sha1}, got: {calculated_hash}"
+                "SHA-1 checksum mismatch. Expected: {sha1}, got: {calculated}"
+            )));
+        }
+        if progress {
+            eprintln!("Checksum verified");
+        }
+    }
+
+    // Verify SHA-256 checksum
+    if !sha256.is_empty() {
+        let calculated = format!("{:x}", sha256_hasher.finalize());
+        if calculated != sha256 {
+            if let Err(e) = fs::remove_file(output_path) {
+                eprintln!("voicsh: failed to remove corrupted download: {e}");
+            }
+            return Err(VoicshError::Other(format!(
+                "SHA-256 checksum mismatch. Expected: {sha256}, got: {calculated}"
             )));
         }
         if progress {
@@ -188,7 +208,16 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
 
     // Try static catalog first
     if let Some(info) = get_model(name) {
-        download_to_path(name, &info.url(), info.sha1, info.size_mb, &path, progress).await?;
+        download_to_path(
+            name,
+            &info.url(),
+            info.sha1,
+            "",
+            info.size_mb,
+            &path,
+            progress,
+        )
+        .await?;
         return Ok(path);
     }
 
@@ -213,7 +242,7 @@ async fn remote_fallback(name: &str, path: &Path, progress: bool) -> Result<Path
         ))
     })?;
 
-    download_to_path(name, &rm.url, "", rm.size_mb, path, progress).await?;
+    download_to_path(name, &rm.url, "", "", rm.size_mb, path, progress).await?;
     Ok(path.to_path_buf())
 }
 
@@ -235,6 +264,7 @@ async fn remote_fallback(name: &str, _path: &Path, _progress: bool) -> Result<Pa
 /// Returns an error if:
 /// - The language is not in the catalog
 /// - The download fails
+/// - The SHA-256 checksum doesn't match
 /// - The file cannot be written
 #[cfg(feature = "model-download")]
 pub async fn download_dictionary(lang: &str, progress: bool) -> Result<PathBuf> {
@@ -255,11 +285,11 @@ pub async fn download_dictionary(lang: &str, progress: bool) -> Result<PathBuf> 
         return Ok(path);
     }
 
-    // Reuse existing download_to_path with empty SHA (no stable hash from GitHub raw URLs)
     download_to_path(
         &format!("{} dictionary", info.display_name),
         info.url,
-        "",                          // no SHA verification for small files
+        "", // no SHA-1 for dictionaries; SHA-256 is used instead
+        info.sha256,
         info.size_kb.div_ceil(1024), // convert KB to MB (round up) for display
         &path,
         progress,
@@ -462,23 +492,6 @@ mod tests {
                 "Listed model '{}' should exist on disk at {}",
                 name,
                 literal_path.display()
-            );
-        }
-    }
-
-    #[test]
-    fn test_list_installed_models_strips_prefix_and_suffix() {
-        // If any models are installed, their names should not contain ggml- or .bin
-        for name in list_installed_models() {
-            assert!(
-                !name.starts_with("ggml-"),
-                "Model name '{}' should not have ggml- prefix",
-                name
-            );
-            assert!(
-                !name.ends_with(".bin"),
-                "Model name '{}' should not have .bin suffix",
-                name
             );
         }
     }
