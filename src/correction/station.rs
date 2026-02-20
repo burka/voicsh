@@ -44,6 +44,10 @@ impl Station for CorrectionStation {
         }
 
         if !prompt::needs_correction(&input.token_probabilities, self.config.confidence_threshold) {
+            eprintln!(
+                "voicsh: correction skipped (all tokens above confidence threshold {})",
+                self.config.confidence_threshold
+            );
             return Ok(Some(input));
         }
 
@@ -60,6 +64,10 @@ impl Station for CorrectionStation {
                     let distance = prompt::edit_distance(&input.text, &corrected);
                     let change_ratio = distance as f64 / max_len as f64;
                     if change_ratio > 0.4 {
+                        eprintln!(
+                            "voicsh: correction rejected (too divergent: {:.0}% > 40%)",
+                            change_ratio * 100.0
+                        );
                         return Ok(Some(input));
                     }
                 }

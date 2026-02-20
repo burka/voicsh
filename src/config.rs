@@ -110,7 +110,7 @@ impl Default for ErrorCorrectionConfig {
             enabled: true,
             backend: CorrectionBackend::Symspell,
             model: "flan-t5-base".to_string(),
-            confidence_threshold: 0.85,
+            confidence_threshold: 0.65,
             timeout_ms: 2000,
             dictionary_language: "auto".to_string(),
         }
@@ -551,7 +551,7 @@ impl Config {
         out.push_str("# backend = \"symspell\"  # Backend: symspell (fast, dictionary), t5 (neural, requires download)\n");
         out.push_str("# model = \"flan-t5-base\"  # T5 model (only used when backend = \"t5\")\n");
         out.push_str(
-            "# confidence_threshold = 0.85  # Only correct tokens below this probability (0.0-1.0)\n",
+            "# confidence_threshold = 0.65  # Only correct tokens below this probability (0.0-1.0)\n",
         );
         out.push_str("# timeout_ms = 2000  # Timeout in ms (T5 only), falls back to raw text\n");
         out.push_str("# dictionary_language = \"auto\"  # SymSpell dictionary language: auto, en, de, es, fr, he, it, ru\n");
@@ -1862,7 +1862,7 @@ mod tests {
         assert!(config.enabled, "Should be enabled by default");
         assert_eq!(config.backend, CorrectionBackend::Symspell);
         assert_eq!(config.model, "flan-t5-base");
-        assert_eq!(config.confidence_threshold, 0.85);
+        assert_eq!(config.confidence_threshold, 0.65);
         assert_eq!(config.timeout_ms, 2000);
     }
 
@@ -1913,7 +1913,7 @@ mod tests {
         assert_eq!(config.transcription.error_correction.model, "flan-t5-base");
         assert_eq!(
             config.transcription.error_correction.confidence_threshold,
-            0.85
+            0.65
         );
         assert_eq!(config.transcription.error_correction.timeout_ms, 2000);
     }
@@ -1937,8 +1937,8 @@ mod tests {
             .parse()
             .unwrap();
         assert!(
-            (threshold - 0.85).abs() < 0.001,
-            "threshold should be ~0.85, got {threshold}"
+            (threshold - 0.65).abs() < 0.001,
+            "threshold should be ~0.65, got {threshold}"
         );
 
         let timeout = config
