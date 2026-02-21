@@ -113,7 +113,7 @@ export default class VoicshExtension extends Extension {
         this._modelMenu = new PopupMenu.PopupSubMenuMenuItem('Model: —');
         this._indicator.menu.addMenuItem(this._modelMenu);
 
-        this._correctionMenu = new PopupMenu.PopupSubMenuMenuItem('Correction: off (English)');
+        this._correctionMenu = new PopupMenu.PopupSubMenuMenuItem('Correction: off');
         this._indicator.menu.addMenuItem(this._correctionMenu);
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -560,9 +560,9 @@ export default class VoicshExtension extends Extension {
             // Update parent label
             this._updateCorrectionMenuLabel();
 
-            // Grey out if not English
-            const isEnglish = !this._language || this._language === 'en' || this._language === 'auto';
-            this._correctionMenu.setSensitive(isEnglish);
+            const CORRECTABLE_LANGUAGES = ['de', 'en', 'es', 'fr', 'he', 'it', 'ru'];
+            const isCorrectable = !this._language || this._language === 'auto' || CORRECTABLE_LANGUAGES.includes(this._language);
+            this._correctionMenu.setSensitive(isCorrectable);
         } catch (e) {
             console.debug(`voicsh: failed to populate correction menu: ${e.message}`);
         }
@@ -572,9 +572,9 @@ export default class VoicshExtension extends Extension {
         if (!this._correctionMenu) return;
         if (this._errorCorrectionEnabled) {
             const model = this._correctionModel || 'flan-t5-small';
-            this._correctionMenu.label.text = `Correction: ${model} (English)`;
+            this._correctionMenu.label.text = `Correction: ${model}`;
         } else {
-            this._correctionMenu.label.text = 'Correction: off (English)';
+            this._correctionMenu.label.text = 'Correction: off';
         }
     }
 
