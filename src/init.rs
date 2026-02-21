@@ -177,17 +177,11 @@ pub fn available_disk_mb(path: &Path) -> u64 {
         }
     };
 
-    // SAFETY: statvfs is a standard POSIX call; we pass a valid C string and
-    // a zeroed struct, then check the return value before reading fields.
-    unsafe {
-        let mut stat: libc::statvfs = std::mem::zeroed();
-        if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
-            let err = std::io::Error::last_os_error();
-            eprintln!("voicsh: could not determine disk space: {err}");
-            return u64::MAX;
-        }
-        stat.f_bavail.saturating_mul(stat.f_frsize) / (1024 * 1024)
-    }
+    crate::sys::available_disk_mb(&c_path).unwrap_or_else(|| {
+        let err = std::io::Error::last_os_error();
+        eprintln!("voicsh: could not determine disk space: {err}");
+        u64::MAX
+    })
 }
 
 /// Walk up the directory tree to find an existing ancestor.

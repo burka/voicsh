@@ -210,9 +210,7 @@ impl PortalSession {
     pub async fn try_new() -> Result<Self> {
         // Fix stale D-Bus in long-lived tmux/byobu/screen sessions
         if let Some(fresh_addr) = crate::inject::focused_window::fresh_gnome_dbus_address() {
-            unsafe {
-                std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
-            }
+            crate::sys::set_env("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
         }
         Self::with_connector(Box::new(AshpdConnector)).await
     }
@@ -274,9 +272,7 @@ impl PortalSession {
 
         // Refresh D-Bus address from running gnome-shell
         if let Some(fresh_addr) = crate::inject::focused_window::fresh_gnome_dbus_address() {
-            unsafe {
-                std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
-            }
+            crate::sys::set_env("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
         }
 
         match self.handle.block_on(self.connector.connect()) {

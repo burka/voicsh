@@ -866,14 +866,12 @@ mod tests {
     // Mutex to serialize tests that modify environment variables
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    // SAFETY: These helpers are only used in tests with ENV_LOCK held,
-    // ensuring no concurrent access to environment variables.
     fn set_env(key: &str, value: &str) {
-        unsafe { std::env::set_var(key, value) }
+        crate::sys::set_env(key, value);
     }
 
     fn remove_env(key: &str) {
-        unsafe { std::env::remove_var(key) }
+        crate::sys::remove_env(key);
     }
 
     fn clear_voicsh_env() {

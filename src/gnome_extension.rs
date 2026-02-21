@@ -156,7 +156,6 @@ fn get_extension_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
 
     #[test]
     fn test_embedded_extension_js_not_empty() {
@@ -223,11 +222,8 @@ mod tests {
         let temp_home = temp_dir.path().to_path_buf();
 
         // Set HOME env for this test
-        // SAFETY: This test runs in isolation and doesn't affect other tests
-        unsafe {
-            env::set_var("HOME", &temp_home);
-            env::remove_var("XDG_DATA_HOME");
-        }
+        crate::sys::set_env("HOME", temp_home.to_str().expect("valid UTF-8 path"));
+        crate::sys::remove_env("XDG_DATA_HOME");
 
         // Get expected paths
         let extension_dir = temp_home

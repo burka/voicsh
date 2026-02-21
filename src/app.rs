@@ -3,7 +3,7 @@
 //! Orchestrates the complete voice-to-text flow:
 //! record → transcribe → inject
 
-use crate::audio::capture::{CpalAudioSource, suppress_audio_warnings};
+use crate::audio::capture::CpalAudioSource;
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::audio::wav::WavAudioSource;
@@ -22,6 +22,7 @@ use crate::pipeline::sink::{CollectorSink, InjectorSink, StdoutSink};
 use crate::stt::fan_out::FanOutTranscriber;
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
+use crate::sys::suppress_audio_warnings;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;

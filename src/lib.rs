@@ -30,6 +30,7 @@ pub mod models;
 pub mod output;
 pub mod pipeline;
 pub mod stt;
+pub mod sys;
 #[cfg(feature = "cli")]
 pub mod systemd;
 

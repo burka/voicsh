@@ -6,57 +6,8 @@ use crate::error::{Result, VoicshError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 
-/// Run a closure with stderr temporarily redirected to /dev/null.
-///
-/// This suppresses noisy ALSA/JACK/PipeWire messages that CPAL triggers
-/// when probing audio backends. The messages are harmless but confusing to users.
-///
-/// # Safety
-/// Uses `libc::dup`/`libc::dup2` to save and restore file descriptor 2 (stderr).
-/// Safe as long as no other thread is concurrently manipulating fd 2.
-fn with_suppressed_stderr<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    unsafe {
-        let saved_fd = libc::dup(2);
-        let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
-        if saved_fd >= 0 && devnull >= 0 {
-            libc::dup2(devnull, 2);
-            libc::close(devnull);
-        }
-
-        let result = f();
-
-        if saved_fd >= 0 {
-            libc::dup2(saved_fd, 2);
-            libc::close(saved_fd);
-        }
-
-        result
-    }
-}
-
-/// Suppress noisy JACK/ALSA error messages that occur during audio backend probing.
-/// These are harmless but confusing to users.
-///
-/// # Safety
-/// This modifies environment variables which is safe when called before spawning threads.
-pub fn suppress_audio_warnings() {
-    // SAFETY: Called at startup before any threads are spawned
-    unsafe {
-        // Suppress JACK "cannot connect" messages - don't try to start JACK server
-        std::env::set_var("JACK_NO_START_SERVER", "1");
-        // Disable JACK completely for CPAL probing
-        std::env::set_var("JACK_NO_AUDIO_RESERVATION", "1");
-        // Force PipeWire to not print debug messages
-        std::env::set_var("PIPEWIRE_DEBUG", "0");
-        // Suppress ALSA verbose messages
-        std::env::set_var("ALSA_DEBUG", "0");
-        // Tell PipeWire's JACK to be quiet
-        std::env::set_var("PW_LOG", "0");
-    }
-}
+pub use crate::sys::suppress_audio_warnings;
+use crate::sys::with_suppressed_stderr;
 
 /// Preferred device names for GNOME/PipeWire environments.
 const PREFERRED_DEVICES: &[&str] = &["pipewire", "pulse", "PulseAudio"];

@@ -68,7 +68,7 @@ impl IpcServer {
         if let Ok(xdg_runtime) = std::env::var("XDG_RUNTIME_DIR") {
             PathBuf::from(xdg_runtime).join("voicsh.sock")
         } else {
-            let uid = unsafe { libc::getuid() };
+            let uid = crate::sys::current_uid();
             PathBuf::from(format!("/tmp/voicsh-{}.sock", uid))
         }
     }
@@ -404,7 +404,7 @@ mod tests {
             );
         } else {
             // Fallback format: /tmp/voicsh-{uid}.sock
-            let uid = unsafe { libc::getuid() };
+            let uid = crate::sys::current_uid();
             let expected = format!("/tmp/voicsh-{}.sock", uid);
             assert_eq!(
                 path_str, expected,
