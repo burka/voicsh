@@ -388,6 +388,7 @@ pub(crate) async fn create_transcriber(
 mod tests {
     use super::*;
     use crate::stt::transcriber::MockTranscriber;
+    use crate::ipc::protocol::TextOrigin;
 
     fn mock_transcriber() -> Arc<dyn Transcriber> {
         Arc::new(MockTranscriber::new("mock-daemon-model"))
@@ -599,6 +600,8 @@ mod tests {
             confidence: 0.95,
             wait_ms: None,
             token_probabilities: vec![],
+            raw_text: None,
+            text_origin: TextOrigin::default(),
         };
         let event3 = DaemonEvent::RecordingStateChanged { recording: false };
 
