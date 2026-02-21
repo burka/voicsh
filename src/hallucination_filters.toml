@@ -1,0 +1,179 @@
+[en]
+phrases = [
+    "Thank you.",
+    "Thanks for watching!",
+    "Thanks for watching.",
+    "Thank you for watching.",
+    "Thank you for watching!",
+    "Bye.",
+    "Bye!",
+    "Goodbye.",
+    "you",
+    "Subtitles by the Amara.org community",
+    "Transcription by CastingWords",
+    "Thanks for watching, please subscribe!",
+    "Thank you for watching, please subscribe!",
+    "I'm not sure what I'm doing here.",
+    "Satsang with Mooji",
+    "Closed captioning provided by the Imperial News Network",
+    "For more information visit www.fema.gov",
+    "mmm",
+    "hmm",
+    "mm-hmm",
+]
+
+[de]
+phrases = [
+    "Vielen Dank.",
+    "Vielen Dank!",
+    "Danke.",
+    "Danke!",
+    "Danke fürs Zuschauen!",
+    "Danke fürs Zuschauen.",
+    "Tschüss.",
+    "Tschüss!",
+    "Untertitel von Stephanie Geiges",
+    "Untertitel im Auftrag des ZDF",
+    "Untertitel im Auftrag des ZDF 2021",
+    "Untertitel der Amara.org Community",
+    "Copyright WDR 2021",
+    "SWR 2021",
+]
+
+[es]
+phrases = [
+    "Gracias.",
+    "Gracias!",
+    "Gracias por ver.",
+    "Gracias por ver!",
+    "Gracias por ver el video.",
+    "Adiós.",
+    "Subtítulos por la comunidad de Amara.org",
+    "Subtítulos realizados por la comunidad de Amara.org",
+]
+
+[fr]
+phrases = [
+    "Merci.",
+    "Merci !",
+    "Merci d'avoir regardé.",
+    "Merci d'avoir regardé !",
+    "Au revoir.",
+    "Sous-titrage ST' 501",
+    "Sous-titres réalisés par la communauté d'Amara.org",
+    "Merci d'avoir regardé cette vidéo.",
+]
+
+[pt]
+phrases = [
+    "Obrigado.",
+    "Obrigado!",
+    "Obrigada.",
+    "Obrigada!",
+    "Tchau.",
+    "Tchau!",
+    "Legendas pela comunidade Amara.org",
+    "Legendas pela comunidade de Amara.org",
+    "Legendas pela comunidade da Amara.org",
+    "Obrigado por assistir.",
+]
+
+[it]
+phrases = [
+    "Grazie.",
+    "Grazie!",
+    "Grazie per aver guardato.",
+    "Grazie per aver guardato!",
+    "Arrivederci.",
+    "Sottotitoli creati dalla comunità Amara.org",
+    "Sottotitoli e revisione a cura di QTSS",
+]
+
+[ru]
+phrases = [
+    "Спасибо.",
+    "Спасибо!",
+    "Спасибо за просмотр.",
+    "Спасибо за просмотр!",
+    "До свидания.",
+    "Субтитры сделал DimaTorzok",
+    "Субтитры создавал DimaTorzok",
+    "Редактор субтитров Е.Воинова",
+    "Подписывайтесь на наш канал",
+    "Продолжение следует...",
+]
+
+[ja]
+phrases = [
+    "ありがとうございました。",
+    "ありがとうございます。",
+    "ご視聴ありがとうございました。",
+    "ご視聴ありがとうございます。",
+    "おやすみなさい。",
+    "チャンネル登録お願いします",
+    "お疲れ様でした",
+    "見てくれてありがとう",
+]
+
+[zh]
+phrases = [
+    "谢谢。",
+    "谢谢！",
+    "谢谢观看。",
+    "谢谢观看！",
+    "再见。",
+    "感谢观看",
+    "謝謝觀看",
+    "由 Amara.org 社群提供的字幕",
+    "字幕志愿者 杨茜茜",
+]
+
+[ko]
+phrases = [
+    "감사합니다.",
+    "감사합니다!",
+    "시청해 주셔서 감사합니다.",
+    "시청해주셔서 감사합니다.",
+    "안녕히 가세요.",
+    "MBC 뉴스 김성현입니다",
+    "MBC 뉴스 김재경입니다",
+    "MBC 뉴스 이재은입니다",
+    "KBS 뉴스 김성현입니다",
+    "KBS 뉴스 김재경입니다",
+    "SBS 뉴스 김성현입니다",
+    "YTN 뉴스입니다",
+    "구독해주세요",
+    "구독 부탁드려요",
+    "자막제작 기획 앤디 퀸즈",
+]
+
+[nl]
+phrases = [
+    "Bedankt voor het kijken.",
+    "Ondertitels ingediend door de Amara.org gemeenschap",
+    "TV Gelderland 2021",
+]
+
+[pl]
+phrases = [
+    "Dziękuję za oglądanie.",
+    "Dzięki za oglądanie.",
+    "Dzięki za uwagę.",
+    "Dziękuję za uwagę.",
+    "Napisy stworzone przez społeczność Amara.org",
+    "Do zobaczenia w kolejnym odcinku.",
+]
+
+[ar]
+phrases = [
+    "شكرا على المشاهدة",
+    "شكرا للمشاهدة",
+    "شكرا",
+]
+
+[tr]
+phrases = [
+    "İzlediğiniz için teşekkür ederim.",
+    "Abone ol.",
+    "Bir sonraki videoda görüşürüz.",
+]
