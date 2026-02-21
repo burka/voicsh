@@ -5,17 +5,19 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-const EXTENSION_JS: &str = include_str!("../gnome/voicsh@voicsh.dev/extension.js");
-const METADATA_JSON: &str = include_str!("../gnome/voicsh@voicsh.dev/metadata.json");
-const STYLESHEET_CSS: &str = include_str!("../gnome/voicsh@voicsh.dev/stylesheet.css");
-const GSCHEMA_XML: &str = include_str!(
-    "../gnome/voicsh@voicsh.dev/schemas/org.gnome.shell.extensions.voicsh.gschema.xml"
-);
+const EXTENSION_JS: &str = include_str!("../gnome/voicsh@voic.sh/extension.js");
+const METADATA_JSON: &str = include_str!("../gnome/voicsh@voic.sh/metadata.json");
+const STYLESHEET_CSS: &str = include_str!("../gnome/voicsh@voic.sh/stylesheet.css");
+const GSCHEMA_XML: &str =
+    include_str!("../gnome/voicsh@voic.sh/schemas/org.gnome.shell.extensions.voicsh.gschema.xml");
 
-const EXTENSION_UUID: &str = "voicsh@voicsh.dev";
+const EXTENSION_UUID: &str = "voicsh@voic.sh";
 
 /// Install the GNOME Shell extension and systemd user service.
 pub fn install_gnome_extension() -> Result<()> {
+    // Migration: clean up old extension directory (voicsh@voicsh.dev → voicsh@voic.sh).
+    remove_old_extension_dir();
+
     // Step 1: Install systemd user service
     eprintln!("Installing systemd service...");
     crate::systemd::install_and_activate()?;
@@ -110,6 +112,32 @@ fn install_extension_files() -> Result<()> {
     Ok(())
 }
 
+/// Migration: remove the old `voicsh@voicsh.dev` extension directory.
+/// This cleanup can be removed after a few releases.
+fn remove_old_extension_dir() {
+    let extensions_dir = if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
+        PathBuf::from(data_home)
+            .join("gnome-shell")
+            .join("extensions")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".local/share/gnome-shell/extensions")
+    } else {
+        return;
+    };
+    remove_old_extension_from(&extensions_dir);
+}
+
+fn remove_old_extension_from(extensions_dir: &std::path::Path) {
+    let old_uuid = "voicsh@voicsh.dev";
+    let old_dir = extensions_dir.join(old_uuid);
+    if old_dir.exists() {
+        eprintln!("Removing old extension {old_uuid}...");
+        if let Err(e) = fs::remove_dir_all(&old_dir) {
+            eprintln!("Warning: Failed to remove old extension directory: {e}");
+        }
+    }
+}
+
 fn get_extension_dir() -> Result<PathBuf> {
     if let Ok(data_home) = std::env::var("XDG_DATA_HOME") {
         Ok(PathBuf::from(data_home)
@@ -143,7 +171,7 @@ mod tests {
             .get("uuid")
             .and_then(|v| v.as_str())
             .expect("Missing uuid field");
-        assert_eq!(uuid, "voicsh@voicsh.dev");
+        assert_eq!(uuid, "voicsh@voic.sh");
     }
 
     #[test]
@@ -154,6 +182,38 @@ mod tests {
     #[test]
     fn test_embedded_gschema_contains_key() {
         assert!(GSCHEMA_XML.contains("toggle-shortcut"));
+    }
+
+    #[test]
+    fn test_remove_old_extension_dir_cleans_up() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let extensions_dir = temp_dir.path().join("gnome-shell/extensions");
+
+        let old_ext_dir = extensions_dir.join("voicsh@voicsh.dev");
+        fs::create_dir_all(&old_ext_dir).expect("Failed to create old extension dir");
+        fs::write(old_ext_dir.join("extension.js"), "old").expect("Failed to write marker file");
+
+        assert!(old_ext_dir.exists());
+        remove_old_extension_from(&extensions_dir);
+        assert!(
+            !old_ext_dir.exists(),
+            "Old extension directory should be removed after migration cleanup"
+        );
+    }
+
+    #[test]
+    fn test_remove_old_extension_dir_noop_when_absent() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let extensions_dir = temp_dir.path().join("gnome-shell/extensions");
+
+        // Does not panic when the old directory doesn't exist
+        remove_old_extension_from(&extensions_dir);
+
+        let old_ext_dir = extensions_dir.join("voicsh@voicsh.dev");
+        assert!(
+            !old_ext_dir.exists(),
+            "Old extension directory should not be created"
+        );
     }
 
     #[test]

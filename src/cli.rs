@@ -139,12 +139,16 @@ pub enum Commands {
     /// Benchmark transcription performance across models
     #[cfg(feature = "benchmark")]
     Benchmark {
+        /// Models to benchmark (comma-separated, default: all installed)
+        #[arg(conflicts_with = "models")]
+        model: Option<String>,
+
         /// WAV file to benchmark (defaults to test fixture if available)
         #[arg(long, value_name = "FILE")]
         audio: Option<PathBuf>,
 
-        /// Models to test (comma-separated, default: all installed)
-        #[arg(long, value_name = "MODELS")]
+        /// Deprecated: use positional argument instead
+        #[arg(long, value_name = "MODELS", hide = true)]
         models: Option<String>,
 
         /// Number of iterations to average (default: 1)
@@ -240,6 +244,11 @@ pub enum ModelsAction {
     /// Download and install a model
     Install {
         /// Model name (e.g., base.en, small.en, tiny)
+        name: String,
+    },
+    /// Set the default STT model
+    Use {
+        /// Model name (e.g., tiny.en, base, large-v3-turbo)
         name: String,
     },
 }
@@ -460,6 +469,27 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_models_use() {
+        let cli = Cli::try_parse_from(["voicsh", "models", "use", "tiny.en"]).unwrap();
+        match cli.command {
+            Some(Commands::Models { action }) => match action {
+                ModelsAction::Use { name } => {
+                    assert_eq!(name, "tiny.en");
+                }
+                _ => panic!("Expected Use action"),
+            },
+            _ => panic!("Expected Models command"),
+        }
+    }
+
+    #[test]
+    fn test_models_use_requires_name() {
+        let result = Cli::try_parse_from(["voicsh", "models", "use"]);
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
     fn test_parse_check() {
         let cli = Cli::try_parse_from(["voicsh", "check"]).unwrap();
         match cli.command {
@@ -597,12 +627,14 @@ mod tests {
         let cli = Cli::try_parse_from(["voicsh", "benchmark"]).unwrap();
         match cli.command {
             Some(Commands::Benchmark {
+                model,
                 audio,
                 models,
                 iterations,
                 output,
                 threads,
             }) => {
+                assert!(model.is_none());
                 assert!(audio.is_none());
                 assert!(models.is_none());
                 assert_eq!(iterations, 1);
@@ -633,12 +665,14 @@ mod tests {
         .unwrap();
         match cli.command {
             Some(Commands::Benchmark {
+                model,
                 audio,
                 models,
                 iterations,
                 output,
                 threads,
             }) => {
+                assert!(model.is_none());
                 assert_eq!(audio, Some(PathBuf::from("test.wav")));
                 assert_eq!(models.as_deref(), Some("tiny.en,base.en"));
                 assert_eq!(iterations, 3);
@@ -647,6 +681,33 @@ mod tests {
             }
             _ => panic!("Expected Benchmark command"),
         }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_parse_benchmark_positional_model() {
+        let cli = Cli::try_parse_from(["voicsh", "benchmark", "base.en"]).unwrap();
+        match cli.command {
+            Some(Commands::Benchmark { model, models, .. }) => {
+                assert_eq!(model.as_deref(), Some("base.en"));
+                assert!(models.is_none());
+            }
+            _ => panic!("Expected Benchmark command"),
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "benchmark")]
+    fn test_benchmark_positional_conflicts_with_models_flag() {
+        let result = Cli::try_parse_from([
+            "voicsh",
+            "benchmark",
+            "base.en",
+            "--models",
+            "tiny.en,base.en",
+        ]);
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
     #[test]

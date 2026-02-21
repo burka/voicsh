@@ -5,22 +5,69 @@ weight: 4
 
 ## Build Prerequisites
 
-Requires Rust (via rustup), a C toolchain, cmake, pkg-config, libclang, and ALSA development headers:
+Requires Rust (via rustup), a C toolchain, cmake, pkg-config, clang, libclang, and ALSA development headers:
 
 ```bash
 # Debian/Ubuntu:
-sudo apt install build-essential cmake pkg-config libclang-dev libasound2-dev
+sudo apt install build-essential cmake pkg-config clang libclang-dev libasound2-dev
 
 # Fedora:
-sudo dnf install gcc gcc-c++ cmake pkg-config clang-devel alsa-lib-devel
+sudo dnf install gcc gcc-c++ cmake pkg-config clang clang-devel alsa-lib-devel
 
 # Arch:
 sudo pacman -S base-devel cmake pkgconf clang alsa-lib
 ```
 
+**Why `clang` (the binary)?** GPU builds use `bindgen` to generate FFI bindings. `bindgen` loads `libclang` as a library, but needs the `clang` binary in PATH to locate its resource directory (containing `stdbool.h`, `stddef.h`, etc.). Without it, `bindgen` silently falls back to pre-built bindings that lack GPU symbols. Some distros install only a versioned binary (e.g. `clang-20`) via `libclang-dev` — `bindgen` only looks for the unversioned `clang`.
+
 For the authoritative list of system dependencies, see [`test-containers/Dockerfile.vulkan`](test-containers/Dockerfile.vulkan).
 
-For runtime text injection, install `wl-clipboard` plus either `wtype` (wlroots) or `ydotool` (fallback).
+### Runtime Dependencies
+
+Text injection requires `wl-clipboard` plus either `wtype` (wlroots) or `ydotool` (fallback):
+
+```bash
+# Debian/Ubuntu:
+sudo apt install wl-clipboard wtype
+
+# Fedora:
+sudo dnf install wl-clipboard wtype
+
+# Arch:
+sudo pacman -S wl-clipboard wtype
+```
+
+### GPU Backend Dependencies
+
+GPU backends are optional. Add their system packages before building with `--features <backend>`.
+
+| Backend | Feature flag | System packages (Debian/Ubuntu) |
+|---------|-------------|--------------------------------|
+| Vulkan | `vulkan` | `libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc` |
+| CUDA | `cuda` | NVIDIA driver + [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) (`nvcc`) |
+| HipBLAS | `hipblas` | [ROCm](https://rocm.docs.amd.com/) (`rocminfo`) |
+| OpenBLAS | `openblas` | `libopenblas-dev` |
+
+```bash
+# Vulkan (Intel/AMD/NVIDIA — Debian/Ubuntu):
+sudo apt install libvulkan-dev mesa-vulkan-drivers vulkan-tools glslc
+
+# CUDA (NVIDIA only — see link above for toolkit install):
+# Requires: nvidia-smi, nvcc
+
+# OpenBLAS (CPU-only BLAS optimization):
+sudo apt install libopenblas-dev
+```
+
+**GPU build troubleshooting:** If you see `unresolved import ggml_backend_vk_*` errors, bindgen failed to generate GPU bindings and fell back to incomplete pre-built ones. Common causes and fixes:
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `stdbool.h` not found | `clang` binary not in PATH | `sudo apt install clang` |
+| Versioned clang exists (e.g. `clang-20`) but `clang` doesn't | Distro only installed versioned binary | `sudo apt install clang` or `export CLANG_PATH=$(which clang-20)` |
+| No clang at all | libclang-dev not installed | `sudo apt install clang libclang-dev` |
+
+The build script runs preflight checks and will panic with specific guidance before compilation starts. If you need to bypass the check: `export CLANG_PATH=/usr/bin/clang-20`.
 
 ## Local Install
 
@@ -67,7 +114,7 @@ All external dependencies are behind traits with test doubles:
 
 ## GNOME Extension Development
 
-The extension lives in `gnome/voicsh@voicsh.dev/`.
+The extension lives in `gnome/voicsh@voic.sh/`.
 
 ### Nested Shell (UI and IPC iteration)
 
@@ -94,7 +141,7 @@ For testing text injection, install the extension in your real session and log o
 
 ```bash
 # Symlink is already set up by dev.sh, just enable in real session:
-gnome-extensions enable voicsh@voicsh.dev
+gnome-extensions enable voicsh@voic.sh
 # Log out and back in to load the extension
 ```
 

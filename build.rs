@@ -147,12 +147,173 @@ fn check_vulkan() {
             ╔══════════════════════════════════════════════════════════╗\n\
             ║  `vulkaninfo` not found — Vulkan SDK is not installed.   ║\n\
             ║                                                          ║\n\
-            ║  Install: https://vulkan.lunarg.com/                     ║\n\
+            ║  Install: sudo apt install libvulkan-dev                  ║\n\
+            ║           mesa-vulkan-drivers vulkan-tools glslc          ║\n\
+            ║  Or build without Vulkan: cargo build --release           ║\n\
+            ╚══════════════════════════════════════════════════════════╝\n",
+        );
+    }
+
+    // glslc compiles GLSL shaders to SPIR-V — required by ggml's Vulkan backend at build time.
+    if Command::new("glslc").arg("--version").output().is_err() {
+        panic!(
+            "\n\n\
+            ╔══════════════════════════════════════════════════════════╗\n\
+            ║  `glslc` not found — SPIR-V shader compiler missing.    ║\n\
+            ║                                                          ║\n\
+            ║  Install: sudo apt install glslc                         ║\n\
             ║  Or build without Vulkan: cargo build --release          ║\n\
             ╚══════════════════════════════════════════════════════════╝\n",
         );
     }
-    println!("cargo::warning=Vulkan SDK detected");
+
+    // whisper-rs-sys uses bindgen to generate Vulkan FFI bindings from ggml-vulkan.h.
+    // bindgen needs clang's built-in headers (stdbool.h, stddef.h, etc.) which come
+    // from libclang-dev, not the runtime libclang1-XX package. Without them, bindgen
+    // silently falls back to pre-built bindings that lack Vulkan symbols, causing
+    // unresolved import errors in whisper-rs.
+    check_libclang_headers();
+
+    println!("cargo::warning=Vulkan SDK detected (vulkaninfo + glslc)");
+}
+
+/// Verify that bindgen can find clang's built-in headers at runtime.
+///
+/// GPU feature builds (Vulkan, CUDA, etc.) rely on bindgen to generate FFI
+/// bindings that include backend-specific symbols. The pre-built fallback
+/// bindings in whisper-rs-sys only cover the base API — missing GPU symbols
+/// cause cryptic "unresolved import" errors at compile time.
+///
+/// bindgen uses libclang, which locates its resource directory (containing
+/// stdbool.h, stddef.h, etc.) via the `clang` binary. If `clang` is not in
+/// PATH, libclang can't find the resource dir and bindgen silently falls back
+/// to incomplete pre-built bindings — even if the headers exist on disk.
+fn check_libclang_headers() {
+    // If the user already configured bindgen's clang lookup, trust them.
+    if let Ok(args) = std::env::var("BINDGEN_EXTRA_CLANG_ARGS")
+        && args.contains("-I")
+    {
+        return;
+    }
+    // CLANG_PATH tells bindgen/clang-sys which clang binary to use.
+    if std::env::var("CLANG_PATH").is_ok() {
+        return;
+    }
+
+    // Try `clang -print-resource-dir` — this is exactly what libclang uses
+    // to find built-in headers. Try versioned names first (e.g. clang-20),
+    // since some distros only install versioned binaries.
+    let resource_dir = find_clang_resource_dir();
+
+    match resource_dir {
+        Some(dir) => {
+            let stdbool = std::path::PathBuf::from(&dir).join("include/stdbool.h");
+            if !stdbool.exists() {
+                panic!(
+                    "\n\n\
+                    ╔══════════════════════════════════════════════════════════╗\n\
+                    ║  clang resource dir found but stdbool.h is missing.      ║\n\
+                    ║  Resource dir: {dir:<43} ║\n\
+                    ║                                                          ║\n\
+                    ║  Install: sudo apt install libclang-dev                   ║\n\
+                    ║  Or build without GPU: cargo build --release              ║\n\
+                    ╚══════════════════════════════════════════════════════════╝\n",
+                );
+            }
+        }
+        None => {
+            // clang binary not found — check if a versioned one exists first.
+            if has_versioned_clang() {
+                panic!(
+                    "\n\n\
+                    ╔══════════════════════════════════════════════════════════╗\n\
+                    ║  `clang` not in PATH (but a versioned binary exists).    ║\n\
+                    ║                                                          ║\n\
+                    ║  bindgen needs the unversioned `clang` to locate its     ║\n\
+                    ║  built-in headers (stdbool.h). Without it, GPU bindings  ║\n\
+                    ║  will be incomplete and compilation will fail.            ║\n\
+                    ║                                                          ║\n\
+                    ║  Fix (pick one):                                         ║\n\
+                    ║    sudo apt install clang                                 ║\n\
+                    ║    export CLANG_PATH=$(which clang-20)                    ║\n\
+                    ║  Or build without GPU: cargo build --release              ║\n\
+                    ╚══════════════════════════════════════════════════════════╝\n",
+                );
+            }
+
+            // No versioned clang either — check if headers exist on disk so we
+            // can give a more specific error message.
+            let headers_on_disk = std::path::Path::new("/usr/lib/clang")
+                .read_dir()
+                .ok()
+                .and_then(|mut entries| {
+                    entries
+                        .any(|e| {
+                            e.ok()
+                                .is_some_and(|e| e.path().join("include/stdbool.h").exists())
+                        })
+                        .then_some(())
+                })
+                .is_some();
+
+            if headers_on_disk {
+                panic!(
+                    "\n\n\
+                    ╔══════════════════════════════════════════════════════════╗\n\
+                    ║  `clang` not found in PATH.                              ║\n\
+                    ║                                                          ║\n\
+                    ║  libclang-dev headers exist on disk, but bindgen needs    ║\n\
+                    ║  the `clang` binary to locate them at runtime.            ║\n\
+                    ║                                                          ║\n\
+                    ║  Fix (pick one):                                         ║\n\
+                    ║    sudo apt install clang                                 ║\n\
+                    ║    export CLANG_PATH=/usr/bin/clang-XX                    ║\n\
+                    ║  Or build without GPU: cargo build --release              ║\n\
+                    ╚══════════════════════════════════════════════════════════╝\n",
+                );
+            } else {
+                panic!(
+                    "\n\n\
+                    ╔══════════════════════════════════════════════════════════╗\n\
+                    ║  libclang-dev not found.                                  ║\n\
+                    ║                                                          ║\n\
+                    ║  bindgen needs clang and its built-in headers to generate ║\n\
+                    ║  GPU FFI bindings. Without them, compilation will fail.   ║\n\
+                    ║                                                          ║\n\
+                    ║  Install: sudo apt install clang libclang-dev             ║\n\
+                    ║  Or build without GPU: cargo build --release              ║\n\
+                    ╚══════════════════════════════════════════════════════════╝\n",
+                );
+            }
+        }
+    }
+}
+
+/// Check that bindgen can find clang's resource directory at runtime.
+///
+/// Returns the resource dir path. Returns `None` if the unversioned
+/// `clang` binary is missing.
+fn find_clang_resource_dir() -> Option<String> {
+    clang_resource_dir("clang")
+}
+
+/// Check if a versioned clang binary (e.g., clang-15, clang-20) is available.
+fn has_versioned_clang() -> bool {
+    (10..=30)
+        .rev()
+        .any(|v| clang_resource_dir(&format!("clang-{v}")).is_some())
+}
+
+fn clang_resource_dir(name: &str) -> Option<String> {
+    let output = Command::new(name)
+        .arg("-print-resource-dir")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let dir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!dir.is_empty()).then_some(dir)
 }
 
 fn check_rocm() {

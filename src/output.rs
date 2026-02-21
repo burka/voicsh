@@ -1,8 +1,9 @@
 //! Shared event rendering for terminal output.
 //! Used by both `voicsh follow` and daemon verbose mode.
 
-use crate::ipc::protocol::DaemonEvent;
+use crate::ipc::protocol::{DaemonEvent, TextOrigin};
 use crate::pipeline::vad_station::format_level_bar;
+use crate::stt::transcriber::TokenProbability;
 use std::io::{self, Write};
 
 const DIM: &str = "\x1b[2m";
@@ -10,10 +11,41 @@ const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
 const RESET: &str = "\x1b[0m";
+const STRIKETHROUGH: &str = "\x1b[9m";
 
 /// Clear the current terminal line (replaces level bar etc.)
 pub fn clear_line() {
     eprint!("\r\x1b[2K");
+}
+
+/// Return the ANSI color code for a token probability.
+fn probability_color(prob: f32) -> &'static str {
+    if prob >= 0.9 {
+        GREEN
+    } else if prob >= 0.7 {
+        "" // default terminal color
+    } else if prob >= 0.5 {
+        YELLOW
+    } else {
+        RED
+    }
+}
+
+/// Render tokens colored by their probability.
+fn render_tokens_colored(token_probabilities: &[TokenProbability]) {
+    for tp in token_probabilities {
+        let color = probability_color(tp.probability);
+        if color.is_empty() {
+            eprint!("{}", tp.token);
+        } else {
+            eprint!("{color}{}{RESET}", tp.token);
+        }
+    }
+}
+
+/// Render a voice command replacement: show raw in strikethrough brackets, then replacement.
+fn render_voice_command_diff(raw_text: &str, text: &str) {
+    eprint!("{STRIKETHROUGH}{DIM}[{raw_text}]{RESET}{text}");
 }
 
 /// Render a daemon event to stderr.
@@ -50,6 +82,8 @@ pub fn render_event(event: &DaemonEvent) {
             confidence,
             wait_ms,
             token_probabilities,
+            raw_text,
+            text_origin,
         } => {
             clear_line();
             let lang = if !language.is_empty() && *confidence < 0.99 {
@@ -63,23 +97,19 @@ pub fn render_event(event: &DaemonEvent) {
                 .map(|ms| format!(" {DIM}({ms}ms){RESET}"))
                 .unwrap_or_default();
 
-            if token_probabilities.is_empty() {
-                // Fallback: plain text (no token-level data)
-                eprintln!("{text}{lang}{wait}");
-            } else {
-                // Render each token colored by probability (tokens contain leading spaces)
-                for tp in token_probabilities.iter() {
-                    if tp.probability >= 0.9 {
-                        eprint!("{GREEN}{}{RESET}", tp.token);
-                    } else if tp.probability >= 0.7 {
-                        eprint!("{}", tp.token);
-                    } else if tp.probability >= 0.5 {
-                        eprint!("{YELLOW}{}{RESET}", tp.token);
+            match (text_origin, raw_text) {
+                (TextOrigin::VoiceCommand, Some(raw)) => {
+                    render_voice_command_diff(raw, text);
+                    eprintln!("{lang}{wait}");
+                }
+                _ => {
+                    if token_probabilities.is_empty() {
+                        eprintln!("{text}{lang}{wait}");
                     } else {
-                        eprint!("{RED}{}{RESET}", tp.token);
+                        render_tokens_colored(token_probabilities);
+                        eprintln!("{lang}{wait}");
                     }
                 }
-                eprintln!("{lang}{wait}");
             }
         }
         DaemonEvent::TranscriptionDropped {
@@ -116,12 +146,37 @@ pub fn render_event(event: &DaemonEvent) {
             clear_line();
             eprintln!("{RED}Model {model} failed: {error}{RESET}");
         }
+        DaemonEvent::DaemonInfo {
+            binary_path,
+            version,
+        } => {
+            clear_line();
+            eprintln!("{DIM}Daemon v{version} ({binary_path}){RESET}");
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc::protocol::TextOrigin;
+    use crate::stt::transcriber::TokenProbability;
+
+    // ── probability color tests ────────────────────────────────────────
+
+    #[test]
+    fn probability_color_thresholds() {
+        assert_eq!(probability_color(0.95), GREEN);
+        assert_eq!(probability_color(0.90), GREEN);
+        assert_eq!(probability_color(0.89), "");
+        assert_eq!(probability_color(0.70), "");
+        assert_eq!(probability_color(0.69), YELLOW);
+        assert_eq!(probability_color(0.50), YELLOW);
+        assert_eq!(probability_color(0.49), RED);
+        assert_eq!(probability_color(0.1), RED);
+    }
+
+    // ── render smoke tests ─────────────────────────────────────────────
 
     #[test]
     fn test_render_event_doesnt_panic() {
@@ -142,7 +197,18 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
-            token_probabilities: vec![],
+            raw_text: None,
+            text_origin: TextOrigin::Transcription,
+            token_probabilities: vec![
+                TokenProbability {
+                    token: " hello".to_string(),
+                    probability: 0.95,
+                },
+                TokenProbability {
+                    token: " world".to_string(),
+                    probability: 0.75,
+                },
+            ],
         });
 
         render_event(&DaemonEvent::TranscriptionDropped {
@@ -174,6 +240,11 @@ mod tests {
             model: "base".to_string(),
             error: "download failed".to_string(),
         });
+
+        render_event(&DaemonEvent::DaemonInfo {
+            binary_path: "/usr/bin/voicsh".to_string(),
+            version: "0.1.0+abc1234".to_string(),
+        });
     }
 
     // Smoke test: stderr output can't be captured.
@@ -200,18 +271,21 @@ mod tests {
             language: String::new(),
             confidence: 0.9,
             wait_ms: None,
+            raw_text: None,
+            text_origin: TextOrigin::Transcription,
             token_probabilities: vec![],
         });
     }
 
     #[test]
     fn test_render_transcription_with_token_probabilities() {
-        use crate::stt::transcriber::TokenProbability;
         render_event(&DaemonEvent::Transcription {
             text: "high medium low".to_string(),
             language: "en".to_string(),
             confidence: 0.7,
             wait_ms: Some(250),
+            raw_text: None,
+            text_origin: TextOrigin::Transcription,
             token_probabilities: vec![
                 TokenProbability {
                     token: " high".to_string(),
@@ -226,6 +300,20 @@ mod tests {
                     probability: 0.35,
                 },
             ],
+        });
+    }
+    #[test]
+    fn test_render_voice_command_transcription() {
+        // Smoke test: render_event writes to stderr which can't be captured.
+        // Validates voice command rendering doesn't panic.
+        render_event(&DaemonEvent::Transcription {
+            text: ".".to_string(),
+            language: "en".to_string(),
+            confidence: 0.95,
+            wait_ms: None,
+            token_probabilities: vec![],
+            raw_text: Some("period".to_string()),
+            text_origin: TextOrigin::VoiceCommand,
         });
     }
 }

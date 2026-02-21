@@ -12,6 +12,7 @@ use ashpd::desktop::Session;
 use ashpd::desktop::remote_desktop::{DeviceType, KeyState, RemoteDesktop};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Evdev keycodes for paste key simulation.
 /// These are standard Linux input event codes (from linux/input-event-codes.h).
@@ -191,6 +192,7 @@ pub struct PortalSession {
     key_sender: std::sync::Mutex<Arc<dyn KeySender>>,
     connector: Box<dyn PortalConnector>,
     handle: tokio::runtime::Handle,
+    broken: AtomicBool,
 }
 
 impl PortalSession {
@@ -222,6 +224,7 @@ impl PortalSession {
             key_sender: std::sync::Mutex::new(key_sender),
             connector,
             handle,
+            broken: AtomicBool::new(false),
         })
     }
 
@@ -237,6 +240,14 @@ impl PortalSession {
     /// This is synchronous (blocks on the tokio runtime) so it can be called
     /// from pipeline station threads that are not tokio worker threads.
     pub fn simulate_paste(&self, paste_key: &str) -> Result<()> {
+        if self.broken.load(Ordering::Relaxed) {
+            return Err(VoicshError::InjectionFailed {
+                message:
+                    "Portal session is broken. Restart voicsh to restore portal keyboard access."
+                        .to_string(),
+            });
+        }
+
         let key_sequence = parse_paste_key(paste_key)?;
         let sender = self
             .key_sender
@@ -278,10 +289,22 @@ impl PortalSession {
                     .block_on(send_key_sequence(new_sender.as_ref(), &key_sequence))
             }
             Err(reconnect_err) => {
+                self.broken.store(true, Ordering::Relaxed);
+                eprintln!(
+                    "voicsh: portal session lost. Restart voicsh to restore portal keyboard access."
+                );
                 eprintln!("voicsh: portal reconnect failed: {reconnect_err}");
                 Err(first_err)
             }
         }
+    }
+
+    /// Returns true if the portal session is permanently broken.
+    ///
+    /// A broken session will short-circuit all future `simulate_paste` calls
+    /// without attempting reconnection.
+    pub fn is_broken(&self) -> bool {
+        self.broken.load(Ordering::Relaxed)
     }
 }
 
@@ -946,5 +969,92 @@ mod tests {
             }
             other => panic!("Expected InjectionFailed parse error, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_broken_flag_set_after_reconnect_failure() {
+        let stale_sender: Arc<dyn KeySender> = Arc::new(FailThenSucceedKeySender::new(1));
+        let connector = TestConnector::sequence(vec![
+            Ok(stale_sender),
+            Err(VoicshError::Other("reconnect failed".to_string())),
+        ]);
+        let session = Arc::new(
+            PortalSession::with_connector(Box::new(connector))
+                .await
+                .unwrap(),
+        );
+
+        assert!(
+            !session.is_broken(),
+            "Session should not be broken initially"
+        );
+
+        let session_clone = session.clone();
+        let result = tokio::task::spawn_blocking(move || session_clone.simulate_paste("ctrl+v"))
+            .await
+            .unwrap();
+
+        assert!(result.is_err());
+        assert!(
+            session.is_broken(),
+            "Session should be marked broken after reconnect failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_broken_portal_returns_error_without_reconnect() {
+        // Set up a session with a connector that has no more results queued.
+        // If simulate_paste tried to reconnect, TestConnector would panic.
+        let stale_sender: Arc<dyn KeySender> = Arc::new(FailThenSucceedKeySender::new(1));
+        let connector = TestConnector::sequence(vec![
+            Ok(stale_sender),
+            Err(VoicshError::Other("reconnect failed".to_string())),
+        ]);
+        let session = Arc::new(
+            PortalSession::with_connector(Box::new(connector))
+                .await
+                .unwrap(),
+        );
+
+        // First call: triggers reconnect failure, sets broken
+        let session_clone = session.clone();
+        let _ = tokio::task::spawn_blocking(move || session_clone.simulate_paste("ctrl+v"))
+            .await
+            .unwrap();
+
+        assert!(session.is_broken());
+
+        // Second call: should return error immediately without reconnect attempt
+        // (TestConnector has no more results — it would panic if connect() were called)
+        let session_clone = session.clone();
+        let result = tokio::task::spawn_blocking(move || session_clone.simulate_paste("ctrl+v"))
+            .await
+            .unwrap();
+
+        assert!(result.is_err());
+        match result {
+            Err(VoicshError::InjectionFailed { message }) => {
+                assert!(
+                    message.contains("broken"),
+                    "Error should mention broken session, got: {message}"
+                );
+                assert!(
+                    message.contains("Restart voicsh"),
+                    "Error should advise restarting, got: {message}"
+                );
+            }
+            other => panic!("Expected InjectionFailed for broken portal, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_is_broken_returns_false_for_healthy_session() {
+        let sender = Arc::new(RecordingKeySender::new());
+        let connector = TestConnector::success(sender);
+        let session = PortalSession::with_connector(Box::new(connector))
+            .await
+            .unwrap();
+
+        assert!(!session.is_broken(), "Healthy session should not be broken");
     }
 }

@@ -10,8 +10,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-EXT_DIR="$SCRIPT_DIR/voicsh@voicsh.dev"
-EXT_UUID="voicsh@voicsh.dev"
+EXT_DIR="$SCRIPT_DIR/voicsh@voic.sh"
+EXT_UUID="voicsh@voic.sh"
 INSTALL_DIR="$HOME/.local/share/gnome-shell/extensions/$EXT_UUID"
 
 # --- Preflight checks ---

@@ -4,6 +4,7 @@
 //! The primary use case is voice commands: spoken punctuation and formatting.
 
 use crate::config::Config;
+use crate::ipc::protocol::TextOrigin;
 use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::TranscribedText;
@@ -49,7 +50,13 @@ impl Station for PostProcessorStation {
     ) -> Result<Option<TranscribedText>, StationError> {
         for processor in &mut self.processors {
             let (new_text, events) = processor.process_with_events(&input.text);
-            input.text = new_text;
+            if new_text != input.text {
+                if input.raw_text.is_none() {
+                    input.raw_text = Some(input.text.clone());
+                }
+                input.text = new_text;
+                input.text_origin = TextOrigin::VoiceCommand;
+            }
             input.events.extend(events);
         }
 

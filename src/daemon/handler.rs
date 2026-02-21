@@ -6,7 +6,7 @@ use crate::audio::vad::VadConfig;
 use crate::config::{Config, resolve_hallucination_filters};
 use crate::daemon::DaemonState;
 use crate::inject::focused_window::reset_detection_cache;
-use crate::ipc::protocol::{Command, DaemonEvent, Response};
+use crate::ipc::protocol::{Command, DaemonEvent, Response, TextOrigin};
 use crate::ipc::server::CommandHandler;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
@@ -181,6 +181,8 @@ impl DaemonCommandHandler {
                     confidence: 1.0,
                     wait_ms: None,
                     token_probabilities: vec![],
+                    raw_text: None,
+                    text_origin: TextOrigin::default(),
                 });
                 Response::Transcription { text }
             } else {
@@ -708,6 +710,8 @@ mod tests {
             confidence: 0.95,
             wait_ms: None,
             token_probabilities: vec![],
+            raw_text: None,
+            text_origin: TextOrigin::default(),
         });
 
         // Should receive the event
@@ -1070,6 +1074,8 @@ mod tests {
             confidence: 0.95,
             wait_ms: None,
             token_probabilities: vec![],
+            raw_text: None,
+            text_origin: TextOrigin::default(),
         });
 
         // Should receive
