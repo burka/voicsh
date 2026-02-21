@@ -1,5 +1,6 @@
 //! Data types for the continuous audio pipeline.
 
+use crate::ipc::protocol::TextOrigin;
 use std::time::Instant;
 
 /// Events that can be sent to the sink for processing.
@@ -152,6 +153,10 @@ pub struct TranscribedText {
     pub events: Vec<SinkEvent>,
     /// Per-token probability scores (empty if not available).
     pub token_probabilities: Vec<crate::stt::transcriber::TokenProbability>,
+    /// Original text before correction/post-processing. None if unmodified.
+    pub raw_text: Option<String>,
+    /// How the final text was produced.
+    pub text_origin: TextOrigin,
 }
 
 impl TranscribedText {
@@ -165,6 +170,8 @@ impl TranscribedText {
             timing: None,
             events: vec![],
             token_probabilities: Vec::new(),
+            raw_text: None,
+            text_origin: TextOrigin::default(),
         }
     }
 
@@ -178,6 +185,8 @@ impl TranscribedText {
             timing,
             events: vec![],
             token_probabilities: Vec::new(),
+            raw_text: None,
+            text_origin: TextOrigin::default(),
         }
     }
 }

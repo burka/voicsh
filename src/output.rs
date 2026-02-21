@@ -1,7 +1,7 @@
 //! Shared event rendering for terminal output.
 //! Used by both `voicsh follow` and daemon verbose mode.
 
-use crate::ipc::protocol::DaemonEvent;
+use crate::ipc::protocol::{DaemonEvent, TextOrigin};
 use crate::pipeline::vad_station::format_level_bar;
 use crate::stt::transcriber::TokenProbability;
 use std::io::{self, Write};
@@ -11,6 +11,7 @@ const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
 const RESET: &str = "\x1b[0m";
+const STRIKETHROUGH: &str = "\x1b[9m";
 
 /// Clear the current terminal line (replaces level bar etc.)
 pub fn clear_line() {
@@ -40,6 +41,11 @@ fn render_tokens_colored(token_probabilities: &[TokenProbability]) {
             eprint!("{color}{}{RESET}", tp.token);
         }
     }
+}
+
+/// Render a voice command replacement: show raw in strikethrough brackets, then replacement.
+fn render_voice_command_diff(raw_text: &str, text: &str) {
+    eprint!("{STRIKETHROUGH}{DIM}[{raw_text}]{RESET}{text}");
 }
 
 /// Render a daemon event to stderr.
@@ -76,6 +82,8 @@ pub fn render_event(event: &DaemonEvent) {
             confidence,
             wait_ms,
             token_probabilities,
+            raw_text,
+            text_origin,
         } => {
             clear_line();
             let lang = if !language.is_empty() && *confidence < 0.99 {
@@ -89,11 +97,19 @@ pub fn render_event(event: &DaemonEvent) {
                 .map(|ms| format!(" {DIM}({ms}ms){RESET}"))
                 .unwrap_or_default();
 
-            if token_probabilities.is_empty() {
-                eprintln!("{text}{lang}{wait}");
-            } else {
-                render_tokens_colored(token_probabilities);
-                eprintln!("{lang}{wait}");
+            match (text_origin, raw_text) {
+                (TextOrigin::VoiceCommand, Some(raw)) => {
+                    render_voice_command_diff(raw, text);
+                    eprintln!("{lang}{wait}");
+                }
+                _ => {
+                    if token_probabilities.is_empty() {
+                        eprintln!("{text}{lang}{wait}");
+                    } else {
+                        render_tokens_colored(token_probabilities);
+                        eprintln!("{lang}{wait}");
+                    }
+                }
             }
         }
         DaemonEvent::TranscriptionDropped {
@@ -143,6 +159,7 @@ pub fn render_event(event: &DaemonEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc::protocol::TextOrigin;
     use crate::stt::transcriber::TokenProbability;
 
     // ── probability color tests ────────────────────────────────────────
@@ -180,6 +197,8 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
+            raw_text: None,
+            text_origin: TextOrigin::Transcription,
             token_probabilities: vec![
                 TokenProbability {
                     token: " hello".to_string(),
@@ -252,6 +271,8 @@ mod tests {
             language: String::new(),
             confidence: 0.9,
             wait_ms: None,
+            raw_text: None,
+            text_origin: TextOrigin::Transcription,
             token_probabilities: vec![],
         });
     }
@@ -263,6 +284,8 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.7,
             wait_ms: Some(250),
+            raw_text: None,
+            text_origin: TextOrigin::Transcription,
             token_probabilities: vec![
                 TokenProbability {
                     token: " high".to_string(),
@@ -277,6 +300,20 @@ mod tests {
                     probability: 0.35,
                 },
             ],
+        });
+    }
+    #[test]
+    fn test_render_voice_command_transcription() {
+        // Smoke test: render_event writes to stderr which can't be captured.
+        // Validates voice command rendering doesn't panic.
+        render_event(&DaemonEvent::Transcription {
+            text: ".".to_string(),
+            language: "en".to_string(),
+            confidence: 0.95,
+            wait_ms: None,
+            token_probabilities: vec![],
+            raw_text: Some("period".to_string()),
+            text_origin: TextOrigin::VoiceCommand,
         });
     }
 }
