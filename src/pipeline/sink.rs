@@ -39,7 +39,6 @@ pub trait TextSink: Send + 'static {
 
 /// Station wrapper for any TextSink implementation.
 /// Converts TextSink into a Station for pipeline orchestration.
-#[allow(dead_code)]
 pub(crate) struct SinkStation {
     sink: Box<dyn TextSink>,
     quiet: bool,
@@ -50,7 +49,6 @@ pub(crate) struct SinkStation {
     event_tx: Option<crossbeam_channel::Sender<DaemonEvent>>,
 }
 
-#[allow(dead_code)]
 impl SinkStation {
     pub(crate) fn new(
         sink: Box<dyn TextSink>,

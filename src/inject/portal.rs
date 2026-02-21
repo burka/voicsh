@@ -341,7 +341,6 @@ pub(crate) mod testing {
     use super::*;
 
     /// No-op key sender for tests that only need a valid `PortalSession`.
-    #[allow(dead_code)]
     pub struct NoOpKeySender;
 
     #[async_trait::async_trait]
@@ -355,7 +354,6 @@ pub(crate) mod testing {
     }
 
     /// Connector that always succeeds with a `NoOpKeySender`.
-    #[allow(dead_code)]
     pub struct NoOpConnector;
 
     #[async_trait::async_trait]
