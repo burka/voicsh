@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
-use voicsh::app::run_record_command;
+use voicsh::app::{RecordConfig, run_record_command};
 use voicsh::audio::capture::list_devices;
 use voicsh::cli::{Cli, ConfigAction, ModelsAction};
 use voicsh::config::Config;
@@ -23,20 +23,19 @@ async fn main() -> Result<()> {
             let config = load_config(cli.config.as_deref())?;
             if std::io::stdin().is_terminal() {
                 // Mic mode
-                run_record_command(
+                run_record_command(RecordConfig {
                     config,
-                    cli.device,
-                    cli.model,
-                    cli.language,
-                    cli.injection_backend,
-                    cli.quiet,
-                    cli.verbose,
-                    cli.no_download,
-                    cli.once,
-                    cli.fan_out,
-                    cli.chunk_size,
-                    cli.buffer,
-                )
+                    device: cli.device,
+                    model: cli.model,
+                    language: cli.language,
+                    injection_backend: cli.injection_backend,
+                    quiet: cli.quiet,
+                    verbosity: cli.verbose,
+                    no_download: cli.no_download,
+                    once: cli.once,
+                    fan_out: cli.fan_out,
+                    buffer_secs: cli.buffer,
+                })
                 .await?;
             } else {
                 // Pipe mode: stdin has WAV data

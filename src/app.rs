@@ -107,38 +107,43 @@ pub async fn run_pipe_command(
     Ok(())
 }
 
+/// CLI overrides for the record command.
+pub struct RecordConfig {
+    pub config: Config,
+    pub device: Option<String>,
+    pub model: Option<String>,
+    pub language: Option<String>,
+    pub injection_backend: Option<String>,
+    pub quiet: bool,
+    pub verbosity: u8,
+    pub no_download: bool,
+    pub once: bool,
+    pub fan_out: bool,
+    pub buffer_secs: u64,
+}
+
 /// Run the record command: capture audio → transcribe → inject text.
 ///
 /// # Arguments
-/// * `config` - Base configuration (can be overridden by CLI args)
-/// * `device` - Optional device override from CLI
-/// * `model` - Optional model override from CLI
-/// * `language` - Optional language override from CLI
-/// * `injection_backend` - Optional injection backend override from CLI
-/// * `quiet` - Suppress status messages
-/// * `verbosity` - Verbosity level (0=default, 1=meter+results, 2=full diagnostics)
-/// * `no_download` - Prevent automatic model download
-/// * `once` - Exit after first transcription (default: loop continuously)
-/// * `fan_out` - Run English + multilingual models in parallel
-/// * `chunk_size` - Chunk duration in seconds (unused for now, reserved)
+/// * `record` - Configuration and CLI overrides for the record command
 ///
 /// # Returns
 /// Ok(()) on success, or an error if any step fails
-#[allow(clippy::too_many_arguments)]
-pub async fn run_record_command(
-    mut config: Config,
-    device: Option<String>,
-    model: Option<String>,
-    language: Option<String>,
-    injection_backend: Option<String>,
-    quiet: bool,
-    verbosity: u8,
-    no_download: bool,
-    once: bool,
-    fan_out: bool,
-    _chunk_size: u32,
-    buffer_secs: u64,
-) -> Result<()> {
+pub async fn run_record_command(record: RecordConfig) -> Result<()> {
+    let RecordConfig {
+        mut config,
+        device,
+        model,
+        language,
+        injection_backend,
+        quiet,
+        verbosity,
+        no_download,
+        once,
+        fan_out,
+        buffer_secs,
+    } = record;
+
     // Suppress noisy JACK/ALSA warnings before audio init
     suppress_audio_warnings();
 
