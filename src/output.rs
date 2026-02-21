@@ -3,6 +3,7 @@
 
 use crate::ipc::protocol::DaemonEvent;
 use crate::pipeline::vad_station::format_level_bar;
+use crate::stt::transcriber::TokenProbability;
 use std::io::{self, Write};
 
 const DIM: &str = "\x1b[2m";
@@ -14,6 +15,31 @@ const RESET: &str = "\x1b[0m";
 /// Clear the current terminal line (replaces level bar etc.)
 pub fn clear_line() {
     eprint!("\r\x1b[2K");
+}
+
+/// Return the ANSI color code for a token probability.
+fn probability_color(prob: f32) -> &'static str {
+    if prob >= 0.9 {
+        GREEN
+    } else if prob >= 0.7 {
+        "" // default terminal color
+    } else if prob >= 0.5 {
+        YELLOW
+    } else {
+        RED
+    }
+}
+
+/// Render tokens colored by their probability.
+fn render_tokens_colored(token_probabilities: &[TokenProbability]) {
+    for tp in token_probabilities {
+        let color = probability_color(tp.probability);
+        if color.is_empty() {
+            eprint!("{}", tp.token);
+        } else {
+            eprint!("{color}{}{RESET}", tp.token);
+        }
+    }
 }
 
 /// Render a daemon event to stderr.
@@ -64,21 +90,9 @@ pub fn render_event(event: &DaemonEvent) {
                 .unwrap_or_default();
 
             if token_probabilities.is_empty() {
-                // Fallback: plain text (no token-level data)
                 eprintln!("{text}{lang}{wait}");
             } else {
-                // Render each token colored by probability (tokens contain leading spaces)
-                for tp in token_probabilities.iter() {
-                    if tp.probability >= 0.9 {
-                        eprint!("{GREEN}{}{RESET}", tp.token);
-                    } else if tp.probability >= 0.7 {
-                        eprint!("{}", tp.token);
-                    } else if tp.probability >= 0.5 {
-                        eprint!("{YELLOW}{}{RESET}", tp.token);
-                    } else {
-                        eprint!("{RED}{}{RESET}", tp.token);
-                    }
-                }
+                render_tokens_colored(token_probabilities);
                 eprintln!("{lang}{wait}");
             }
         }
@@ -129,6 +143,23 @@ pub fn render_event(event: &DaemonEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stt::transcriber::TokenProbability;
+
+    // ── probability color tests ────────────────────────────────────────
+
+    #[test]
+    fn probability_color_thresholds() {
+        assert_eq!(probability_color(0.95), GREEN);
+        assert_eq!(probability_color(0.90), GREEN);
+        assert_eq!(probability_color(0.89), "");
+        assert_eq!(probability_color(0.70), "");
+        assert_eq!(probability_color(0.69), YELLOW);
+        assert_eq!(probability_color(0.50), YELLOW);
+        assert_eq!(probability_color(0.49), RED);
+        assert_eq!(probability_color(0.1), RED);
+    }
+
+    // ── render smoke tests ─────────────────────────────────────────────
 
     #[test]
     fn test_render_event_doesnt_panic() {
@@ -149,7 +180,16 @@ mod tests {
             language: "en".to_string(),
             confidence: 0.95,
             wait_ms: None,
-            token_probabilities: vec![],
+            token_probabilities: vec![
+                TokenProbability {
+                    token: " hello".to_string(),
+                    probability: 0.95,
+                },
+                TokenProbability {
+                    token: " world".to_string(),
+                    probability: 0.75,
+                },
+            ],
         });
 
         render_event(&DaemonEvent::TranscriptionDropped {
@@ -218,7 +258,6 @@ mod tests {
 
     #[test]
     fn test_render_transcription_with_token_probabilities() {
-        use crate::stt::transcriber::TokenProbability;
         render_event(&DaemonEvent::Transcription {
             text: "high medium low".to_string(),
             language: "en".to_string(),
