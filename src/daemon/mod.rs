@@ -387,8 +387,8 @@ pub(crate) async fn create_transcriber(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stt::transcriber::MockTranscriber;
     use crate::ipc::protocol::TextOrigin;
+    use crate::stt::transcriber::MockTranscriber;
 
     fn mock_transcriber() -> Arc<dyn Transcriber> {
         Arc::new(MockTranscriber::new("mock-daemon-model"))
