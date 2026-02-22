@@ -119,12 +119,14 @@ pub fn render_event(event: &DaemonEvent) {
             reason,
         } => {
             clear_line();
-            let conf = if *confidence < 0.99 {
-                format!(" {:.0}%", confidence * 100.0)
+            let lang = if !language.is_empty() && *confidence < 0.99 {
+                format!(" [{language}] {:.0}%", confidence * 100.0)
+            } else if !language.is_empty() {
+                format!(" [{language}]")
             } else {
                 String::new()
             };
-            eprintln!("{DIM}[dropped: {reason} | {language}{conf}] \"{text}\"{RESET}");
+            eprintln!("{DIM}{STRIKETHROUGH}{text}{RESET}{DIM}{lang} ({reason}){RESET}");
         }
         DaemonEvent::Log { message } => {
             clear_line();
