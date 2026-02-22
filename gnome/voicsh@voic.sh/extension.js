@@ -54,8 +54,6 @@ export default class VoicshExtension extends Extension {
         this._pulseId = null;
         this._showQuantized = false;
         this._daemonVersion = null;
-        this._errorCorrectionEnabled = false;
-        this._correctionModel = null;
 
         // Settings (needed before menu for shortcut label, and before keybinding)
         this._settings = this.getSettings();
@@ -113,9 +111,6 @@ export default class VoicshExtension extends Extension {
         this._modelMenu = new PopupMenu.PopupSubMenuMenuItem('Model: —');
         this._indicator.menu.addMenuItem(this._modelMenu);
 
-        this._correctionMenu = new PopupMenu.PopupSubMenuMenuItem('Correction: off (English)');
-        this._indicator.menu.addMenuItem(this._correctionMenu);
-
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._versionItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
         this._versionLabel = new St.Label({ text: 'voicsh', style_class: 'voicsh-version-label' });
@@ -130,7 +125,6 @@ export default class VoicshExtension extends Extension {
             if (isOpen) {
                 this._populateLanguageMenu();
                 this._populateModelMenu();
-                this._populateCorrectionMenu();
                 if (this._recording) {
                     this._updateLevelBar();
                 }
@@ -272,14 +266,6 @@ export default class VoicshExtension extends Extension {
             case 'config_changed':
                 if (event.key === 'language' && event.value) this._language = event.value;
                 if (event.key === 'model' && event.value) this._modelName = event.value;
-                if (event.key === 'error_correction') {
-                    this._errorCorrectionEnabled = event.value === 'true';
-                    this._updateCorrectionMenuLabel();
-                }
-                if (event.key === 'correction_model') {
-                    this._correctionModel = event.value;
-                    this._updateCorrectionMenuLabel();
-                }
                 this._updateUi();
                 break;
             case 'model_loading':
@@ -347,8 +333,6 @@ export default class VoicshExtension extends Extension {
         this._language = null;
         this._binaryPath = null;
         this._daemonVersion = null;
-        this._errorCorrectionEnabled = false;
-        this._correctionModel = null;
         this._updateUi();
     }
 
@@ -395,7 +379,6 @@ export default class VoicshExtension extends Extension {
         const langLabel = this._language === 'auto' ? 'Auto' : (this._language || '—').toUpperCase();
         this._languageMenu.label.text = `Language: ${langLabel}`;
         this._updateModelMenu();
-        this._updateCorrectionMenuLabel();
         this._updateVersionLabel();
     }
 
@@ -520,61 +503,6 @@ export default class VoicshExtension extends Extension {
             this._modelMenu.label.text = `Model: ${response.current}`;
         } catch (e) {
             // Keep existing label
-        }
-    }
-
-    async _populateCorrectionMenu() {
-        try {
-            const response = await this._ipcRequest({ type: 'list_correction_models' });
-            if (response?.type !== 'correction_models') return;
-
-            this._correctionMenu.menu.removeAll();
-            this._errorCorrectionEnabled = response.enabled;
-            this._correctionModel = response.current;
-
-            // Toggle on/off
-            const toggleLabel = response.enabled ? 'Disable Error Correction' : 'Enable Error Correction';
-            const toggleItem = new PopupMenu.PopupMenuItem(toggleLabel);
-            toggleItem.connect('activate', () => {
-                this._sendCommand({ type: 'set_error_correction', enabled: !response.enabled });
-            });
-            this._correctionMenu.menu.addMenuItem(toggleItem);
-
-            this._correctionMenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-            // Model picker
-            for (const model of response.models) {
-                const item = new PopupMenu.PopupMenuItem(`${model.display_name}`);
-                if (model.name === response.current) {
-                    item.setOrnament(PopupMenu.Ornament.CHECK);
-                }
-                if (!response.enabled) {
-                    item.setSensitive(false);
-                }
-                item.connect('activate', () => {
-                    this._sendCommand({ type: 'set_correction_model', model: model.name });
-                });
-                this._correctionMenu.menu.addMenuItem(item);
-            }
-
-            // Update parent label
-            this._updateCorrectionMenuLabel();
-
-            // Grey out if not English
-            const isEnglish = !this._language || this._language === 'en' || this._language === 'auto';
-            this._correctionMenu.setSensitive(isEnglish);
-        } catch (e) {
-            console.debug(`voicsh: failed to populate correction menu: ${e.message}`);
-        }
-    }
-
-    _updateCorrectionMenuLabel() {
-        if (!this._correctionMenu) return;
-        if (this._errorCorrectionEnabled) {
-            const model = this._correctionModel || 'flan-t5-small';
-            this._correctionMenu.label.text = `Correction: ${model} (English)`;
-        } else {
-            this._correctionMenu.label.text = 'Correction: off (English)';
         }
     }
 
