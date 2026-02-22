@@ -73,7 +73,6 @@ src/
 │   ├── transcriber_station.rs # Transcriber as Station
 │   ├── types.rs            # AudioFrame, VadFrame, AudioChunk, TranscribedText
 │   └── error.rs            # StationError + ErrorReporter trait
-├── streaming/              # Experimental streaming pipeline (ring buffer, stitcher)
 ├── stt/
 │   ├── transcriber.rs      # Transcriber trait + MockTranscriber
 │   ├── whisper.rs          # WhisperTranscriber (feature: whisper)

@@ -24,7 +24,7 @@ Default command, pipe mode, GPU, daemon mode.
 - [x] Hallucination filtering (configurable, language-specific)
 - [x] Fan-out mode — run English + multilingual models in parallel, pick best
 
-## 0.1.0 — Usable voice typing (in progress)
+## 0.1.0 — Usable voice typing (done)
 
 Multi-language support, GNOME Shell extension, spoken punctuation, per-token confidence, hallucination filtering, and quantized models.
 
@@ -48,7 +48,26 @@ Multi-language support, GNOME Shell extension, spoken punctuation, per-token con
 - [x] Hallucination filter: 76+ phrases, CJK punctuation normalization, punctuation-only skip
 - [x] Quantized model support (q5_0, q5_1, q8_0 variants)
 
-## 0.2.0 — Post-ASR error correction
+## 0.2.0 — Cleaner output, leaner internals (in progress)
+
+Output polish, code health, CLI ergonomics, GNOME extension cleanup.
+
+- [x] Per-token probability coloring in terminal output
+- [x] Dropped transcriptions styled with strikethrough
+- [x] Suppress noisy low-confidence hallucination filter drops
+- [x] Remove unused streaming module (-2,262 lines)
+- [x] Consolidate all unsafe operations into `sys` module
+- [x] Extract hallucination filter phrases to TOML data file
+- [x] Extract `RecordConfig` struct from parameter soup
+- [x] CLI: `voicsh models use <name>` command
+- [x] CLI: `voicsh benchmark <model>` as positional argument
+- [x] GNOME extension: rename to `voicsh@voic.sh`, version display, migration cleanup
+- [x] GNOME extension: DaemonInfo on follow connect, binary path
+- [x] Stale portal session detection with user warning
+- [x] GPU preflight checks (Vulkan glslc, libclang-dev, unversioned clang)
+- [x] Voice command provenance tracking in pipeline
+
+## 0.3.0 — Post-ASR error correction
 
 LLM-based error correction using per-token confidence as a guide.
 
@@ -61,7 +80,7 @@ LLM-based error correction using per-token confidence as a guide.
 - English-only guard initially (passthrough for other languages)
 - `[error_correction]` config section
 
-## 0.3.0 — GPU and improved correction
+## 0.4.0 — GPU and improved correction
 
 GPU acceleration and enhanced error correction pipeline.
 
@@ -73,11 +92,11 @@ GPU acceleration and enhanced error correction pipeline.
 - GPU compilation gates: CUDA, Vulkan, hipBLAS in CI containers
 - Vulkan runtime tests via lavapipe
 
-## 0.4.0 — Reliable spoken punctuation and overlay
+## 0.5.0 — Reliable spoken punctuation and overlay
 
 Spoken punctuation that works reliably. Wayland overlay for live feedback.
 
-- Reliable spoken punctuation end-to-end (building on 0.1.0 foundation + 0.2.0 error correction)
+- Reliable spoken punctuation end-to-end (building on 0.1.0 foundation + 0.3.0 error correction)
 - Wayland layer-shell overlay: recording indicator + live transcription display
 - Per-token confidence visualization in overlay (color-coded, same scale as terminal)
 - Sentence collector: buffer dictated chunks in the overlay instead of injecting immediately
@@ -87,17 +106,17 @@ Spoken punctuation that works reliably. Wayland overlay for live feedback.
   - Uses local LLM (Ollama / llama.cpp) or cloud (Anthropic, OpenAI)
   - Timeout + fallback to raw transcription if LLM is unavailable
 
-## 0.5.0 — Voice commands
+## 0.6.0 — Voice commands
 
 Full voice commands beyond punctuation — navigation, selection, editing, app control.
 
-- Voice commands working reliably end-to-end (leveraging 0.4.0 reliable punctuation pipeline)
+- Voice commands working reliably end-to-end (leveraging 0.5.0 reliable punctuation pipeline)
 - Navigation: "go to line", "scroll up/down", "page up/down"
 - Selection: "select word", "select line", "select all"
 - Editing: "undo", "redo", "copy", "paste", "cut"
 - Extensible command vocabulary via config
 
-## 0.6.0 — LLM assistant
+## 0.7.0 — LLM assistant
 
 Voice-activated LLM: hold key + speak a question → LLM processes → answer injected as text.
 
