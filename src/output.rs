@@ -4,29 +4,7 @@
 use crate::ipc::protocol::{DaemonEvent, TextOrigin};
 use crate::pipeline::vad_station::format_level_bar;
 use crate::stt::transcriber::TokenProbability;
-use std::cell::RefCell;
 use std::io::{self, Write};
-
-/// Tracks consecutive repeated drops to collapse them into a single line with a count.
-struct DropRepeatState {
-    text: String,
-    count: u32,
-}
-
-thread_local! {
-    static LAST_DROP: RefCell<Option<DropRepeatState>> = const { RefCell::new(None) };
-}
-
-/// Finalize any pending drop-repeat line and reset the counter.
-/// Call before rendering any non-drop event.
-fn finalize_drop_repeat() {
-    LAST_DROP.with(|cell| {
-        if cell.borrow().is_some() {
-            eprintln!();
-            cell.borrow_mut().take();
-        }
-    });
-}
 
 const DIM: &str = "\x1b[2m";
 const GREEN: &str = "\x1b[32m";
@@ -80,7 +58,6 @@ pub fn render_event(event: &DaemonEvent) {
             buffer_used,
             buffer_capacity,
         } => {
-            finalize_drop_repeat();
             let bar = format_level_bar(*level, *threshold);
             let speech = if *is_speech { " SPEECH" } else { "" };
             let buf = if *buffer_capacity > 0 {
@@ -92,7 +69,6 @@ pub fn render_event(event: &DaemonEvent) {
             io::stderr().flush().ok();
         }
         DaemonEvent::RecordingStateChanged { recording } => {
-            finalize_drop_repeat();
             clear_line();
             if *recording {
                 eprintln!("Recording started");
@@ -109,7 +85,6 @@ pub fn render_event(event: &DaemonEvent) {
             raw_text,
             text_origin,
         } => {
-            finalize_drop_repeat();
             clear_line();
             let lang = if !language.is_empty() && *confidence < 0.99 {
                 format!(" {DIM}[{language}] {:.0}%{RESET}", confidence * 100.0)
@@ -143,6 +118,7 @@ pub fn render_event(event: &DaemonEvent) {
             confidence,
             reason,
         } => {
+            clear_line();
             let lang = if !language.is_empty() && *confidence < 0.99 {
                 format!(" [{language}] {:.0}%", confidence * 100.0)
             } else if !language.is_empty() {
@@ -150,53 +126,25 @@ pub fn render_event(event: &DaemonEvent) {
             } else {
                 String::new()
             };
-
-            LAST_DROP.with(|cell| {
-                let mut state = cell.borrow_mut();
-                match state.as_mut().filter(|s| s.text == *text) {
-                    Some(s) => {
-                        s.count += 1;
-                        eprint!("\r\x1b[2K{DIM}{STRIKETHROUGH}{text}{RESET}{DIM}{lang} ({reason}) x{}{RESET}", s.count);
-                        io::stderr().flush().ok();
-                    }
-                    None => {
-                        // Finish previous repeat line (if any) with a newline
-                        if state.is_some() {
-                            eprintln!();
-                        }
-                        clear_line();
-                        eprint!("{DIM}{STRIKETHROUGH}{text}{RESET}{DIM}{lang} ({reason}){RESET}");
-                        io::stderr().flush().ok();
-                        *state = Some(DropRepeatState {
-                            text: text.clone(),
-                            count: 1,
-                        });
-                    }
-                }
-            });
+            eprintln!("{DIM}{STRIKETHROUGH}{text}{RESET}{DIM}{lang} ({reason}){RESET}");
         }
         DaemonEvent::Log { message } => {
-            finalize_drop_repeat();
             clear_line();
             eprintln!("{DIM}[log] {message}{RESET}");
         }
         DaemonEvent::ConfigChanged { key, value } => {
-            finalize_drop_repeat();
             clear_line();
             eprintln!("Config changed: {key} = {value}");
         }
         DaemonEvent::ModelLoading { model, progress } => {
-            finalize_drop_repeat();
             eprint!("\r\x1b[2KModel {model}: {progress}...");
             io::stderr().flush().ok();
         }
         DaemonEvent::ModelLoaded { model } => {
-            finalize_drop_repeat();
             clear_line();
             eprintln!("{GREEN}Model {model} loaded{RESET}");
         }
         DaemonEvent::ModelLoadFailed { model, error } => {
-            finalize_drop_repeat();
             clear_line();
             eprintln!("{RED}Model {model} failed: {error}{RESET}");
         }
@@ -204,7 +152,6 @@ pub fn render_event(event: &DaemonEvent) {
             binary_path,
             version,
         } => {
-            finalize_drop_repeat();
             clear_line();
             eprintln!("{DIM}Daemon v{version} ({binary_path}){RESET}");
         }
