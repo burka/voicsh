@@ -118,6 +118,10 @@ pub fn render_event(event: &DaemonEvent) {
             confidence,
             reason,
         } => {
+            // Low-confidence hallucination filter hits are noise — suppress them
+            if reason == "hallucination filter" && *confidence < 0.75 {
+                return;
+            }
             clear_line();
             let lang = if !language.is_empty() && *confidence < 0.99 {
                 format!(" [{language}] {:.0}%", confidence * 100.0)
