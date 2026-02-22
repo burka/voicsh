@@ -35,6 +35,7 @@ async fn main() -> Result<()> {
                     once: cli.once,
                     fan_out: cli.fan_out,
                     buffer_secs: cli.buffer,
+                    chunk_secs: cli.chunk_size,
                 })
                 .await?;
             } else {

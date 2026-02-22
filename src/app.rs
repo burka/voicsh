@@ -32,9 +32,25 @@ use crate::inject::portal::PortalSession;
 
 /// Convert a buffer duration (seconds) to a chunk channel capacity.
 ///
-/// Assumes ~3s average chunk duration. Minimum capacity is 2.
-fn chunk_buffer_from_secs(buffer_secs: u64) -> usize {
-    (buffer_secs as usize).div_ceil(3).max(2)
+/// Divides the buffer by the target chunk duration to estimate how many
+/// chunks can be in-flight. Minimum capacity is 2.
+fn chunk_buffer_capacity(buffer_secs: u64, chunk_secs: u32) -> usize {
+    let divisor = (chunk_secs as usize).max(1);
+    (buffer_secs as usize).div_ceil(divisor).max(2)
+}
+
+/// Build an `AdaptiveChunkerConfig` from a target chunk duration in seconds.
+///
+/// Scales `max_chunk_ms` proportionally (≈2.4× the target) so the chunker
+/// has headroom to find silence gaps before forcing emission.
+fn chunker_config_from_secs(chunk_secs: u32) -> AdaptiveChunkerConfig {
+    let target_ms = chunk_secs.max(1) * 1000;
+    let max_ms = target_ms * 12 / 5; // ≈2.4× target
+    AdaptiveChunkerConfig {
+        target_chunk_ms: target_ms,
+        max_chunk_ms: max_ms,
+        ..AdaptiveChunkerConfig::default()
+    }
 }
 
 /// Run pipe mode: read WAV from stdin → transcribe → write to stdout.
@@ -93,7 +109,7 @@ pub async fn run_pipe_command(
         auto_level: false, // No auto-level for file input
         quiet: true,       // No meter display for pipe mode
         sample_rate: 16000,
-        chunk_buffer: chunk_buffer_from_secs(buffer_secs),
+        chunk_buffer: chunk_buffer_capacity(buffer_secs, 3),
         hallucination_filters,
         ..Default::default()
     };
@@ -120,6 +136,8 @@ pub struct RecordConfig {
     pub once: bool,
     pub fan_out: bool,
     pub buffer_secs: u64,
+    /// Target chunk duration in seconds for the adaptive chunker.
+    pub chunk_secs: u32,
 }
 
 /// Run the record command: capture audio → transcribe → inject text.
@@ -142,6 +160,7 @@ pub async fn run_record_command(record: RecordConfig) -> Result<()> {
         once,
         fan_out,
         buffer_secs,
+        chunk_secs,
     } = record;
 
     // Suppress noisy JACK/ALSA warnings before audio init
@@ -216,6 +235,7 @@ pub async fn run_record_command(record: RecordConfig) -> Result<()> {
             quiet,
             verbosity,
             buffer_secs,
+            chunk_secs,
             make_sink,
         )
         .await
@@ -226,6 +246,7 @@ pub async fn run_record_command(record: RecordConfig) -> Result<()> {
             quiet,
             verbosity,
             buffer_secs,
+            chunk_secs,
             make_sink,
         )
         .await
@@ -300,6 +321,7 @@ async fn run_continuous(
     quiet: bool,
     verbosity: u8,
     buffer_secs: u64,
+    chunk_secs: u32,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let device_name = config.audio.device.as_deref();
@@ -313,12 +335,12 @@ async fn run_continuous(
             silence_duration_ms: config.audio.silence_duration_ms,
             ..Default::default()
         },
-        chunker: AdaptiveChunkerConfig::default(),
+        chunker: chunker_config_from_secs(chunk_secs),
         verbosity,
         auto_level: true,
         quiet,
         sample_rate: 16000,
-        chunk_buffer: chunk_buffer_from_secs(buffer_secs),
+        chunk_buffer: chunk_buffer_capacity(buffer_secs, chunk_secs),
         hallucination_filters,
         ..Default::default()
     };
@@ -356,6 +378,7 @@ async fn run_single_session(
     quiet: bool,
     verbosity: u8,
     buffer_secs: u64,
+    chunk_secs: u32,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let device_name = config.audio.device.as_deref();
@@ -369,12 +392,12 @@ async fn run_single_session(
             silence_duration_ms: config.audio.silence_duration_ms,
             ..Default::default()
         },
-        chunker: AdaptiveChunkerConfig::default(),
+        chunker: chunker_config_from_secs(chunk_secs),
         verbosity,
         auto_level: true,
         quiet,
         sample_rate: 16000,
-        chunk_buffer: chunk_buffer_from_secs(buffer_secs),
+        chunk_buffer: chunk_buffer_capacity(buffer_secs, chunk_secs),
         hallucination_filters,
         ..Default::default()
     };
@@ -818,67 +841,123 @@ mod tests {
     // ── Buffer capacity tests ────────────────────────────────────────────
 
     #[test]
-    fn test_chunk_buffer_from_secs_default() {
-        // 10s / 3s per chunk = 4 (ceiling division)
-        assert_eq!(chunk_buffer_from_secs(10), 4);
+    fn test_chunk_buffer_capacity_default() {
+        // 10s buffer / 3s chunks = 4 (ceiling division)
+        assert_eq!(chunk_buffer_capacity(10, 3), 4);
     }
 
     #[test]
-    fn test_chunk_buffer_from_secs_large() {
+    fn test_chunk_buffer_capacity_large() {
         // 5 minutes = 300s / 3 = 100
-        assert_eq!(chunk_buffer_from_secs(300), 100);
+        assert_eq!(chunk_buffer_capacity(300, 3), 100);
     }
 
     #[test]
-    fn test_chunk_buffer_from_secs_minimum() {
+    fn test_chunk_buffer_capacity_minimum() {
         // Very small values clamp to minimum of 2
-        assert_eq!(chunk_buffer_from_secs(0), 2);
-        assert_eq!(chunk_buffer_from_secs(1), 2);
+        assert_eq!(chunk_buffer_capacity(0, 3), 2);
+        assert_eq!(chunk_buffer_capacity(1, 3), 2);
     }
 
     #[test]
-    fn test_chunk_buffer_from_secs_exact_multiple() {
+    fn test_chunk_buffer_capacity_exact_multiple() {
         // 9s / 3 = 3
-        assert_eq!(chunk_buffer_from_secs(9), 3);
+        assert_eq!(chunk_buffer_capacity(9, 3), 3);
         // 6s / 3 = 2
-        assert_eq!(chunk_buffer_from_secs(6), 2);
+        assert_eq!(chunk_buffer_capacity(6, 3), 2);
     }
 
     #[test]
-    fn test_chunk_buffer_from_secs_non_multiple() {
+    fn test_chunk_buffer_capacity_non_multiple() {
         // 7s / 3 = 3 (ceiling)
-        assert_eq!(chunk_buffer_from_secs(7), 3);
+        assert_eq!(chunk_buffer_capacity(7, 3), 3);
         // 20s / 3 = 7 (ceiling)
-        assert_eq!(chunk_buffer_from_secs(20), 7);
+        assert_eq!(chunk_buffer_capacity(20, 3), 7);
     }
 
     #[test]
-    fn test_chunk_buffer_from_secs_boundary_at_minimum() {
+    fn test_chunk_buffer_capacity_boundary_at_minimum() {
         // Test edge case: 2s should give exactly 2 (not fall below)
-        assert_eq!(chunk_buffer_from_secs(2), 2);
-        assert_eq!(chunk_buffer_from_secs(3), 2);
+        assert_eq!(chunk_buffer_capacity(2, 3), 2);
+        assert_eq!(chunk_buffer_capacity(3, 3), 2);
     }
 
     #[test]
-    fn test_chunk_buffer_from_secs_boundary_at_transition() {
+    fn test_chunk_buffer_capacity_boundary_at_transition() {
         // Test transition from minimum (2) to calculated value (3)
-        assert_eq!(chunk_buffer_from_secs(4), 2);
-        assert_eq!(chunk_buffer_from_secs(5), 2);
-        assert_eq!(chunk_buffer_from_secs(6), 2);
-        assert_eq!(chunk_buffer_from_secs(7), 3); // First value > 2
+        assert_eq!(chunk_buffer_capacity(4, 3), 2);
+        assert_eq!(chunk_buffer_capacity(5, 3), 2);
+        assert_eq!(chunk_buffer_capacity(6, 3), 2);
+        assert_eq!(chunk_buffer_capacity(7, 3), 3); // First value > 2
     }
 
     #[test]
-    fn test_chunk_buffer_from_secs_very_large() {
+    fn test_chunk_buffer_capacity_very_large() {
         // 1 hour = 3600s / 3 = 1200
-        assert_eq!(chunk_buffer_from_secs(3600), 1200);
+        assert_eq!(chunk_buffer_capacity(3600, 3), 1200);
     }
 
     #[test]
-    fn test_chunk_buffer_from_secs_realistic_values() {
+    fn test_chunk_buffer_capacity_realistic_values() {
         // Common use cases
-        assert_eq!(chunk_buffer_from_secs(15), 5); // 15s buffer
-        assert_eq!(chunk_buffer_from_secs(30), 10); // 30s buffer
-        assert_eq!(chunk_buffer_from_secs(60), 20); // 1 minute buffer
+        assert_eq!(chunk_buffer_capacity(15, 3), 5); // 15s buffer / 3s chunks
+        assert_eq!(chunk_buffer_capacity(30, 3), 10); // 30s buffer / 3s chunks
+        assert_eq!(chunk_buffer_capacity(60, 3), 20); // 1min buffer / 3s chunks
+    }
+
+    #[test]
+    fn test_chunk_buffer_capacity_with_larger_chunks() {
+        // 10s buffer / 5s chunks = 2
+        assert_eq!(chunk_buffer_capacity(10, 5), 2);
+        // 30s buffer / 5s chunks = 6
+        assert_eq!(chunk_buffer_capacity(30, 5), 6);
+        // 60s buffer / 10s chunks = 6
+        assert_eq!(chunk_buffer_capacity(60, 10), 6);
+    }
+
+    #[test]
+    fn test_chunk_buffer_capacity_zero_chunk_secs_clamped() {
+        // chunk_secs=0 should not panic (clamped to 1)
+        assert_eq!(chunk_buffer_capacity(10, 0), 10);
+    }
+
+    // ── Chunker config tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_chunker_config_default_3s() {
+        let cfg = chunker_config_from_secs(3);
+        assert_eq!(cfg.target_chunk_ms, 3000);
+        assert_eq!(cfg.max_chunk_ms, 7200); // 3000 * 12/5
+    }
+
+    #[test]
+    fn test_chunker_config_5s() {
+        let cfg = chunker_config_from_secs(5);
+        assert_eq!(cfg.target_chunk_ms, 5000);
+        assert_eq!(cfg.max_chunk_ms, 12000);
+    }
+
+    #[test]
+    fn test_chunker_config_1s() {
+        let cfg = chunker_config_from_secs(1);
+        assert_eq!(cfg.target_chunk_ms, 1000);
+        assert_eq!(cfg.max_chunk_ms, 2400);
+    }
+
+    #[test]
+    fn test_chunker_config_zero_clamped() {
+        // 0 is clamped to 1s
+        let cfg = chunker_config_from_secs(0);
+        assert_eq!(cfg.target_chunk_ms, 1000);
+        assert_eq!(cfg.max_chunk_ms, 2400);
+    }
+
+    #[test]
+    fn test_chunker_config_preserves_gap_defaults() {
+        let cfg = chunker_config_from_secs(3);
+        let defaults = AdaptiveChunkerConfig::default();
+        assert_eq!(cfg.initial_gap_ms, defaults.initial_gap_ms);
+        assert_eq!(cfg.min_gap_ms, defaults.min_gap_ms);
+        assert_eq!(cfg.sample_rate, defaults.sample_rate);
     }
 }

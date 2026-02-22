@@ -1,7 +1,8 @@
-//! Safe wrappers for platform-specific unsafe operations.
+//! Safe wrappers for platform-specific unsafe syscall operations.
 //!
-//! Every `unsafe` block in the codebase lives here. Call sites use the safe
-//! public API and never touch `unsafe` directly.
+//! All `libc` syscall wrappers and `std::env` unsafe calls live here.
+//! The only other `unsafe` in the codebase is `unsafe impl Send` for
+//! `SendableStream` in `audio::capture` (required by the CPAL stream API).
 
 use std::ffi::CStr;
 
@@ -68,11 +69,14 @@ where
 /// Set an environment variable.
 ///
 /// # Safety
-/// Caller must ensure no other threads are reading environment variables concurrently.
+/// `std::env::set_var` is unsound when other threads read env vars concurrently.
+/// In practice the specific vars we write (D-Bus address, audio backend flags)
+/// are only read at library-init time by third-party code, so the race window
+/// is narrow. Prefer calling this before spawning threads when possible;
+/// the portal reconnect path calls it from a running runtime as a best-effort
+/// fix for stale D-Bus sessions.
 pub fn set_env(key: &str, value: &str) {
-    // SAFETY: Caller must ensure no other threads are reading environment
-    // variables concurrently.
-    #[allow(unsafe_code)]
+    // SAFETY: Best-effort — see doc comment above.
     unsafe {
         std::env::set_var(key, value);
     }
@@ -81,11 +85,10 @@ pub fn set_env(key: &str, value: &str) {
 /// Remove an environment variable.
 ///
 /// # Safety
-/// Caller must ensure no other threads are reading environment variables concurrently.
+/// Same caveats as [`set_env`] — unsound under concurrent env reads,
+/// but acceptable for the narrow use cases in this codebase.
 pub fn remove_env(key: &str) {
-    // SAFETY: Caller must ensure no other threads are reading environment
-    // variables concurrently.
-    #[allow(unsafe_code)]
+    // SAFETY: Best-effort — see doc comment above.
     unsafe {
         std::env::remove_var(key);
     }

@@ -335,35 +335,6 @@ fn parse_paste_key(paste_key: &str) -> Result<Vec<i32>> {
     Ok(codes)
 }
 
-/// Test-support types for constructing a `PortalSession` without D-Bus.
-#[cfg(test)]
-pub(crate) mod testing {
-    use super::*;
-
-    /// No-op key sender for tests that only need a valid `PortalSession`.
-    pub struct NoOpKeySender;
-
-    #[async_trait::async_trait]
-    impl KeySender for NoOpKeySender {
-        async fn press_key(&self, _code: i32) -> Result<()> {
-            Ok(())
-        }
-        async fn release_key(&self, _code: i32) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    /// Connector that always succeeds with a `NoOpKeySender`.
-    pub struct NoOpConnector;
-
-    #[async_trait::async_trait]
-    impl PortalConnector for NoOpConnector {
-        async fn connect(&self) -> Result<Arc<dyn KeySender>> {
-            Ok(Arc::new(NoOpKeySender))
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

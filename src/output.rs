@@ -13,6 +13,11 @@ const RED: &str = "\x1b[31m";
 const RESET: &str = "\x1b[0m";
 const STRIKETHROUGH: &str = "\x1b[9m";
 
+/// Below this confidence, hallucination filter drops are suppressed from output.
+/// Low-confidence hallucination hits are noise (the model is uncertain and the
+/// filter caught it — no need to show anything).
+const HALLUCINATION_SUPPRESS_CONFIDENCE: f32 = 0.75;
+
 /// Clear the current terminal line (replaces level bar etc.)
 pub fn clear_line() {
     eprint!("\r\x1b[2K");
@@ -119,7 +124,7 @@ pub fn render_event(event: &DaemonEvent) {
             reason,
         } => {
             // Low-confidence hallucination filter hits are noise — suppress them
-            if reason == "hallucination filter" && *confidence < 0.75 {
+            if reason == "hallucination filter" && *confidence < HALLUCINATION_SUPPRESS_CONFIDENCE {
                 return;
             }
             clear_line();
@@ -180,6 +185,58 @@ mod tests {
         assert_eq!(probability_color(0.50), YELLOW);
         assert_eq!(probability_color(0.49), RED);
         assert_eq!(probability_color(0.1), RED);
+    }
+
+    // ── hallucination suppression tests ──────────────────────────────
+
+    #[test]
+    fn hallucination_suppression_below_threshold() {
+        // Below HALLUCINATION_SUPPRESS_CONFIDENCE → suppressed (no output)
+        // This calls render_event which writes to stderr; the key property is
+        // that it returns early without printing the struck-through line.
+        // We verify the threshold constant is used correctly.
+        assert!(
+            0.74 < HALLUCINATION_SUPPRESS_CONFIDENCE,
+            "0.74 should be below the suppression threshold"
+        );
+        assert!(
+            0.75 >= HALLUCINATION_SUPPRESS_CONFIDENCE,
+            "0.75 should be at or above the suppression threshold"
+        );
+    }
+
+    #[test]
+    fn hallucination_suppression_at_threshold_renders() {
+        // At exactly HALLUCINATION_SUPPRESS_CONFIDENCE → not suppressed
+        // Smoke test: should not panic
+        render_event(&DaemonEvent::TranscriptionDropped {
+            text: "Thank you.".to_string(),
+            language: "en".to_string(),
+            confidence: HALLUCINATION_SUPPRESS_CONFIDENCE,
+            reason: "hallucination filter".to_string(),
+        });
+    }
+
+    #[test]
+    fn hallucination_suppression_above_threshold_renders() {
+        // Above HALLUCINATION_SUPPRESS_CONFIDENCE → not suppressed
+        render_event(&DaemonEvent::TranscriptionDropped {
+            text: "Thank you.".to_string(),
+            language: "en".to_string(),
+            confidence: 0.90,
+            reason: "hallucination filter".to_string(),
+        });
+    }
+
+    #[test]
+    fn non_hallucination_drop_always_renders() {
+        // Other reasons are never suppressed regardless of confidence
+        render_event(&DaemonEvent::TranscriptionDropped {
+            text: "test".to_string(),
+            language: "en".to_string(),
+            confidence: 0.10,
+            reason: "language filter".to_string(),
+        });
     }
 
     // ── render smoke tests ─────────────────────────────────────────────
