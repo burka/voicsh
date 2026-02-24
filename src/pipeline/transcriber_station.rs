@@ -1,5 +1,6 @@
 //! Transcriber station that converts audio chunks to text via Whisper.
 
+use crate::config::FILTER_PUNCTUATION;
 use crate::ipc::protocol::DaemonEvent;
 use crate::output::{clear_line, render_event};
 use crate::pipeline::error::StationError;
@@ -111,42 +112,21 @@ impl TranscriberStation {
         self
     }
 
-    /// Set hallucination filter phrases.
+    /// Set pre-resolved hallucination filter phrases.
     ///
-    /// Each phrase is lowercased and both the original lowercased form and its
-    /// punctuation-stripped variant are stored, so runtime lookup needs only
-    /// `HashSet::contains` with no per-entry iteration.
+    /// Expects an already-normalized `HashSet` (lowercased, punctuation-stripped
+    /// variants included) as produced by `resolve_hallucination_filters`.
     pub fn with_hallucination_filters(mut self, filters: HashSet<String>) -> Self {
-        self.hallucination_filters = HashSet::new();
-        for phrase in filters {
-            let lower = phrase.to_lowercase();
-            let stripped = lower
-                .trim_end_matches(['.', '!', '?', ',', ';', '。', '、', '！', '？'])
-                .to_string();
-            if stripped != lower {
-                self.hallucination_filters.insert(stripped);
-            }
-            self.hallucination_filters.insert(lower);
-        }
+        self.hallucination_filters = filters;
         self
     }
 
-    /// Set suspect phrases for confidence-gated soft filtering.
+    /// Set pre-resolved suspect phrases for confidence-gated soft filtering.
     ///
-    /// Each phrase is lowercased and both the original lowercased form and its
-    /// punctuation-stripped variant are stored for O(1) runtime lookup.
+    /// Expects an already-normalized `HashSet` (lowercased, punctuation-stripped
+    /// variants included) as produced by `resolve_suspect_phrases`.
     pub fn with_suspect_phrases(mut self, phrases: HashSet<String>) -> Self {
-        self.suspect_phrases = HashSet::new();
-        for phrase in phrases {
-            let lower = phrase.to_lowercase();
-            let stripped = lower
-                .trim_end_matches(['.', '!', '?', ',', ';', '。', '、', '！', '？'])
-                .to_string();
-            if stripped != lower {
-                self.suspect_phrases.insert(stripped);
-            }
-            self.suspect_phrases.insert(lower);
-        }
+        self.suspect_phrases = phrases;
         self
     }
 
@@ -246,8 +226,7 @@ impl Station for TranscriberStation {
         // are pre-stored in the set by resolve_hallucination_filters).
         if !self.hallucination_filters.is_empty() {
             let lower = cleaned_text.to_lowercase();
-            let stripped =
-                lower.trim_end_matches(['.', '!', '?', ',', ';', '。', '、', '！', '？']);
+            let stripped = lower.trim_end_matches(FILTER_PUNCTUATION);
             if self.hallucination_filters.contains(&lower)
                 || self.hallucination_filters.contains(stripped)
             {
@@ -280,8 +259,7 @@ impl Station for TranscriberStation {
         // O(1) lookup; both original and stripped forms are pre-stored in the set.
         if !self.suspect_phrases.is_empty() {
             let lower = cleaned_text.to_lowercase();
-            let stripped =
-                lower.trim_end_matches(['.', '!', '?', ',', ';', '。', '、', '！', '？']);
+            let stripped = lower.trim_end_matches(FILTER_PUNCTUATION);
             if (self.suspect_phrases.contains(&lower) || self.suspect_phrases.contains(stripped))
                 && result.confidence < SUSPECT_PASS_THRESHOLD
             {
@@ -408,6 +386,15 @@ mod tests {
     // Helper to create Arc<RwLock<f32>>
     fn arc_conf(conf: f32) -> Arc<std::sync::RwLock<f32>> {
         Arc::new(std::sync::RwLock::new(conf))
+    }
+
+    /// Build a normalized filter set from raw phrases (lowercase + punctuation-stripped variants).
+    fn filter_set(phrases: &[&str]) -> HashSet<String> {
+        let mut set = HashSet::new();
+        for phrase in phrases {
+            crate::config::insert_with_punctuation_variant(&mut set, phrase.to_lowercase());
+        }
+        set
     }
 
     #[test]
@@ -697,7 +684,7 @@ mod tests {
     fn test_hallucination_filter_discards_match() {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Thank you."));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(HashSet::from(["thank you.".to_string()]));
+            .with_hallucination_filters(filter_set(&["thank you."]));
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(result.is_none(), "Hallucinated phrase should be discarded");
@@ -707,7 +694,7 @@ mod tests {
     fn test_hallucination_filter_case_insensitive() {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("THANK YOU."));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(HashSet::from(["thank you.".to_string()]));
+            .with_hallucination_filters(filter_set(&["thank you."]));
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(result.is_none(), "Filter should be case-insensitive");
@@ -717,7 +704,7 @@ mod tests {
     fn test_hallucination_filter_allows_non_match() {
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Hello world"));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(HashSet::from(["thank you.".to_string()]));
+            .with_hallucination_filters(filter_set(&["thank you."]));
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(result.is_some(), "Non-matching text should pass through");
@@ -729,7 +716,7 @@ mod tests {
         let transcriber =
             Arc::new(MockTranscriber::new("mock").with_response("Thank you for coming"));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(HashSet::from(["thank you.".to_string()]));
+            .with_hallucination_filters(filter_set(&["thank you."]));
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -756,7 +743,7 @@ mod tests {
         let transcriber =
             Arc::new(MockTranscriber::new("mock").with_response("[MUSIC] Thank you."));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(HashSet::from(["thank you.".to_string()]));
+            .with_hallucination_filters(filter_set(&["thank you."]));
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -770,7 +757,7 @@ mod tests {
         // Filter has "thank you." but text is "Thank you" (no period)
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Thank you"));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(HashSet::from(["thank you.".to_string()]));
+            .with_hallucination_filters(filter_set(&["thank you."]));
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -783,8 +770,8 @@ mod tests {
     fn test_hallucination_filter_exclamation_normalized() {
         // Filter has "bye." but text is "Bye!"
         let transcriber = Arc::new(MockTranscriber::new("mock").with_response("Bye!"));
-        let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(HashSet::from(["bye.".to_string()]));
+        let mut station =
+            TranscriberStation::new(transcriber).with_hallucination_filters(filter_set(&["bye."]));
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -800,7 +787,7 @@ mod tests {
         let transcriber =
             Arc::new(MockTranscriber::new("mock").with_response("ありがとうございました"));
         let mut station = TranscriberStation::new(transcriber)
-            .with_hallucination_filters(HashSet::from(["ありがとうございました。".to_string()]));
+            .with_hallucination_filters(filter_set(&["ありがとうございました。"]));
         let chunk = AudioChunk::new(vec![100i16; 100], 100, 1);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -1011,8 +998,8 @@ mod tests {
                 .with_response("Okay")
                 .with_confidence(0.60),
         );
-        let mut station = TranscriberStation::new(transcriber)
-            .with_suspect_phrases(HashSet::from(["okay".to_string()]));
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(filter_set(&["okay"]));
         let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -1028,8 +1015,8 @@ mod tests {
                 .with_response("Okay")
                 .with_confidence(0.80),
         );
-        let mut station = TranscriberStation::new(transcriber)
-            .with_suspect_phrases(HashSet::from(["okay".to_string()]));
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(filter_set(&["okay"]));
         let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -1045,8 +1032,8 @@ mod tests {
                 .with_response("Okay")
                 .with_confidence(0.95),
         );
-        let mut station = TranscriberStation::new(transcriber)
-            .with_suspect_phrases(HashSet::from(["okay".to_string()]));
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(filter_set(&["okay"]));
         let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
         let result = station.process(chunk).unwrap();
         assert!(result.is_some(), "Suspect word at 95% should pass through");
@@ -1060,8 +1047,8 @@ mod tests {
                 .with_response("Hello world")
                 .with_confidence(0.60),
         );
-        let mut station = TranscriberStation::new(transcriber)
-            .with_suspect_phrases(HashSet::from(["okay".to_string()]));
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(filter_set(&["okay"]));
         let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -1095,8 +1082,8 @@ mod tests {
                 .with_response("Yeah")
                 .with_confidence(0.90),
         );
-        let mut station = TranscriberStation::new(transcriber)
-            .with_suspect_phrases(HashSet::from(["yeah".to_string()]));
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(filter_set(&["yeah"]));
         let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -1113,8 +1100,8 @@ mod tests {
                 .with_response("Okay.")
                 .with_confidence(0.60),
         );
-        let mut station = TranscriberStation::new(transcriber)
-            .with_suspect_phrases(HashSet::from(["okay".to_string()]));
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(filter_set(&["okay"]));
         let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
         let result = station.process(chunk).unwrap();
         assert!(
@@ -1133,7 +1120,7 @@ mod tests {
                 .with_confidence(0.60),
         );
         let mut station = TranscriberStation::new(transcriber)
-            .with_suspect_phrases(HashSet::from(["okay".to_string()]))
+            .with_suspect_phrases(filter_set(&["okay"]))
             .with_event_sender(tx);
         let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
         let _result = station.process(chunk).unwrap();

@@ -1,44 +1,36 @@
 [en]
 phrases = [
-    "Thank you.",
-    "Thanks for watching!",
-    "Thanks for watching.",
-    "Thank you for watching.",
-    "Thank you for watching!",
-    "Bye.",
-    "Bye!",
-    "Goodbye.",
+    "Thank you",
+    "Thanks for watching",
+    "Thank you for watching",
+    "Bye",
+    "Goodbye",
     "you",
     "Subtitles by the Amara.org community",
     "Transcription by CastingWords",
     "Thanks for watching, please subscribe!",
     "Thank you for watching, please subscribe!",
-    "I'm not sure what I'm doing here.",
+    "I'm not sure what I'm doing here",
     "Satsang with Mooji",
     "Closed captioning provided by the Imperial News Network",
     "For more information visit www.fema.gov",
     "mmm",
     "hmm",
     "mm-hmm",
-    "You're welcome.",
-    "You're welcome!",
-    "Oh, God.",
-    "Oh God.",
-    "Oh my God.",
-    "Oh my god.",
+    "You're welcome",
+    "Oh, God",
+    "Oh God",
+    "Oh my God",
+    "Oh my god",
 ]
 suspect_phrases = ["okay", "oh", "yeah", "yes", "no", "alright", "all right", "right", "sure", "so", "well", "hey", "hi", "wow", "huh", "uh", "oop", "oops", "ah"]
 
 [de]
 phrases = [
-    "Vielen Dank.",
-    "Vielen Dank!",
-    "Danke.",
-    "Danke!",
-    "Danke fürs Zuschauen!",
-    "Danke fürs Zuschauen.",
-    "Tschüss.",
-    "Tschüss!",
+    "Vielen Dank",
+    "Danke",
+    "Danke fürs Zuschauen",
+    "Tschüss",
     "Untertitel von Stephanie Geiges",
     "Untertitel im Auftrag des ZDF",
     "Untertitel im Auftrag des ZDF 2021",
@@ -50,12 +42,10 @@ suspect_phrases = ["okay", "ja", "nein", "oh", "ach", "so", "na", "gut", "also",
 
 [es]
 phrases = [
-    "Gracias.",
-    "Gracias!",
-    "Gracias por ver.",
-    "Gracias por ver!",
-    "Gracias por ver el video.",
-    "Adiós.",
+    "Gracias",
+    "Gracias por ver",
+    "Gracias por ver el video",
+    "Adiós",
     "Subtítulos por la comunidad de Amara.org",
     "Subtítulos realizados por la comunidad de Amara.org",
 ]
@@ -63,39 +53,32 @@ suspect_phrases = ["vale", "sí", "no", "bueno", "oh", "ay", "pues", "bien", "cl
 
 [fr]
 phrases = [
-    "Merci.",
-    "Merci !",
-    "Merci d'avoir regardé.",
-    "Merci d'avoir regardé !",
-    "Au revoir.",
+    "Merci",
+    "Merci d'avoir regardé",
+    "Au revoir",
     "Sous-titrage ST' 501",
     "Sous-titres réalisés par la communauté d'Amara.org",
-    "Merci d'avoir regardé cette vidéo.",
+    "Merci d'avoir regardé cette vidéo",
 ]
 suspect_phrases = ["oui", "non", "oh", "bon", "bien", "ah", "ouais", "ok", "hein", "bah"]
 
 [pt]
 phrases = [
-    "Obrigado.",
-    "Obrigado!",
-    "Obrigada.",
-    "Obrigada!",
-    "Tchau.",
-    "Tchau!",
+    "Obrigado",
+    "Obrigada",
+    "Tchau",
     "Legendas pela comunidade Amara.org",
     "Legendas pela comunidade de Amara.org",
     "Legendas pela comunidade da Amara.org",
-    "Obrigado por assistir.",
+    "Obrigado por assistir",
 ]
 suspect_phrases = ["sim", "não", "ok", "tá", "ah", "oh", "bem", "pois", "é"]
 
 [it]
 phrases = [
-    "Grazie.",
-    "Grazie!",
-    "Grazie per aver guardato.",
-    "Grazie per aver guardato!",
-    "Arrivederci.",
+    "Grazie",
+    "Grazie per aver guardato",
+    "Arrivederci",
     "Sottotitoli creati dalla comunità Amara.org",
     "Sottotitoli e revisione a cura di QTSS",
 ]
@@ -103,27 +86,25 @@ suspect_phrases = ["sì", "no", "ok", "bene", "oh", "ah", "va bene", "dai", "ecc
 
 [ru]
 phrases = [
-    "Спасибо.",
-    "Спасибо!",
-    "Спасибо за просмотр.",
-    "Спасибо за просмотр!",
-    "До свидания.",
+    "Спасибо",
+    "Спасибо за просмотр",
+    "До свидания",
     "Субтитры сделал DimaTorzok",
     "Субтитры создавал DimaTorzok",
     "Редактор субтитров Е.Воинова",
     "Подписывайтесь на наш канал",
     "Продолжение следует...",
-    "Ищи мультфильм.",
+    "Ищи мультфильм",
 ]
 suspect_phrases = ["да", "нет", "ладно", "ну", "ох", "ага", "угу"]
 
 [ja]
 phrases = [
-    "ありがとうございました。",
-    "ありがとうございます。",
-    "ご視聴ありがとうございました。",
-    "ご視聴ありがとうございます。",
-    "おやすみなさい。",
+    "ありがとうございました",
+    "ありがとうございます",
+    "ご視聴ありがとうございました",
+    "ご視聴ありがとうございます",
+    "おやすみなさい",
     "チャンネル登録お願いします",
     "お疲れ様でした",
     "見てくれてありがとう",
@@ -132,11 +113,9 @@ suspect_phrases = ["はい", "いいえ", "うん", "ええ", "ああ", "そう"
 
 [zh]
 phrases = [
-    "谢谢。",
-    "谢谢！",
-    "谢谢观看。",
-    "谢谢观看！",
-    "再见。",
+    "谢谢",
+    "谢谢观看",
+    "再见",
     "感谢观看",
     "謝謝觀看",
     "由 Amara.org 社群提供的字幕",
@@ -146,11 +125,10 @@ suspect_phrases = ["好", "对", "嗯", "哦", "啊", "是", "没有"]
 
 [ko]
 phrases = [
-    "감사합니다.",
-    "감사합니다!",
-    "시청해 주셔서 감사합니다.",
-    "시청해주셔서 감사합니다.",
-    "안녕히 가세요.",
+    "감사합니다",
+    "시청해 주셔서 감사합니다",
+    "시청해주셔서 감사합니다",
+    "안녕히 가세요",
     "MBC 뉴스 김성현입니다",
     "MBC 뉴스 김재경입니다",
     "MBC 뉴스 이재은입니다",
@@ -166,7 +144,7 @@ suspect_phrases = ["네", "아니요", "응", "어", "아", "그래", "예"]
 
 [nl]
 phrases = [
-    "Bedankt voor het kijken.",
+    "Bedankt voor het kijken",
     "Ondertitels ingediend door de Amara.org gemeenschap",
     "TV Gelderland 2021",
 ]
@@ -174,12 +152,12 @@ suspect_phrases = ["ja", "nee", "oh", "goed", "nou", "oké"]
 
 [pl]
 phrases = [
-    "Dziękuję za oglądanie.",
-    "Dzięki za oglądanie.",
-    "Dzięki za uwagę.",
-    "Dziękuję za uwagę.",
+    "Dziękuję za oglądanie",
+    "Dzięki za oglądanie",
+    "Dzięki za uwagę",
+    "Dziękuję za uwagę",
     "Napisy stworzone przez społeczność Amara.org",
-    "Do zobaczenia w kolejnym odcinku.",
+    "Do zobaczenia w kolejnym odcinku",
 ]
 suspect_phrases = ["tak", "nie", "no", "dobrze", "ok", "aha"]
 
@@ -193,8 +171,8 @@ suspect_phrases = ["نعم", "لا", "حسنا", "آه", "أوه"]
 
 [tr]
 phrases = [
-    "İzlediğiniz için teşekkür ederim.",
-    "Abone ol.",
-    "Bir sonraki videoda görüşürüz.",
+    "İzlediğiniz için teşekkür ederim",
+    "Abone ol",
+    "Bir sonraki videoda görüşürüz",
 ]
 suspect_phrases = ["evet", "hayır", "tamam", "iyi", "ha", "oh"]

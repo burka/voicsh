@@ -6,6 +6,9 @@ use std::path::Path;
 #[cfg(feature = "cli")]
 use std::path::PathBuf;
 
+/// Trailing punctuation characters stripped during filter normalization.
+pub const FILTER_PUNCTUATION: [char; 9] = ['.', '!', '?', ',', ';', '。', '、', '！', '？'];
+
 /// Root configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -647,10 +650,8 @@ pub fn resolve_suspect_phrases(config: &HallucinationFilterConfig) -> HashSet<St
 ///
 /// Storing both forms means runtime matching only needs `HashSet::contains`,
 /// with no per-entry iteration or stripping.
-fn insert_with_punctuation_variant(set: &mut HashSet<String>, phrase: String) {
-    let stripped = phrase
-        .trim_end_matches(['.', '!', '?', ',', ';', '。', '、', '！', '？'])
-        .to_string();
+pub(crate) fn insert_with_punctuation_variant(set: &mut HashSet<String>, phrase: String) {
+    let stripped = phrase.trim_end_matches(FILTER_PUNCTUATION).to_string();
     if stripped != phrase {
         set.insert(stripped);
     }
@@ -1465,10 +1466,10 @@ mod tests {
         // Should contain all built-in defaults from all languages
         assert!(!resolved.is_empty());
         // Verify at least one phrase from each of several languages
-        assert!(resolved.contains(&"thank you.".to_string()));
-        assert!(resolved.contains(&"vielen dank.".to_string()));
-        assert!(resolved.contains(&"gracias.".to_string()));
-        assert!(resolved.contains(&"merci.".to_string()));
+        assert!(resolved.contains(&"thank you".to_string()));
+        assert!(resolved.contains(&"vielen dank".to_string()));
+        assert!(resolved.contains(&"gracias".to_string()));
+        assert!(resolved.contains(&"merci".to_string()));
     }
 
     #[test]
@@ -1481,7 +1482,7 @@ mod tests {
         let resolved = resolve_hallucination_filters(&config);
         assert!(resolved.contains(&"custom phrase".to_string()));
         // Built-in defaults should still be present
-        assert!(resolved.contains(&"thank you.".to_string()));
+        assert!(resolved.contains(&"thank you".to_string()));
     }
 
     #[test]
@@ -1497,9 +1498,9 @@ mod tests {
         // Should have the override
         assert!(resolved.contains(&"only this".to_string()));
         // Should NOT have the original English defaults
-        assert!(!resolved.contains(&"thank you.".to_string()));
+        assert!(!resolved.contains(&"thank you".to_string()));
         // Other languages still present
-        assert!(resolved.contains(&"vielen dank.".to_string()));
+        assert!(resolved.contains(&"vielen dank".to_string()));
     }
 
     #[test]
@@ -1513,9 +1514,9 @@ mod tests {
         };
         let resolved = resolve_hallucination_filters(&config);
         // Korean defaults should be gone
-        assert!(!resolved.contains(&"감사합니다.".to_string()));
+        assert!(!resolved.contains(&"감사합니다".to_string()));
         // Others still present
-        assert!(resolved.contains(&"thank you.".to_string()));
+        assert!(resolved.contains(&"thank you".to_string()));
     }
 
     #[test]
@@ -1530,8 +1531,8 @@ mod tests {
         let resolved = resolve_hallucination_filters(&config);
         assert!(resolved.contains(&"custom english".to_string()));
         assert!(resolved.contains(&"extra".to_string()));
-        assert!(!resolved.contains(&"thank you.".to_string()));
-        assert!(resolved.contains(&"vielen dank.".to_string()));
+        assert!(!resolved.contains(&"thank you".to_string()));
+        assert!(resolved.contains(&"vielen dank".to_string()));
     }
 
     #[test]
@@ -1611,19 +1612,19 @@ mod tests {
     fn test_dump_template_contains_hallucination_defaults() {
         let template = Config::dump_template();
         assert!(
-            template.contains("Thank you."),
+            template.contains("\"Thank you\""),
             "Missing English hallucination default"
         );
         assert!(
-            template.contains("Vielen Dank."),
+            template.contains("\"Vielen Dank\""),
             "Missing German hallucination default"
         );
         assert!(
-            template.contains("Gracias."),
+            template.contains("\"Gracias\""),
             "Missing Spanish hallucination default"
         );
         assert!(
-            template.contains("Merci."),
+            template.contains("\"Merci\""),
             "Missing French hallucination default"
         );
     }
