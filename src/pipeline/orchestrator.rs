@@ -14,6 +14,7 @@ use crate::pipeline::types::AudioFrame;
 use crate::pipeline::{ChunkerStation, TranscriberStation, VadStation};
 use crate::stt::transcriber::Transcriber;
 use crossbeam_channel::bounded;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
@@ -34,10 +35,10 @@ pub struct PipelineConfig {
     pub quiet: bool,
     /// Sample rate
     pub sample_rate: u32,
-    /// Pre-resolved hallucination filter phrases (lowercased)
-    pub hallucination_filters: Vec<String>,
-    /// Pre-resolved suspect phrases for confidence-gated soft filtering (lowercased)
-    pub suspect_phrases: Vec<String>,
+    /// Pre-resolved hallucination filter phrases (lowercased, O(1) lookup)
+    pub hallucination_filters: HashSet<String>,
+    /// Pre-resolved suspect phrases for confidence-gated soft filtering (lowercased, O(1) lookup)
+    pub suspect_phrases: HashSet<String>,
     /// Channel buffer sizes
     pub audio_buffer: usize,
     pub vad_buffer: usize,
@@ -61,8 +62,8 @@ impl Default for PipelineConfig {
             auto_level: true,
             quiet: false,
             sample_rate: 16000,
-            hallucination_filters: Vec::new(),
-            suspect_phrases: Vec::new(),
+            hallucination_filters: HashSet::new(),
+            suspect_phrases: HashSet::new(),
             audio_buffer: 1024,
             vad_buffer: 1024,
             chunk_buffer: 16,

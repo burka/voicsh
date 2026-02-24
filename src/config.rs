@@ -1,6 +1,6 @@
 use crate::defaults;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 #[cfg(feature = "cli")]
@@ -597,14 +597,15 @@ pub fn default_suspect_phrases() -> HashMap<String, Vec<String>> {
     parse_filter_toml().suspect_phrases
 }
 
-/// Resolve the active hallucination filter list from config.
+/// Resolve the active hallucination filter set from config.
 ///
 /// 1. Start with built-in defaults per language
 /// 2. For each language key in overrides, replace that language's defaults
-/// 3. Flatten all languages into a single list
-/// 4. Append all entries from `add`
-/// 5. Return combined list (lowercased for case-insensitive matching)
-pub fn resolve_hallucination_filters(config: &HallucinationFilterConfig) -> Vec<String> {
+/// 3. Flatten all languages into a single set
+/// 4. Merge all entries from `add`
+/// 5. Return combined set (lowercased; both original and punctuation-stripped
+///    variants are stored for O(1) lookup without per-entry stripping at runtime)
+pub fn resolve_hallucination_filters(config: &HallucinationFilterConfig) -> HashSet<String> {
     let mut defaults = default_hallucination_filters();
 
     // Apply per-language overrides
@@ -612,35 +613,48 @@ pub fn resolve_hallucination_filters(config: &HallucinationFilterConfig) -> Vec<
         defaults.insert(lang.clone(), phrases.clone());
     }
 
-    // Flatten all languages + add custom phrases
-    let mut result: Vec<String> = defaults
-        .into_values()
-        .flat_map(|phrases| phrases.into_iter())
-        .collect();
-    result.extend(config.add.iter().cloned());
-
-    // Lowercase for case-insensitive matching at runtime
-    result.iter().map(|s| s.to_lowercase()).collect()
+    let mut result = HashSet::new();
+    for phrase in defaults.into_values().flat_map(|p| p.into_iter()) {
+        insert_with_punctuation_variant(&mut result, phrase.to_lowercase());
+    }
+    for phrase in &config.add {
+        insert_with_punctuation_variant(&mut result, phrase.to_lowercase());
+    }
+    result
 }
 
-/// Resolve the active suspect phrase list from config.
+/// Resolve the active suspect phrase set from config.
 ///
 /// 1. Start with built-in suspect phrases per language
-/// 2. Flatten all languages into a single list
-/// 3. Append all entries from `suspect_add`
-/// 4. Return combined list (lowercased for case-insensitive matching)
-pub fn resolve_suspect_phrases(config: &HallucinationFilterConfig) -> Vec<String> {
+/// 2. Flatten all languages into a single set
+/// 3. Merge all entries from `suspect_add`
+/// 4. Return combined set (lowercased; both original and punctuation-stripped
+///    variants are stored for O(1) lookup without per-entry stripping at runtime)
+pub fn resolve_suspect_phrases(config: &HallucinationFilterConfig) -> HashSet<String> {
     let defaults = default_suspect_phrases();
 
-    // Flatten all languages
-    let mut result: Vec<String> = defaults
-        .into_values()
-        .flat_map(|phrases| phrases.into_iter())
-        .collect();
-    result.extend(config.suspect_add.iter().cloned());
+    let mut result = HashSet::new();
+    for phrase in defaults.into_values().flat_map(|p| p.into_iter()) {
+        insert_with_punctuation_variant(&mut result, phrase.to_lowercase());
+    }
+    for phrase in &config.suspect_add {
+        insert_with_punctuation_variant(&mut result, phrase.to_lowercase());
+    }
+    result
+}
 
-    // Lowercase for case-insensitive matching at runtime
-    result.iter().map(|s| s.to_lowercase()).collect()
+/// Insert a lowercased phrase and its punctuation-stripped variant into the set.
+///
+/// Storing both forms means runtime matching only needs `HashSet::contains`,
+/// with no per-entry iteration or stripping.
+fn insert_with_punctuation_variant(set: &mut HashSet<String>, phrase: String) {
+    let stripped = phrase
+        .trim_end_matches(['.', '!', '?', ',', ';', '。', '、', '！', '？'])
+        .to_string();
+    if stripped != phrase {
+        set.insert(stripped);
+    }
+    set.insert(phrase);
 }
 
 /// Navigate a TOML value by dotted path.
