@@ -12,6 +12,9 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +32,21 @@ jobs:
 
       - name: Clippy (reduced feature set)
         run: cargo clippy --lib --no-default-features --features cli,portal,model-download -- -D warnings
+
+      - name: Clippy SARIF upload
+        if: always()
+        run: |
+          cargo install clippy-sarif sarif-fmt
+          cargo clippy --lib --no-default-features --features cli,portal,model-download \
+            --message-format=json | clippy-sarif > clippy-results.sarif
+          cat clippy-results.sarif
+
+      - name: Upload clippy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: clippy-results.sarif
+          category: clippy
 
       - name: Build (reduced feature set)
         run: cargo build --lib --no-default-features --features cli,portal,model-download
