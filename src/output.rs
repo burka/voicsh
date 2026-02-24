@@ -124,7 +124,9 @@ pub fn render_event(event: &DaemonEvent) {
             reason,
         } => {
             // Low-confidence hallucination filter hits are noise — suppress them
-            if reason == "hallucination filter" && *confidence < HALLUCINATION_SUPPRESS_CONFIDENCE {
+            if (reason == "hallucination filter" || reason == "suspect word")
+                && *confidence < HALLUCINATION_SUPPRESS_CONFIDENCE
+            {
                 return;
             }
             clear_line();

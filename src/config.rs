@@ -92,6 +92,8 @@ pub struct TranscriptionConfig {
 pub struct HallucinationFilterConfig {
     /// Extra phrases to filter, merged on top of built-in defaults.
     pub add: Vec<String>,
+    /// Extra suspect phrases to soft-filter, merged on top of built-in defaults.
+    pub suspect_add: Vec<String>,
     /// Per-language overrides. If a language key is present, it REPLACES
     /// that language's built-in defaults. Empty vec = disable that language.
     /// Languages not listed here keep their built-in defaults.
@@ -545,21 +547,54 @@ fn language_name(code: &str) -> &'static str {
     }
 }
 
-/// Built-in hallucination filter defaults keyed by language.
-///
-/// Phrases are loaded from `hallucination_filters.toml` at compile time.
-pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
+/// Parsed hallucination filter data from the embedded TOML.
+struct ParsedFilterData {
+    phrases: HashMap<String, Vec<String>>,
+    suspect_phrases: HashMap<String, Vec<String>>,
+}
+
+/// Parse the embedded `hallucination_filters.toml` once, returning both
+/// hard-filter phrases and suspect phrases keyed by language.
+fn parse_filter_toml() -> ParsedFilterData {
     static TOML_DATA: &str = include_str!("hallucination_filters.toml");
 
     #[derive(serde::Deserialize)]
     struct LangEntry {
         phrases: Vec<String>,
+        #[serde(default)]
+        suspect_phrases: Vec<String>,
     }
 
     let parsed: HashMap<String, LangEntry> = toml::from_str(TOML_DATA)
         .unwrap_or_else(|e| panic!("embedded hallucination_filters.toml is invalid: {e}"));
 
-    parsed.into_iter().map(|(k, v)| (k, v.phrases)).collect()
+    let mut phrases = HashMap::new();
+    let mut suspect = HashMap::new();
+    for (k, v) in parsed {
+        phrases.insert(k.clone(), v.phrases);
+        suspect.insert(k, v.suspect_phrases);
+    }
+
+    ParsedFilterData {
+        phrases,
+        suspect_phrases: suspect,
+    }
+}
+
+/// Built-in hallucination filter defaults keyed by language.
+///
+/// Phrases are loaded from `hallucination_filters.toml` at compile time.
+pub fn default_hallucination_filters() -> HashMap<String, Vec<String>> {
+    parse_filter_toml().phrases
+}
+
+/// Built-in suspect phrase defaults keyed by language.
+///
+/// These are short filler words that could be real speech but are frequent
+/// Whisper hallucinations on silence/noise. Loaded from `hallucination_filters.toml`
+/// at compile time.
+pub fn default_suspect_phrases() -> HashMap<String, Vec<String>> {
+    parse_filter_toml().suspect_phrases
 }
 
 /// Resolve the active hallucination filter list from config.
@@ -583,6 +618,26 @@ pub fn resolve_hallucination_filters(config: &HallucinationFilterConfig) -> Vec<
         .flat_map(|phrases| phrases.into_iter())
         .collect();
     result.extend(config.add.iter().cloned());
+
+    // Lowercase for case-insensitive matching at runtime
+    result.iter().map(|s| s.to_lowercase()).collect()
+}
+
+/// Resolve the active suspect phrase list from config.
+///
+/// 1. Start with built-in suspect phrases per language
+/// 2. Flatten all languages into a single list
+/// 3. Append all entries from `suspect_add`
+/// 4. Return combined list (lowercased for case-insensitive matching)
+pub fn resolve_suspect_phrases(config: &HallucinationFilterConfig) -> Vec<String> {
+    let defaults = default_suspect_phrases();
+
+    // Flatten all languages
+    let mut result: Vec<String> = defaults
+        .into_values()
+        .flat_map(|phrases| phrases.into_iter())
+        .collect();
+    result.extend(config.suspect_add.iter().cloned());
 
     // Lowercase for case-insensitive matching at runtime
     result.iter().map(|s| s.to_lowercase()).collect()
@@ -1406,6 +1461,7 @@ mod tests {
     fn test_resolve_filters_add_merges() {
         let config = HallucinationFilterConfig {
             add: vec!["Custom Phrase".to_string()],
+            suspect_add: vec![],
             overrides: HashMap::new(),
         };
         let resolved = resolve_hallucination_filters(&config);
@@ -1420,6 +1476,7 @@ mod tests {
         overrides.insert("en".to_string(), vec!["Only This".to_string()]);
         let config = HallucinationFilterConfig {
             add: vec![],
+            suspect_add: vec![],
             overrides,
         };
         let resolved = resolve_hallucination_filters(&config);
@@ -1437,6 +1494,7 @@ mod tests {
         overrides.insert("ko".to_string(), vec![]);
         let config = HallucinationFilterConfig {
             add: vec![],
+            suspect_add: vec![],
             overrides,
         };
         let resolved = resolve_hallucination_filters(&config);
@@ -1452,6 +1510,7 @@ mod tests {
         overrides.insert("en".to_string(), vec!["Custom English".to_string()]);
         let config = HallucinationFilterConfig {
             add: vec!["Extra".to_string()],
+            suspect_add: vec![],
             overrides,
         };
         let resolved = resolve_hallucination_filters(&config);
@@ -1797,5 +1856,83 @@ mod tests {
         let config = Config::default();
         assert!(config.stt.allowed_languages.is_empty());
         assert_eq!(config.stt.min_confidence, 0.0);
+    }
+
+    // ── Suspect phrase tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_default_suspect_phrases_loaded() {
+        let defaults = default_suspect_phrases();
+        let expected_langs = [
+            "en", "de", "es", "fr", "pt", "it", "ru", "ja", "zh", "ko", "nl", "pl", "ar", "tr",
+        ];
+        for lang in &expected_langs {
+            assert!(
+                defaults.contains_key(*lang),
+                "Missing suspect phrases for language: {}",
+                lang
+            );
+            assert!(
+                !defaults[*lang].is_empty(),
+                "Language {} has no suspect phrases",
+                lang
+            );
+        }
+        // Verify specific entries
+        assert!(
+            defaults["en"].contains(&"okay".to_string()),
+            "English suspect phrases should contain 'okay'"
+        );
+        assert!(
+            defaults["de"].contains(&"ja".to_string()),
+            "German suspect phrases should contain 'ja'"
+        );
+    }
+
+    #[test]
+    fn test_resolve_suspect_phrases() {
+        let config = HallucinationFilterConfig::default();
+        let resolved = resolve_suspect_phrases(&config);
+        assert!(
+            !resolved.is_empty(),
+            "Resolved suspect phrases should not be empty"
+        );
+        // All should be lowercased
+        for phrase in &resolved {
+            assert_eq!(
+                *phrase,
+                phrase.to_lowercase(),
+                "Suspect phrase '{}' should be lowercased",
+                phrase
+            );
+        }
+        // Should contain phrases from multiple languages
+        assert!(
+            resolved.contains(&"okay".to_string()),
+            "Should contain 'okay' from English"
+        );
+        assert!(
+            resolved.contains(&"ja".to_string()),
+            "Should contain 'ja' from German"
+        );
+    }
+
+    #[test]
+    fn test_resolve_suspect_phrases_with_additions() {
+        let config = HallucinationFilterConfig {
+            add: vec![],
+            suspect_add: vec!["Custom Filler".to_string()],
+            overrides: HashMap::new(),
+        };
+        let resolved = resolve_suspect_phrases(&config);
+        assert!(
+            resolved.contains(&"custom filler".to_string()),
+            "Should contain user-added suspect phrase (lowercased)"
+        );
+        // Built-in defaults still present
+        assert!(
+            resolved.contains(&"okay".to_string()),
+            "Built-in suspect phrases should still be present"
+        );
     }
 }

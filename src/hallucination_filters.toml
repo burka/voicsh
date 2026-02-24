@@ -20,7 +20,14 @@ phrases = [
     "mmm",
     "hmm",
     "mm-hmm",
+    "You're welcome.",
+    "You're welcome!",
+    "Oh, God.",
+    "Oh God.",
+    "Oh my God.",
+    "Oh my god.",
 ]
+suspect_phrases = ["okay", "oh", "yeah", "yes", "no", "alright", "all right", "right", "sure", "so", "well", "hey", "hi", "wow", "huh", "uh", "oop", "oops", "ah"]
 
 [de]
 phrases = [
@@ -39,6 +46,7 @@ phrases = [
     "Copyright WDR 2021",
     "SWR 2021",
 ]
+suspect_phrases = ["okay", "ja", "nein", "oh", "ach", "so", "na", "gut", "also", "hm", "tja"]
 
 [es]
 phrases = [
@@ -51,6 +59,7 @@ phrases = [
     "Subtítulos por la comunidad de Amara.org",
     "Subtítulos realizados por la comunidad de Amara.org",
 ]
+suspect_phrases = ["vale", "sí", "no", "bueno", "oh", "ay", "pues", "bien", "claro", "ya"]
 
 [fr]
 phrases = [
@@ -63,6 +72,7 @@ phrases = [
     "Sous-titres réalisés par la communauté d'Amara.org",
     "Merci d'avoir regardé cette vidéo.",
 ]
+suspect_phrases = ["oui", "non", "oh", "bon", "bien", "ah", "ouais", "ok", "hein", "bah"]
 
 [pt]
 phrases = [
@@ -77,6 +87,7 @@ phrases = [
     "Legendas pela comunidade da Amara.org",
     "Obrigado por assistir.",
 ]
+suspect_phrases = ["sim", "não", "ok", "tá", "ah", "oh", "bem", "pois", "é"]
 
 [it]
 phrases = [
@@ -88,6 +99,7 @@ phrases = [
     "Sottotitoli creati dalla comunità Amara.org",
     "Sottotitoli e revisione a cura di QTSS",
 ]
+suspect_phrases = ["sì", "no", "ok", "bene", "oh", "ah", "va bene", "dai", "ecco"]
 
 [ru]
 phrases = [
@@ -103,6 +115,7 @@ phrases = [
     "Продолжение следует...",
     "Ищи мультфильм.",
 ]
+suspect_phrases = ["да", "нет", "ладно", "ну", "ох", "ага", "угу"]
 
 [ja]
 phrases = [
@@ -115,6 +128,7 @@ phrases = [
     "お疲れ様でした",
     "見てくれてありがとう",
 ]
+suspect_phrases = ["はい", "いいえ", "うん", "ええ", "ああ", "そう", "ね"]
 
 [zh]
 phrases = [
@@ -128,6 +142,7 @@ phrases = [
     "由 Amara.org 社群提供的字幕",
     "字幕志愿者 杨茜茜",
 ]
+suspect_phrases = ["好", "对", "嗯", "哦", "啊", "是", "没有"]
 
 [ko]
 phrases = [
@@ -147,6 +162,7 @@ phrases = [
     "구독 부탁드려요",
     "자막제작 기획 앤디 퀸즈",
 ]
+suspect_phrases = ["네", "아니요", "응", "어", "아", "그래", "예"]
 
 [nl]
 phrases = [
@@ -154,6 +170,7 @@ phrases = [
     "Ondertitels ingediend door de Amara.org gemeenschap",
     "TV Gelderland 2021",
 ]
+suspect_phrases = ["ja", "nee", "oh", "goed", "nou", "oké"]
 
 [pl]
 phrases = [
@@ -164,6 +181,7 @@ phrases = [
     "Napisy stworzone przez społeczność Amara.org",
     "Do zobaczenia w kolejnym odcinku.",
 ]
+suspect_phrases = ["tak", "nie", "no", "dobrze", "ok", "aha"]
 
 [ar]
 phrases = [
@@ -171,6 +189,7 @@ phrases = [
     "شكرا للمشاهدة",
     "شكرا",
 ]
+suspect_phrases = ["نعم", "لا", "حسنا", "آه", "أوه"]
 
 [tr]
 phrases = [
@@ -178,3 +197,4 @@ phrases = [
     "Abone ol.",
     "Bir sonraki videoda görüşürüz.",
 ]
+suspect_phrases = ["evet", "hayır", "tamam", "iyi", "ha", "oh"]

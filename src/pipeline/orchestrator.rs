@@ -36,6 +36,8 @@ pub struct PipelineConfig {
     pub sample_rate: u32,
     /// Pre-resolved hallucination filter phrases (lowercased)
     pub hallucination_filters: Vec<String>,
+    /// Pre-resolved suspect phrases for confidence-gated soft filtering (lowercased)
+    pub suspect_phrases: Vec<String>,
     /// Channel buffer sizes
     pub audio_buffer: usize,
     pub vad_buffer: usize,
@@ -60,6 +62,7 @@ impl Default for PipelineConfig {
             quiet: false,
             sample_rate: 16000,
             hallucination_filters: Vec::new(),
+            suspect_phrases: Vec::new(),
             audio_buffer: 1024,
             vad_buffer: 1024,
             chunk_buffer: 16,
@@ -237,6 +240,7 @@ impl Pipeline {
         let mut transcriber_station = TranscriberStation::new(transcriber.clone())
             .with_verbose(self.config.verbosity >= 2)
             .with_hallucination_filters(self.config.hallucination_filters.clone())
+            .with_suspect_phrases(self.config.suspect_phrases.clone())
             .with_allowed_languages(self.config.allowed_languages.clone())
             .with_min_confidence(self.config.min_confidence.clone());
 

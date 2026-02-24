@@ -3,7 +3,7 @@
 use crate::audio::capture::CpalAudioSource;
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
-use crate::config::{Config, resolve_hallucination_filters};
+use crate::config::{Config, resolve_hallucination_filters, resolve_suspect_phrases};
 use crate::daemon::DaemonState;
 use crate::inject::focused_window::reset_detection_cache;
 use crate::ipc::protocol::{Command, DaemonEvent, Response, TextOrigin};
@@ -117,6 +117,7 @@ impl DaemonCommandHandler {
 
         let hallucination_filters =
             resolve_hallucination_filters(&config.transcription.hallucination_filters);
+        let suspect_phrases = resolve_suspect_phrases(&config.transcription.hallucination_filters);
         PipelineConfig {
             vad: VadConfig {
                 speech_threshold: config.audio.vad_threshold,
@@ -129,6 +130,7 @@ impl DaemonCommandHandler {
             quiet: self.quiet,
             sample_rate: WHISPER_SAMPLE_RATE,
             hallucination_filters,
+            suspect_phrases,
             event_tx: Some(self.state.pipeline_event_tx.clone()),
             allowed_languages: self.state.allowed_languages.clone(),
             min_confidence: self.state.min_confidence.clone(),

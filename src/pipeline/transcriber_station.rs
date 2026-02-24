@@ -9,6 +9,11 @@ use crate::stt::transcriber::Transcriber;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// At or above this confidence, suspect words pass through as real speech.
+/// Below this threshold, suspect words are dropped; the display tier (silent
+/// vs. strikethrough) is handled by `HALLUCINATION_SUPPRESS_CONFIDENCE` in output.rs.
+const SUSPECT_PASS_THRESHOLD: f32 = 0.90;
+
 /// Strips Whisper non-speech annotations in any language.
 ///
 /// Whisper wraps annotations in `[…]`, `*…*`, or `(…)` — these never contain
@@ -76,6 +81,7 @@ pub struct TranscriberStation {
     verbose: bool,
     warned_backpressure: bool,
     hallucination_filters: Vec<String>,
+    suspect_phrases: Vec<String>,
     allowed_languages: Arc<std::sync::RwLock<Vec<String>>>,
     min_confidence: Arc<std::sync::RwLock<f32>>,
     event_tx: Option<crossbeam_channel::Sender<DaemonEvent>>,
@@ -89,6 +95,7 @@ impl TranscriberStation {
             verbose: false,
             warned_backpressure: false,
             hallucination_filters: Vec::new(),
+            suspect_phrases: Vec::new(),
             allowed_languages: Arc::new(std::sync::RwLock::new(Vec::new())),
             min_confidence: Arc::new(std::sync::RwLock::new(0.0)),
             event_tx: None,
@@ -106,6 +113,12 @@ impl TranscriberStation {
     /// Set hallucination filter phrases (pre-lowercased for O(1) runtime comparison).
     pub fn with_hallucination_filters(mut self, filters: Vec<String>) -> Self {
         self.hallucination_filters = filters.into_iter().map(|f| f.to_lowercase()).collect();
+        self
+    }
+
+    /// Set suspect phrases for confidence-gated soft filtering (pre-lowercased).
+    pub fn with_suspect_phrases(mut self, phrases: Vec<String>) -> Self {
+        self.suspect_phrases = phrases;
         self
     }
 
@@ -233,6 +246,44 @@ impl Station for TranscriberStation {
                 }
                 return Ok(None);
             }
+        }
+
+        // Suspect-word confidence gate: short filler words that could be real speech
+        // but are likely hallucinations when Whisper confidence is low.
+        if !self.suspect_phrases.is_empty() {
+            let lower = cleaned_text.to_lowercase();
+            let stripped =
+                lower.trim_end_matches(['.', '!', '?', ',', ';', '。', '、', '！', '？']);
+            if self.suspect_phrases.iter().any(|f| {
+                f == &lower
+                    || f.trim_end_matches(['.', '!', '?', ',', ';', '。', '、', '！', '？'])
+                        == stripped
+            }) && result.confidence < SUSPECT_PASS_THRESHOLD
+            {
+                let reason = "suspect word".to_string();
+                if self.verbose {
+                    render_event(&DaemonEvent::TranscriptionDropped {
+                        text: cleaned_text.clone(),
+                        language: result.language.clone(),
+                        confidence: result.confidence,
+                        reason: reason.clone(),
+                    });
+                }
+                if let Some(ref tx) = self.event_tx
+                    && tx
+                        .try_send(DaemonEvent::TranscriptionDropped {
+                            text: cleaned_text,
+                            language: result.language,
+                            confidence: result.confidence,
+                            reason,
+                        })
+                        .is_err()
+                {
+                    // Channel full or closed - OK to ignore
+                }
+                return Ok(None);
+            }
+            // ≥ SUSPECT_PASS_THRESHOLD: real speech, fall through
         }
 
         // Language allowlist filter
@@ -919,6 +970,161 @@ mod tests {
                 assert_eq!(language, "ru");
                 assert_eq!(confidence, 0.9);
                 assert!(reason.contains("not in allowlist"));
+            }
+            _ => panic!("Expected TranscriptionDropped event"),
+        }
+    }
+
+    // ── Suspect word confidence-gated filter tests ──────────────────────
+
+    #[test]
+    fn test_suspect_word_below_75_dropped() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Okay")
+                .with_confidence(0.60),
+        );
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(vec!["okay".to_string()]);
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_none(),
+            "Suspect word at 60% confidence should be dropped"
+        );
+    }
+
+    #[test]
+    fn test_suspect_word_75_to_90_dropped() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Okay")
+                .with_confidence(0.80),
+        );
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(vec!["okay".to_string()]);
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_none(),
+            "Suspect word at 80% confidence should be dropped (but logged)"
+        );
+    }
+
+    #[test]
+    fn test_suspect_word_above_90_passes() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Okay")
+                .with_confidence(0.95),
+        );
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(vec!["okay".to_string()]);
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(result.is_some(), "Suspect word at 95% should pass through");
+        assert_eq!(result.unwrap().text, "Okay");
+    }
+
+    #[test]
+    fn test_suspect_word_non_match_passes() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Hello world")
+                .with_confidence(0.60),
+        );
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(vec!["okay".to_string()]);
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_some(),
+            "Non-suspect text should pass regardless of confidence"
+        );
+        assert_eq!(result.unwrap().text, "Hello world");
+    }
+
+    #[test]
+    fn test_suspect_word_empty_list_passes() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Okay")
+                .with_confidence(0.60),
+        );
+        let mut station = TranscriberStation::new(transcriber).with_suspect_phrases(vec![]);
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_some(),
+            "Empty suspect list should pass everything"
+        );
+        assert_eq!(result.unwrap().text, "Okay");
+    }
+
+    #[test]
+    fn test_suspect_word_at_exactly_90_passes() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Yeah")
+                .with_confidence(0.90),
+        );
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(vec!["yeah".to_string()]);
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_some(),
+            "Suspect word at exactly 90% should pass through (threshold is <0.90 to drop)"
+        );
+        assert_eq!(result.unwrap().text, "Yeah");
+    }
+
+    #[test]
+    fn test_suspect_word_punctuation_normalized() {
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Okay.")
+                .with_confidence(0.60),
+        );
+        let mut station =
+            TranscriberStation::new(transcriber).with_suspect_phrases(vec!["okay".to_string()]);
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let result = station.process(chunk).unwrap();
+        assert!(
+            result.is_none(),
+            "Suspect word with trailing punctuation should still match"
+        );
+    }
+
+    #[test]
+    fn test_suspect_word_event_emitted() {
+        let (tx, rx) = crossbeam_channel::bounded(16);
+        let transcriber = Arc::new(
+            MockTranscriber::new("mock")
+                .with_response("Okay")
+                .with_language("en")
+                .with_confidence(0.60),
+        );
+        let mut station = TranscriberStation::new(transcriber)
+            .with_suspect_phrases(vec!["okay".to_string()])
+            .with_event_sender(tx);
+        let chunk = AudioChunk::new(vec![655i16; 16000], 1000, 0);
+        let _result = station.process(chunk).unwrap();
+
+        let event = rx
+            .try_recv()
+            .expect("Should have emitted TranscriptionDropped event");
+        match event {
+            DaemonEvent::TranscriptionDropped {
+                text,
+                language,
+                confidence,
+                reason,
+            } => {
+                assert_eq!(text, "Okay");
+                assert_eq!(language, "en");
+                assert_eq!(confidence, 0.60);
+                assert_eq!(reason, "suspect word");
             }
             _ => panic!("Expected TranscriptionDropped event"),
         }
