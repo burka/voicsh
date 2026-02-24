@@ -56,6 +56,18 @@ pub const BUFFER_SECS: u64 = 10;
 /// truly silent chunks while allowing anything borderline.
 pub const MIN_ENERGY_FOR_TRANSCRIPTION: f32 = 0.001;
 
+/// Pre-speech buffer duration in milliseconds.
+///
+/// Silence samples kept in a ring buffer while idle, prepended when speech starts.
+/// Captures soft onsets (plosives, fricatives) that occur before energy crosses the VAD threshold.
+pub const PRE_SPEECH_MS: u32 = 500;
+
+/// Post-speech padding duration in milliseconds.
+///
+/// Minimum trailing silence included in an emitted chunk.
+/// Ensures word endings are not clipped when the gap threshold is very short.
+pub const POST_SPEECH_MS: u32 = 150;
+
 /// Report the GPU backend compiled into this build.
 ///
 /// Returns a human-readable name based on the compile-time feature flags.

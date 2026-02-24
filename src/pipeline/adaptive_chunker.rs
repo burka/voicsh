@@ -4,6 +4,8 @@
 //! becoming more aggressive about finding gaps as speech duration increases.
 
 use crate::audio::vad::{Clock, SystemClock};
+use crate::defaults;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -20,6 +22,10 @@ pub struct AdaptiveChunkerConfig {
     pub min_gap_ms: u32,
     /// Audio sample rate for duration calculations
     pub sample_rate: u32,
+    /// Pre-speech ring buffer duration (ms). Silence kept while idle, prepended on speech start.
+    pub pre_speech_ms: u32,
+    /// Minimum trailing silence (ms) included before emitting a chunk.
+    pub post_speech_ms: u32,
 }
 
 impl Default for AdaptiveChunkerConfig {
@@ -30,6 +36,8 @@ impl Default for AdaptiveChunkerConfig {
             initial_gap_ms: 400,
             min_gap_ms: 80,
             sample_rate: 16000,
+            pre_speech_ms: defaults::PRE_SPEECH_MS,
+            post_speech_ms: defaults::POST_SPEECH_MS,
         }
     }
 }
@@ -51,6 +59,10 @@ pub struct AdaptiveChunker {
     config: AdaptiveChunkerConfig,
     state: ChunkerState,
     clock: Arc<dyn Clock>,
+    /// Ring buffer holding recent silence samples while idle.
+    pre_buffer: VecDeque<i16>,
+    /// Pre-buffer capacity in samples (calculated once at construction).
+    pre_buffer_capacity: usize,
 }
 
 impl AdaptiveChunker {
@@ -60,10 +72,14 @@ impl AdaptiveChunker {
 
     /// Creates a new chunker with an injectable clock.
     pub fn with_clock(config: AdaptiveChunkerConfig, clock: Arc<dyn Clock>) -> Self {
+        let pre_buffer_capacity =
+            (config.pre_speech_ms as usize * config.sample_rate as usize) / 1000;
         Self {
             config,
             state: ChunkerState::Idle,
             clock,
+            pre_buffer: VecDeque::with_capacity(pre_buffer_capacity),
+            pre_buffer_capacity,
         }
     }
 
@@ -82,12 +98,23 @@ impl AdaptiveChunker {
         match &mut self.state {
             ChunkerState::Idle => {
                 if is_speech {
-                    // Start accumulating
+                    let mut initial = Vec::with_capacity(self.pre_buffer.len() + samples.len());
+                    initial.extend(self.pre_buffer.drain(..));
+                    initial.extend_from_slice(samples);
                     self.state = ChunkerState::Accumulating {
-                        samples: samples.to_vec(),
+                        samples: initial,
                         speech_start: self.clock.now(),
                         silence_start: None,
                     };
+                } else if self.pre_buffer_capacity > 0 {
+                    self.pre_buffer.extend(samples.iter().copied());
+                    let overflow = self
+                        .pre_buffer
+                        .len()
+                        .saturating_sub(self.pre_buffer_capacity);
+                    if overflow > 0 {
+                        self.pre_buffer.drain(..overflow);
+                    }
                 }
                 None
             }
@@ -123,7 +150,7 @@ impl AdaptiveChunker {
                     true
                 } else {
                     // Check gap threshold
-                    current_silence_ms >= required_gap
+                    current_silence_ms >= required_gap.max(self.config.post_speech_ms)
                 };
 
                 if should_emit {
@@ -217,6 +244,7 @@ impl AdaptiveChunker {
     /// Reset to idle state.
     pub fn reset(&mut self) {
         self.state = ChunkerState::Idle;
+        self.pre_buffer.clear();
     }
 
     /// Get current accumulated duration in ms (for testing/debugging).
@@ -238,6 +266,8 @@ impl AdaptiveChunker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::vad::MockClock;
+    use std::time::Duration;
 
     fn make_test_config() -> AdaptiveChunkerConfig {
         AdaptiveChunkerConfig {
@@ -246,6 +276,8 @@ mod tests {
             initial_gap_ms: 400,
             min_gap_ms: 80,
             sample_rate: 16000,
+            pre_speech_ms: 0,
+            post_speech_ms: 0,
         }
     }
 
@@ -398,5 +430,183 @@ mod tests {
         // Flush should return nothing
         let result = chunker.flush();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_pre_speech_buffer_prepends_silence() {
+        let config = AdaptiveChunkerConfig {
+            pre_speech_ms: 100,
+            post_speech_ms: 0,
+            ..make_test_config()
+        };
+        let mut chunker = AdaptiveChunker::new(config);
+
+        let silence: Vec<i16> = vec![99; 800];
+        let result = chunker.feed(false, &silence, 50);
+        assert!(result.is_none());
+
+        let speech: Vec<i16> = vec![42; 160];
+        let result = chunker.feed(true, &speech, 0);
+        assert!(result.is_none());
+
+        let chunk = chunker.flush().expect("should have accumulated samples");
+
+        assert_eq!(chunk.len(), 800 + 160);
+        assert_eq!(chunk[0], 99, "first sample should be from pre-buffer");
+        assert_eq!(chunk[799], 99, "last pre-buffer sample should be 99");
+        assert_eq!(chunk[800], 42, "first speech sample should be 42");
+    }
+
+    #[test]
+    fn test_pre_speech_buffer_capacity_limit() {
+        let config = AdaptiveChunkerConfig {
+            pre_speech_ms: 100,
+            post_speech_ms: 0,
+            ..make_test_config()
+        };
+        let mut chunker = AdaptiveChunker::new(config);
+
+        let silence: Vec<i16> = vec![11; 3200];
+        chunker.feed(false, &silence, 200);
+
+        let speech: Vec<i16> = vec![42; 160];
+        chunker.feed(true, &speech, 0);
+
+        let chunk = chunker.flush().expect("should have accumulated samples");
+
+        assert_eq!(chunk.len(), 1600 + 160);
+    }
+
+    #[test]
+    fn test_post_speech_gap_floor() {
+        let config = AdaptiveChunkerConfig {
+            pre_speech_ms: 0,
+            post_speech_ms: 150,
+            min_gap_ms: 80,
+            ..make_test_config()
+        };
+        let clock = MockClock::new();
+        let mut chunker = AdaptiveChunker::with_clock(config, Arc::new(clock.clone()));
+
+        let samples: Vec<i16> = (0..16000).map(|i| i as i16).collect();
+
+        // Feed 3 seconds of speech
+        for _ in 0..3 {
+            chunker.feed(true, &samples, 0);
+            clock.advance(Duration::from_millis(1000));
+        }
+
+        // At 3000ms, required_gap=250ms which is above post_speech_ms=150ms
+        // So 250ms silence should emit
+        let result = chunker.feed(false, &samples, 250);
+        let chunk = result.expect("should emit when silence >= max(required_gap, post_speech_ms)");
+
+        assert!(!chunk.is_empty(), "emitted chunk should not be empty");
+        assert!(
+            chunk.len() >= 48000,
+            "should contain at least 3s of speech samples, got {}",
+            chunk.len()
+        );
+    }
+
+    #[test]
+    fn test_post_speech_gap_floor_blocks_early_emit() {
+        let config = AdaptiveChunkerConfig {
+            pre_speech_ms: 0,
+            post_speech_ms: 150,
+            ..make_test_config()
+        };
+        let clock = MockClock::new();
+        let mut chunker = AdaptiveChunker::with_clock(config, Arc::new(clock.clone()));
+
+        let samples: Vec<i16> = (0..16000).map(|i| i as i16).collect();
+
+        // Feed 5 seconds of speech (well past target, gap shrinks toward floor of 80ms)
+        for _ in 0..5 {
+            chunker.feed(true, &samples, 0);
+            clock.advance(Duration::from_millis(1000));
+        }
+
+        // At 5000ms, required_gap=80ms (floor). But post_speech_ms=150ms.
+        // 100ms silence should NOT emit (100 < 150)
+        let result = chunker.feed(false, &samples, 100);
+        assert!(
+            result.is_none(),
+            "should not emit when silence < post_speech_ms"
+        );
+
+        // 150ms silence SHOULD emit
+        let result = chunker.feed(false, &samples, 150);
+        let chunk = result.expect("should emit when silence >= post_speech_ms");
+
+        assert!(!chunk.is_empty(), "emitted chunk should not be empty");
+        assert!(
+            chunk.len() >= 5 * 16000,
+            "should contain at least 5s of speech samples, got {}",
+            chunk.len()
+        );
+    }
+
+    #[test]
+    fn test_first_frame_speech_empty_pre_buffer() {
+        let config = AdaptiveChunkerConfig {
+            pre_speech_ms: 250,
+            post_speech_ms: 0,
+            ..make_test_config()
+        };
+        let mut chunker = AdaptiveChunker::new(config);
+
+        let speech: Vec<i16> = vec![42; 160];
+        let result = chunker.feed(true, &speech, 0);
+        assert!(result.is_none());
+
+        let chunk = chunker.flush().expect("should have the speech frame");
+        assert_eq!(chunk.len(), 160);
+        assert_eq!(chunk[0], 42);
+    }
+
+    #[test]
+    fn test_flush_idle_with_pre_buffer_returns_none() {
+        let config = AdaptiveChunkerConfig {
+            pre_speech_ms: 250,
+            post_speech_ms: 0,
+            ..make_test_config()
+        };
+        let mut chunker = AdaptiveChunker::new(config);
+
+        let silence: Vec<i16> = vec![0; 1600];
+        chunker.feed(false, &silence, 100);
+
+        assert!(chunker.flush().is_none());
+    }
+
+    #[test]
+    fn test_pre_buffer_empty_during_accumulation() {
+        let config = AdaptiveChunkerConfig {
+            pre_speech_ms: 100,
+            post_speech_ms: 0,
+            ..make_test_config()
+        };
+        let mut chunker = AdaptiveChunker::new(config);
+
+        let silence: Vec<i16> = vec![99; 800];
+        chunker.feed(false, &silence, 50);
+
+        let speech: Vec<i16> = vec![42; 160];
+        chunker.feed(true, &speech, 0);
+
+        let silence2: Vec<i16> = vec![77; 160];
+        chunker.feed(false, &silence2, 10);
+
+        let speech2: Vec<i16> = vec![55; 160];
+        chunker.feed(true, &speech2, 0);
+
+        let chunk = chunker.flush().expect("should have accumulated samples");
+
+        assert_eq!(chunk.len(), 1280);
+        assert_eq!(chunk[0], 99);
+        assert_eq!(chunk[800], 42);
+        assert_eq!(chunk[960], 77);
+        assert_eq!(chunk[1120], 55);
     }
 }

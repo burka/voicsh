@@ -36,6 +36,8 @@ async fn main() -> Result<()> {
                     fan_out: cli.fan_out,
                     buffer_secs: cli.buffer,
                     chunk_secs: cli.chunk_size,
+                    pre_speech_ms: cli.pre_speech,
+                    post_speech_ms: cli.post_speech,
                 })
                 .await?;
             } else {

@@ -58,6 +58,14 @@ pub struct Cli {
     #[arg(long, short = 'c', value_name = "SECONDS", default_value = "3")]
     pub chunk_size: u32,
 
+    /// Pre-speech buffer in milliseconds (silence kept before speech onset)
+    #[arg(long, value_name = "MS")]
+    pub pre_speech: Option<u32>,
+
+    /// Post-speech padding in milliseconds (minimum trailing silence before emit)
+    #[arg(long, value_name = "MS")]
+    pub post_speech: Option<u32>,
+
     /// Transcription buffer duration (default: 10s). Examples: 30s, 5m, 1h30m
     #[arg(long, short = 'b', value_name = "DURATION", default_value = "10s", value_parser = parse_buffer_secs)]
     pub buffer: u64,

@@ -43,14 +43,25 @@ fn chunk_buffer_capacity(buffer_secs: u64, chunk_secs: u32) -> usize {
 ///
 /// Scales `max_chunk_ms` proportionally (≈2.4× the target) so the chunker
 /// has headroom to find silence gaps before forcing emission.
-fn chunker_config_from_secs(chunk_secs: u32) -> AdaptiveChunkerConfig {
+fn chunker_config_from_secs(
+    chunk_secs: u32,
+    pre_speech_ms: Option<u32>,
+    post_speech_ms: Option<u32>,
+) -> AdaptiveChunkerConfig {
     let target_ms = chunk_secs.max(1) * 1000;
     let max_ms = target_ms * 12 / 5; // ≈2.4× target
-    AdaptiveChunkerConfig {
+    let mut config = AdaptiveChunkerConfig {
         target_chunk_ms: target_ms,
         max_chunk_ms: max_ms,
         ..AdaptiveChunkerConfig::default()
+    };
+    if let Some(ms) = pre_speech_ms {
+        config.pre_speech_ms = ms;
     }
+    if let Some(ms) = post_speech_ms {
+        config.post_speech_ms = ms;
+    }
+    config
 }
 
 /// Run pipe mode: read WAV from stdin → transcribe → write to stdout.
@@ -138,6 +149,10 @@ pub struct RecordConfig {
     pub buffer_secs: u64,
     /// Target chunk duration in seconds for the adaptive chunker.
     pub chunk_secs: u32,
+    /// Optional override for pre-speech buffer duration (ms).
+    pub pre_speech_ms: Option<u32>,
+    /// Optional override for post-speech padding duration (ms).
+    pub post_speech_ms: Option<u32>,
 }
 
 /// Run the record command: capture audio → transcribe → inject text.
@@ -161,6 +176,8 @@ pub async fn run_record_command(record: RecordConfig) -> Result<()> {
         fan_out,
         buffer_secs,
         chunk_secs,
+        pre_speech_ms,
+        post_speech_ms,
     } = record;
 
     // Suppress noisy JACK/ALSA warnings before audio init
@@ -236,6 +253,8 @@ pub async fn run_record_command(record: RecordConfig) -> Result<()> {
             verbosity,
             buffer_secs,
             chunk_secs,
+            pre_speech_ms,
+            post_speech_ms,
             make_sink,
         )
         .await
@@ -247,6 +266,8 @@ pub async fn run_record_command(record: RecordConfig) -> Result<()> {
             verbosity,
             buffer_secs,
             chunk_secs,
+            pre_speech_ms,
+            post_speech_ms,
             make_sink,
         )
         .await
@@ -322,6 +343,8 @@ async fn run_continuous(
     verbosity: u8,
     buffer_secs: u64,
     chunk_secs: u32,
+    pre_speech_ms: Option<u32>,
+    post_speech_ms: Option<u32>,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let device_name = config.audio.device.as_deref();
@@ -335,7 +358,7 @@ async fn run_continuous(
             silence_duration_ms: config.audio.silence_duration_ms,
             ..Default::default()
         },
-        chunker: chunker_config_from_secs(chunk_secs),
+        chunker: chunker_config_from_secs(chunk_secs, pre_speech_ms, post_speech_ms),
         verbosity,
         auto_level: true,
         quiet,
@@ -379,6 +402,8 @@ async fn run_single_session(
     verbosity: u8,
     buffer_secs: u64,
     chunk_secs: u32,
+    pre_speech_ms: Option<u32>,
+    post_speech_ms: Option<u32>,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let device_name = config.audio.device.as_deref();
@@ -392,7 +417,7 @@ async fn run_single_session(
             silence_duration_ms: config.audio.silence_duration_ms,
             ..Default::default()
         },
-        chunker: chunker_config_from_secs(chunk_secs),
+        chunker: chunker_config_from_secs(chunk_secs, pre_speech_ms, post_speech_ms),
         verbosity,
         auto_level: true,
         quiet,
@@ -925,21 +950,21 @@ mod tests {
 
     #[test]
     fn test_chunker_config_default_3s() {
-        let cfg = chunker_config_from_secs(3);
+        let cfg = chunker_config_from_secs(3, None, None);
         assert_eq!(cfg.target_chunk_ms, 3000);
         assert_eq!(cfg.max_chunk_ms, 7200); // 3000 * 12/5
     }
 
     #[test]
     fn test_chunker_config_5s() {
-        let cfg = chunker_config_from_secs(5);
+        let cfg = chunker_config_from_secs(5, None, None);
         assert_eq!(cfg.target_chunk_ms, 5000);
         assert_eq!(cfg.max_chunk_ms, 12000);
     }
 
     #[test]
     fn test_chunker_config_1s() {
-        let cfg = chunker_config_from_secs(1);
+        let cfg = chunker_config_from_secs(1, None, None);
         assert_eq!(cfg.target_chunk_ms, 1000);
         assert_eq!(cfg.max_chunk_ms, 2400);
     }
@@ -947,14 +972,14 @@ mod tests {
     #[test]
     fn test_chunker_config_zero_clamped() {
         // 0 is clamped to 1s
-        let cfg = chunker_config_from_secs(0);
+        let cfg = chunker_config_from_secs(0, None, None);
         assert_eq!(cfg.target_chunk_ms, 1000);
         assert_eq!(cfg.max_chunk_ms, 2400);
     }
 
     #[test]
     fn test_chunker_config_preserves_gap_defaults() {
-        let cfg = chunker_config_from_secs(3);
+        let cfg = chunker_config_from_secs(3, None, None);
         let defaults = AdaptiveChunkerConfig::default();
         assert_eq!(cfg.initial_gap_ms, defaults.initial_gap_ms);
         assert_eq!(cfg.min_gap_ms, defaults.min_gap_ms);

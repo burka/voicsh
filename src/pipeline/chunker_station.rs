@@ -194,6 +194,8 @@ mod tests {
             initial_gap_ms: 400,
             min_gap_ms: 80,
             sample_rate: 16000,
+            pre_speech_ms: 0,
+            post_speech_ms: 0,
         }
     }
 
