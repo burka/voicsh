@@ -120,6 +120,7 @@ impl Station for SinkStation {
                             token_probabilities: text.token_probabilities.clone(),
                             raw_text: text.raw_text.clone(),
                             text_origin: text.text_origin.clone(),
+                            corrector_name: text.corrector_name.clone(),
                         })
                         .is_err()
                 {
@@ -150,6 +151,7 @@ impl Station for SinkStation {
                             token_probabilities: text.token_probabilities.clone(),
                             raw_text: text.raw_text.clone(),
                             text_origin: text.text_origin.clone(),
+                            corrector_name: text.corrector_name.clone(),
                         });
                         // Verbose >= 2: supplementary detailed breakdown
                         if self.verbosity >= 2 {
@@ -170,6 +172,7 @@ impl Station for SinkStation {
                         token_probabilities: text.token_probabilities.clone(),
                         raw_text: text.raw_text.clone(),
                         text_origin: text.text_origin.clone(),
+                        corrector_name: text.corrector_name.clone(),
                     });
                 }
                 Ok(Some(()))

@@ -157,6 +157,8 @@ pub struct TranscribedText {
     pub raw_text: Option<String>,
     /// How the final text was produced.
     pub text_origin: TextOrigin,
+    /// Name of the corrector backend that produced the correction. None if uncorrected.
+    pub corrector_name: Option<String>,
 }
 
 impl TranscribedText {
@@ -172,6 +174,7 @@ impl TranscribedText {
             token_probabilities: Vec::new(),
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         }
     }
 
@@ -187,6 +190,7 @@ impl TranscribedText {
             token_probabilities: Vec::new(),
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         }
     }
 }

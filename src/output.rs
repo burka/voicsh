@@ -245,6 +245,7 @@ pub fn render_event(event: &DaemonEvent) {
             token_probabilities,
             raw_text,
             text_origin,
+            corrector_name,
         } => {
             clear_line();
             let lang = if !language.is_empty() && *confidence < 0.99 {
@@ -257,11 +258,15 @@ pub fn render_event(event: &DaemonEvent) {
             let wait = wait_ms
                 .map(|ms| format!(" {DIM}({ms}ms){RESET}"))
                 .unwrap_or_default();
+            let corrector_tag = corrector_name
+                .as_ref()
+                .map(|name| format!(" {DIM}({name}){RESET}"))
+                .unwrap_or_default();
 
             match (text_origin, raw_text) {
                 (TextOrigin::Corrected, Some(raw)) => {
                     render_correction_diff(raw, text, token_probabilities);
-                    eprintln!("{lang}{wait}");
+                    eprintln!("{lang}{wait}{corrector_tag}");
                 }
                 (TextOrigin::VoiceCommand, Some(raw)) => {
                     render_voice_command_diff(raw, text);
@@ -610,6 +615,7 @@ mod tests {
             ],
             raw_text: None,
             text_origin: TextOrigin::Transcription,
+            corrector_name: None,
         });
 
         render_event(&DaemonEvent::TranscriptionDropped {
@@ -674,6 +680,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: None,
             text_origin: TextOrigin::Transcription,
+            corrector_name: None,
         });
     }
 
@@ -700,6 +707,7 @@ mod tests {
             ],
             raw_text: None,
             text_origin: TextOrigin::Transcription,
+            corrector_name: None,
         });
     }
 
@@ -731,6 +739,7 @@ mod tests {
             ],
             raw_text: Some("the quik brown fox".to_string()),
             text_origin: TextOrigin::Corrected,
+            corrector_name: None,
         });
     }
 
@@ -745,6 +754,39 @@ mod tests {
             token_probabilities: vec![],
             raw_text: Some("period".to_string()),
             text_origin: TextOrigin::VoiceCommand,
+            corrector_name: None,
+        });
+    }
+
+    #[test]
+    fn test_render_corrected_transcription_with_corrector_name() {
+        // Smoke test: corrected transcription with corrector tag (T5)
+        render_event(&DaemonEvent::Transcription {
+            text: "the quick brown fox".to_string(),
+            language: "en".to_string(),
+            confidence: 0.8,
+            wait_ms: Some(200),
+            token_probabilities: vec![
+                TokenProbability {
+                    token: "the".to_string(),
+                    probability: 0.95,
+                },
+                TokenProbability {
+                    token: " quik".to_string(),
+                    probability: 0.3,
+                },
+                TokenProbability {
+                    token: " brown".to_string(),
+                    probability: 0.92,
+                },
+                TokenProbability {
+                    token: " fox".to_string(),
+                    probability: 0.88,
+                },
+            ],
+            raw_text: Some("the quik brown fox".to_string()),
+            text_origin: TextOrigin::Corrected,
+            corrector_name: Some("T5".to_string()),
         });
     }
 }

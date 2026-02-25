@@ -14,7 +14,7 @@
 use crate::defaults;
 use crate::error::{Result, VoicshError};
 use crate::stt::transcriber::{TokenProbability, Transcriber, TranscriptionResult};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(feature = "whisper")]
 use std::sync::{Mutex, Once};
@@ -89,13 +89,21 @@ pub struct WhisperTranscriber {
 
 #[cfg(feature = "whisper")]
 impl WhisperTranscriber {
+    /// Check if a model path points to an English-only model.
+    fn is_english_only_model(path: &Path) -> bool {
+        path.file_stem()
+            .and_then(|s: &std::ffi::OsStr| s.to_str())
+            .map(|stem: &str| stem.ends_with(".en"))
+            .unwrap_or(false)
+    }
+
     /// Create a new Whisper transcriber.
     ///
     /// # Arguments
     /// * `config` - Configuration for the transcriber
     ///
     /// # Returns
-    /// A new WhisperTranscriber instance or an error if the model file doesn't exist
+    /// A new `WhisperTranscriber` instance
     ///
     /// # Errors
     /// Returns `VoicshError::TranscriptionModelNotFound` if the model file doesn't exist
@@ -111,6 +119,25 @@ impl WhisperTranscriber {
             return Err(VoicshError::TranscriptionModelNotFound {
                 path: config.model_path.to_string_lossy().to_string(),
             });
+        }
+
+        // Warn about English-only model with auto-detect (won't detect other languages)
+        if Self::is_english_only_model(&config.model_path)
+            && config.language == defaults::AUTO_LANGUAGE
+        {
+            eprintln!(
+                "voicsh: WARNING - Using English-only model '{}' with auto language detection.",
+                config
+                    .model_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            );
+            eprintln!(
+                "voicsh: English-only models cannot detect non-English languages like Japanese, German, etc."
+            );
+            eprintln!("voicsh: Install a multilingual model for auto-detection:");
+            eprintln!("voicsh:   cargo run -- models install base");
         }
 
         // Extract model name from the file path

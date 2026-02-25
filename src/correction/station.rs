@@ -11,10 +11,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static LANGUAGE_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 
+const LANGUAGE_CONFIDENCE_THRESHOLD: f32 = 0.90;
+const MIN_LOW_CONFIDENCE_RATIO: f32 = 0.1;
+
 /// Pipeline station that applies post-ASR error correction.
 ///
-/// Only corrects languages with a SymSpell dictionary and low-confidence tokens.
-/// Falls back to raw text on timeout or error.
+/// Only corrects English (T5) and whitelisted SymSpell languages with
+/// low-confidence tokens. Falls back to raw text on error.
 pub struct CorrectionStation {
     corrector: Box<dyn Corrector>,
     config: ErrorCorrectionConfig,
@@ -36,14 +39,33 @@ impl Station for CorrectionStation {
             return Ok(Some(input));
         }
 
-        if !prompt::should_correct_language(&input.language) {
+        if !prompt::should_correct_language(&input.language, &self.config.symspell_languages) {
             if !LANGUAGE_SKIP_LOGGED.swap(true, Ordering::Relaxed) {
                 eprintln!("voicsh: correction skipped (language '{}')", input.language);
             }
             return Ok(Some(input));
         }
 
-        if !prompt::needs_correction(&input.token_probabilities, self.config.confidence_threshold) {
+        let uses_t5 = matches!(input.language.as_str(), "en" | "auto" | "");
+
+        if uses_t5 {
+            let has_low_tokens = prompt::needs_correction_proportional(
+                &input.token_probabilities,
+                self.config.confidence_threshold,
+                MIN_LOW_CONFIDENCE_RATIO,
+            );
+            let has_low_confidence = input.confidence < LANGUAGE_CONFIDENCE_THRESHOLD;
+            if !has_low_tokens && !has_low_confidence {
+                eprintln!(
+                    "voicsh: correction skipped (confidence {:.0}%, tokens ok)",
+                    input.confidence * 100.0
+                );
+                return Ok(Some(input));
+            }
+        } else if !prompt::needs_correction(
+            &input.token_probabilities,
+            self.config.confidence_threshold,
+        ) {
             eprintln!(
                 "voicsh: correction skipped (all tokens above confidence threshold {})",
                 self.config.confidence_threshold
@@ -51,11 +73,17 @@ impl Station for CorrectionStation {
             return Ok(Some(input));
         }
 
-        let raw_text = prompt::extract_raw_text(&input.token_probabilities);
+        let correction_text = if uses_t5 {
+            prompt::build_confidence_prompt(&input.token_probabilities)
+        } else {
+            prompt::extract_raw_text(&input.token_probabilities)
+        };
 
-        match self.corrector.correct(&raw_text) {
+        match self
+            .corrector
+            .correct_with_language(&correction_text, &input.language)
+        {
             Ok(corrected) => {
-                // Validate: non-empty, not too divergent
                 if corrected.is_empty() {
                     return Ok(Some(input));
                 }
@@ -75,6 +103,7 @@ impl Station for CorrectionStation {
                     input.raw_text = Some(input.text.clone());
                     input.text = corrected;
                     input.text_origin = TextOrigin::Corrected;
+                    input.corrector_name = Some(self.corrector.name().to_string());
                 }
             }
             Err(e) => {
@@ -148,6 +177,7 @@ mod tests {
             token_probabilities: tokens,
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         }
     }
 
@@ -155,11 +185,11 @@ mod tests {
         vec![
             TokenProbability {
                 token: "the".into(),
-                probability: 0.95,
+                probability: 0.30,
             },
             TokenProbability {
                 token: " quik".into(),
-                probability: 0.30,
+                probability: 0.35,
             },
             TokenProbability {
                 token: " brown".into(),
@@ -271,6 +301,7 @@ mod tests {
             token_probabilities: low_confidence_tokens(),
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         };
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "the quick brown");

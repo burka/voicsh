@@ -17,7 +17,7 @@ use tokenizers::Tokenizer;
 const MAX_DECODE_TOKENS: usize = 128;
 
 /// Task prefix prepended to all T5 correction prompts.
-const TASK_PREFIX: &str = "correct grammar: ";
+const TASK_PREFIX: &str = "fix transcription: ";
 
 /// Strip a task-like prefix ending with ": " from model output.
 fn strip_task_prefix(text: &str) -> &str {
@@ -31,9 +31,14 @@ fn strip_task_prefix(text: &str) -> &str {
     text
 }
 
-/// Clean T5 model output: strip echoed task prefix and reject garbage.
+/// Clean T5 model output: strip echoed task prefix, confidence scores, and reject garbage.
 fn clean_t5_output(raw_output: &str) -> Option<String> {
     let text = strip_task_prefix(raw_output).trim();
+    if text.is_empty() {
+        return None;
+    }
+    // Strip confidence scores the model might echo back
+    let text = crate::correction::prompt::strip_confidence_scores(text);
     if text.is_empty() {
         return None;
     }
@@ -43,7 +48,7 @@ fn clean_t5_output(raw_output: &str) -> Option<String> {
     if total > 2 && alnum_count * 3 < total {
         return None;
     }
-    Some(text.to_string())
+    Some(text)
 }
 
 /// Flan-T5 corrector that runs quantized inference via candle.
@@ -224,7 +229,7 @@ mod tests {
 
     #[test]
     fn strip_task_prefix_removes_known_prefix() {
-        assert_eq!(strip_task_prefix("correct grammar: hello"), "hello");
+        assert_eq!(strip_task_prefix("fix transcription: hello"), "hello");
     }
 
     #[test]
@@ -246,7 +251,15 @@ mod tests {
     #[test]
     fn clean_t5_output_strips_prefix() {
         assert_eq!(
-            clean_t5_output("correct grammar: hello world"),
+            clean_t5_output("fix transcription: hello world"),
+            Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn clean_t5_output_strips_confidence_scores() {
+        assert_eq!(
+            clean_t5_output("hello[0.95] world[0.30]"),
             Some("hello world".to_string())
         );
     }

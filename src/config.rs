@@ -82,17 +82,19 @@ impl Default for VoiceCommandConfig {
 #[serde(rename_all = "lowercase")]
 pub enum CorrectionBackend {
     /// Dictionary-based correction using SymSpell (fast, ~20 MB memory)
-    #[default]
     Symspell,
-    /// Neural correction using Flan-T5 (slower, requires model download)
+    /// Neural correction using Flan-T5 (English only, requires model download)
     T5,
+    /// Hybrid: T5 for English, SymSpell for other languages
+    #[default]
+    Hybrid,
 }
 
-/// Error correction configuration (English only).
+/// Error correction configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct ErrorCorrectionConfig {
-    /// Enable post-ASR error correction (English only).
+    /// Enable post-ASR error correction.
     pub enabled: bool,
     /// Backend to use for correction
     pub backend: CorrectionBackend,
@@ -100,22 +102,31 @@ pub struct ErrorCorrectionConfig {
     pub model: String,
     /// Only correct tokens with probability below this threshold (0.0-1.0).
     pub confidence_threshold: f32,
-    /// Timeout in milliseconds — fall back to raw text if exceeded.
-    pub timeout_ms: u64,
     /// Dictionary language for SymSpell backend.
     /// "auto" = match STT language if dictionary exists, fall back to "en".
     pub dictionary_language: String,
+    /// Languages enabled for SymSpell correction (only used with hybrid backend).
+    /// SymSpell lowercases all output, so only enable for languages where
+    /// lowercase is acceptable: Hebrew (he), Arabic (ar), Chinese (zh), Japanese (ja), Korean (ko).
+    /// Empty or "auto" = enable all available languages.
+    pub symspell_languages: Vec<String>,
 }
 
 impl Default for ErrorCorrectionConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            backend: CorrectionBackend::Symspell,
+            backend: CorrectionBackend::Hybrid,
             model: "flan-t5-base".to_string(),
             confidence_threshold: 0.65,
-            timeout_ms: 2000,
             dictionary_language: "auto".to_string(),
+            symspell_languages: vec![
+                "he".to_string(),
+                "ar".to_string(),
+                "zh".to_string(),
+                "ja".to_string(),
+                "ko".to_string(),
+            ],
         }
     }
 }
@@ -552,14 +563,14 @@ impl Config {
         out.push('\n');
 
         out.push_str("[transcription.error_correction]\n");
-        out.push_str("# enabled = true  # Post-ASR error correction (English only)\n");
-        out.push_str("# backend = \"symspell\"  # Backend: symspell (fast, dictionary), t5 (neural, requires download)\n");
-        out.push_str("# model = \"flan-t5-base\"  # T5 model (only used when backend = \"t5\")\n");
+        out.push_str("# enabled = true  # Post-ASR error correction\n");
+        out.push_str("# backend = \"hybrid\"  # Backend: t5 (English, neural), symspell (multi-language, dictionary), hybrid (t5 for en, symspell for others)\n");
+        out.push_str("# model = \"flan-t5-base\"  # T5 model (only used when backend = \"t5\" or \"hybrid\")\n");
         out.push_str(
             "# confidence_threshold = 0.65  # Only correct tokens below this probability (0.0-1.0)\n",
         );
-        out.push_str("# timeout_ms = 2000  # Timeout in ms (T5 only), falls back to raw text\n");
         out.push_str("# dictionary_language = \"auto\"  # SymSpell dictionary language: auto, en, de, es, fr, he, it, ru\n");
+        out.push_str("# symspell_languages = [\"he\", \"ar\", \"zh\", \"ja\", \"ko\"]  # Languages for SymSpell in hybrid mode (SymSpell lowercases output, so use with languages where lowercase is acceptable)\n");
         out.push('\n');
 
         out.push_str("[transcription.hallucination_filters]\n");
@@ -2012,10 +2023,13 @@ mod tests {
     fn test_error_correction_config_defaults() {
         let config = ErrorCorrectionConfig::default();
         assert!(config.enabled, "Should be enabled by default");
-        assert_eq!(config.backend, CorrectionBackend::Symspell);
+        assert_eq!(config.backend, CorrectionBackend::Hybrid);
         assert_eq!(config.model, "flan-t5-base");
         assert_eq!(config.confidence_threshold, 0.65);
-        assert_eq!(config.timeout_ms, 2000);
+        assert_eq!(
+            config.symspell_languages,
+            vec!["he", "ar", "zh", "ja", "ko"]
+        );
     }
 
     #[test]
@@ -2026,7 +2040,6 @@ mod tests {
             backend = "t5"
             model = "flan-t5-base"
             confidence_threshold = 0.5
-            timeout_ms = 3000
         "#;
 
         let mut temp_file = NamedTempFile::new().unwrap();
@@ -2043,7 +2056,6 @@ mod tests {
             config.transcription.error_correction.confidence_threshold,
             0.5
         );
-        assert_eq!(config.transcription.error_correction.timeout_ms, 3000);
     }
 
     #[test]
@@ -2060,14 +2072,13 @@ mod tests {
         assert!(config.transcription.error_correction.enabled);
         assert_eq!(
             config.transcription.error_correction.backend,
-            CorrectionBackend::Symspell
+            CorrectionBackend::Hybrid
         );
         assert_eq!(config.transcription.error_correction.model, "flan-t5-base");
         assert_eq!(
             config.transcription.error_correction.confidence_threshold,
             0.65
         );
-        assert_eq!(config.transcription.error_correction.timeout_ms, 2000);
     }
 
     #[test]
@@ -2092,11 +2103,6 @@ mod tests {
             (threshold - 0.65).abs() < 0.001,
             "threshold should be ~0.65, got {threshold}"
         );
-
-        let timeout = config
-            .get_value_by_path("transcription.error_correction.timeout_ms")
-            .unwrap();
-        assert_eq!(timeout, "2000");
     }
 
     #[test]
@@ -2141,10 +2147,6 @@ mod tests {
             template.contains("confidence_threshold"),
             "Missing confidence_threshold in template"
         );
-        assert!(
-            template.contains("timeout_ms"),
-            "Missing timeout_ms in template"
-        );
     }
 
     #[test]
@@ -2156,8 +2158,8 @@ mod tests {
                     backend: CorrectionBackend::T5,
                     model: "flan-t5-large".to_string(),
                     confidence_threshold: 0.5,
-                    timeout_ms: 5000,
                     dictionary_language: "auto".to_string(),
+                    symspell_languages: Default::default(),
                 },
                 ..TranscriptionConfig::default()
             },
@@ -2205,11 +2207,11 @@ mod tests {
     }
 
     #[test]
-    fn test_correction_backend_default_is_symspell() {
+    fn test_correction_backend_default_is_hybrid() {
         let config = Config::default();
         assert_eq!(
             config.transcription.error_correction.backend,
-            CorrectionBackend::Symspell
+            CorrectionBackend::Hybrid
         );
     }
 
@@ -2247,8 +2249,8 @@ mod tests {
                     backend: CorrectionBackend::Symspell,
                     model: "flan-t5-base".to_string(),
                     confidence_threshold: 0.85,
-                    timeout_ms: 2000,
                     dictionary_language: "fr".to_string(),
+                    symspell_languages: Default::default(),
                 },
                 ..TranscriptionConfig::default()
             },

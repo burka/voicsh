@@ -213,6 +213,7 @@ impl DaemonCommandHandler {
                     token_probabilities: vec![],
                     raw_text: None,
                     text_origin: TextOrigin::default(),
+                    corrector_name: None,
                 });
                 Response::Transcription { text }
             } else {
@@ -516,6 +517,7 @@ impl DaemonCommandHandler {
         match ec_config.backend {
             CorrectionBackend::Symspell => self.build_symspell_station(ec_config).await,
             CorrectionBackend::T5 => self.build_t5_station(ec_config),
+            CorrectionBackend::Hybrid => self.build_hybrid_station(ec_config).await,
         }
     }
 
@@ -636,6 +638,184 @@ impl DaemonCommandHandler {
         _ec_config: &crate::config::ErrorCorrectionConfig,
     ) -> Option<crate::correction::station::CorrectionStation> {
         eprintln!("voicsh: T5 correction requested but 'error-correction' feature not compiled in");
+        None
+    }
+
+    #[cfg(all(feature = "error-correction", feature = "symspell"))]
+    async fn build_hybrid_station(
+        &self,
+        ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        use crate::correction::candle_t5::CandleT5Corrector;
+        use crate::correction::corrector::Corrector;
+        use crate::correction::hybrid::HybridCorrector;
+        use crate::correction::symspell::SymSpellCorrector;
+        use crate::dictionary::list_dictionaries;
+        use crate::models::correction_catalog::get_correction_model;
+        use crate::models::download::{
+            dictionary_path, download_dictionary, is_dictionary_installed,
+        };
+
+        let mut t5_corrector: Option<Box<dyn Corrector>> = None;
+
+        if let Some(model_info) = get_correction_model(&ec_config.model) {
+            eprintln!(
+                "Loading T5 correction model '{}'... (downloads ~{} MB on first use)",
+                ec_config.model, model_info.size_mb
+            );
+            match CandleT5Corrector::load(model_info) {
+                Ok(c) => t5_corrector = Some(Box::new(c)),
+                Err(e) => eprintln!("voicsh: failed to load T5 model: {e}"),
+            }
+        } else {
+            eprintln!(
+                "voicsh: unknown T5 model '{}', skipping neural correction",
+                ec_config.model
+            );
+        }
+
+        let mut symspell_correctors: std::collections::HashMap<String, Box<dyn Corrector>> =
+            std::collections::HashMap::new();
+
+        for dict in list_dictionaries() {
+            let lang = dict.language;
+
+            let whitelisted = ec_config.symspell_languages.iter().any(|l| l == lang);
+            if !whitelisted && !ec_config.symspell_languages.is_empty() {
+                continue;
+            }
+
+            if !is_dictionary_installed(lang) {
+                eprintln!("Downloading SymSpell dictionary for '{}'...", lang);
+                if download_dictionary(lang, true).await.is_err() {
+                    eprintln!("voicsh: failed to download dictionary: {}", lang);
+                    continue;
+                }
+            }
+
+            let path = dictionary_path(lang);
+            match SymSpellCorrector::from_file(&path, lang) {
+                Ok(c) => {
+                    symspell_correctors.insert(lang.to_string(), Box::new(c) as Box<dyn Corrector>);
+                    eprintln!("SymSpell loaded: {} ({})", lang, dict.display_name);
+                }
+                Err(e) => eprintln!("voicsh: failed to load SymSpell for {}: {}", lang, e),
+            }
+        }
+
+        if t5_corrector.is_none() && symspell_correctors.is_empty() {
+            eprintln!("voicsh: no correction backends available, skipping error correction");
+            return None;
+        }
+
+        let mut backend_list = Vec::new();
+        if t5_corrector.is_some() {
+            backend_list.push("T5".to_string());
+        }
+        if !symspell_correctors.is_empty() {
+            backend_list.push(format!("SymSpell ({} langs)", symspell_correctors.len()));
+        }
+
+        eprintln!(
+            "Hybrid correction active: {} (threshold {:.0}%)",
+            backend_list.join(", "),
+            ec_config.confidence_threshold * 100.0
+        );
+
+        let hybrid = HybridCorrector::new(
+            t5_corrector,
+            symspell_correctors,
+            ec_config.symspell_languages.clone(),
+        );
+        Some(crate::correction::station::CorrectionStation::new(
+            Box::new(hybrid),
+            ec_config.clone(),
+        ))
+    }
+
+    #[cfg(all(feature = "error-correction", not(feature = "symspell")))]
+    async fn build_hybrid_station(
+        &self,
+        ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        eprintln!(
+            "voicsh: hybrid mode requested but 'symspell' feature not compiled in, falling back to T5"
+        );
+        self.build_t5_station(ec_config)
+    }
+
+    #[cfg(all(not(feature = "error-correction"), feature = "symspell"))]
+    async fn build_hybrid_station(
+        &self,
+        ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        eprintln!(
+            "voicsh: hybrid mode requested but 'error-correction' feature not compiled in, loading SymSpell dictionaries"
+        );
+        use crate::correction::corrector::Corrector;
+        use crate::correction::hybrid::HybridCorrector;
+        use crate::correction::symspell::SymSpellCorrector;
+        use crate::dictionary::list_dictionaries;
+        use crate::models::download::{
+            dictionary_path, download_dictionary, is_dictionary_installed,
+        };
+
+        let mut symspell_correctors: std::collections::HashMap<String, Box<dyn Corrector>> =
+            std::collections::HashMap::new();
+
+        for dict in list_dictionaries() {
+            let lang = dict.language;
+
+            let whitelisted = ec_config.symspell_languages.iter().any(|l| l == lang);
+            if !whitelisted && !ec_config.symspell_languages.is_empty() {
+                continue;
+            }
+
+            if !is_dictionary_installed(lang) {
+                eprintln!("Downloading SymSpell dictionary for '{}'...", lang);
+                if download_dictionary(lang, true).await.is_err() {
+                    eprintln!("voicsh: failed to download dictionary: {}", lang);
+                    continue;
+                }
+            }
+
+            let path = dictionary_path(lang);
+            match SymSpellCorrector::from_file(&path, lang) {
+                Ok(c) => {
+                    symspell_correctors.insert(lang.to_string(), Box::new(c) as Box<dyn Corrector>);
+                    eprintln!("SymSpell loaded: {} ({})", lang, dict.display_name);
+                }
+                Err(e) => eprintln!("voicsh: failed to load SymSpell for {}: {}", lang, e),
+            }
+        }
+
+        if symspell_correctors.is_empty() {
+            eprintln!("voicsh: no SymSpell dictionaries available, skipping error correction");
+            return None;
+        }
+
+        eprintln!(
+            "Hybrid correction active: SymSpell ({} langs) (threshold {:.0}%)",
+            symspell_correctors.len(),
+            ec_config.confidence_threshold * 100.0
+        );
+
+        let hybrid =
+            HybridCorrector::new(symspell_correctors, ec_config.symspell_languages.clone());
+        Some(crate::correction::station::CorrectionStation::new(
+            Box::new(hybrid),
+            ec_config.clone(),
+        ))
+    }
+
+    #[cfg(not(any(feature = "error-correction", feature = "symspell")))]
+    async fn build_hybrid_station(
+        &self,
+        _ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        eprintln!(
+            "voicsh: hybrid correction requested but neither 'error-correction' nor 'symspell' features compiled in"
+        );
         None
     }
 
@@ -768,8 +948,8 @@ mod tests {
                 );
                 assert_eq!(
                     error_correction_backend,
-                    Some("symspell".to_string()),
-                    "Default correction backend should be symspell"
+                    Some("hybrid".to_string()),
+                    "Default correction backend should be hybrid"
                 );
                 assert_eq!(
                     dictionary_language,
@@ -855,7 +1035,7 @@ mod tests {
                 assert!(!backend.is_empty(), "Backend should not be empty");
                 assert!(error_correction_enabled);
                 assert_eq!(error_correction_model, Some("flan-t5-base".to_string()));
-                assert_eq!(error_correction_backend, Some("symspell".to_string()));
+                assert_eq!(error_correction_backend, Some("hybrid".to_string()));
                 assert_eq!(dictionary_language, Some("auto".to_string()));
             }
             _ => panic!("Expected Status response"),
@@ -993,6 +1173,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         });
 
         // Should receive the event
@@ -1359,6 +1540,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         });
 
         // Should receive
@@ -1596,7 +1778,7 @@ mod tests {
                 );
                 assert_eq!(
                     error_correction_backend,
-                    Some("symspell".to_string()),
+                    Some("hybrid".to_string()),
                     "Status should show current correction backend"
                 );
                 assert_eq!(

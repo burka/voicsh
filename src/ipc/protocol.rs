@@ -183,6 +183,9 @@ pub enum DaemonEvent {
         /// How the text was produced. Absent (defaults to "transcription") if unchanged.
         #[serde(default, skip_serializing_if = "TextOrigin::is_transcription")]
         text_origin: TextOrigin,
+        /// Name of the corrector backend that produced the correction.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        corrector_name: Option<String>,
     },
     /// Transcription dropped by language/confidence filter
     TranscriptionDropped {
@@ -719,6 +722,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         };
         let json = event.to_json().expect("should serialize");
         let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
@@ -765,6 +769,7 @@ mod tests {
                 token_probabilities: vec![],
                 raw_text: None,
                 text_origin: TextOrigin::default(),
+                corrector_name: None,
             },
             DaemonEvent::Transcription {
                 text: "Hello 👋 World".to_string(),
@@ -774,6 +779,7 @@ mod tests {
                 token_probabilities: vec![],
                 raw_text: None,
                 text_origin: TextOrigin::default(),
+                corrector_name: None,
             },
             DaemonEvent::TranscriptionDropped {
                 text: "test".to_string(),
@@ -1200,6 +1206,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: None,
             text_origin: TextOrigin::Transcription,
+            corrector_name: None,
         };
         let json = event.to_json().expect("should serialize");
         assert!(!json.contains("raw_text"), "raw_text should be omitted");
@@ -1221,6 +1228,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: Some("the quik brown fox".to_string()),
             text_origin: TextOrigin::Corrected,
+            corrector_name: None,
         };
         let json = event.to_json().expect("should serialize");
         assert!(json.contains(r#""raw_text":"the quik brown fox""#));
@@ -1239,6 +1247,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: Some("period".to_string()),
             text_origin: TextOrigin::VoiceCommand,
+            corrector_name: None,
         };
         let json = event.to_json().expect("should serialize");
         assert!(json.contains(r#""raw_text":"period""#));
@@ -1267,5 +1276,42 @@ mod tests {
             }
             _ => panic!("Expected Transcription event"),
         }
+    }
+
+    #[test]
+    fn transcription_event_with_corrector_name_roundtrip() {
+        let event = DaemonEvent::Transcription {
+            text: "the quick brown fox".to_string(),
+            language: "en".to_string(),
+            confidence: 0.8,
+            wait_ms: Some(200),
+            token_probabilities: vec![],
+            raw_text: Some("the quik brown fox".to_string()),
+            text_origin: TextOrigin::Corrected,
+            corrector_name: Some("T5".to_string()),
+        };
+        let json = event.to_json().expect("should serialize");
+        assert!(json.contains(r#""corrector_name":"T5""#));
+        let deserialized = DaemonEvent::from_json(&json).expect("should deserialize");
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn transcription_event_omits_none_corrector_name() {
+        let event = DaemonEvent::Transcription {
+            text: "hello".to_string(),
+            language: "en".to_string(),
+            confidence: 0.95,
+            wait_ms: None,
+            token_probabilities: vec![],
+            raw_text: None,
+            text_origin: TextOrigin::Transcription,
+            corrector_name: None,
+        };
+        let json = event.to_json().expect("should serialize");
+        assert!(
+            !json.contains("corrector_name"),
+            "corrector_name should be omitted when None"
+        );
     }
 }
