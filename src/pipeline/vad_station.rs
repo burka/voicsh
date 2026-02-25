@@ -71,8 +71,6 @@ pub struct VadStation {
     event_tx: Option<crossbeam_channel::Sender<DaemonEvent>>,
     /// Throttle counter for level events (emit every 4th frame)
     level_event_counter: u64,
-    /// Correction success rate for adaptive thresholding (0.0-1.0)
-    correction_success_rate: f32,
 }
 
 impl VadStation {
@@ -96,7 +94,6 @@ impl VadStation {
             buffer_gauge: None,
             event_tx: None,
             level_event_counter: 0,
-            correction_success_rate: 0.5,
         }
     }
 
@@ -130,12 +127,7 @@ impl VadStation {
         self
     }
 
-    pub fn with_correction_feedback(mut self, rate: f32) -> Self {
-        self.correction_success_rate = rate.clamp(0.0, 1.0);
-        self
-    }
-
-    /// Adjusts the VAD threshold based on the noise floor estimate and correction feedback.
+    /// Adjusts the VAD threshold based on the noise floor estimate.
     fn adjust_threshold(&mut self) {
         if self.level_history.len() < 10 {
             return;
@@ -146,15 +138,7 @@ impl VadStation {
         let percentile_idx = sorted.len() / 4;
         let noise_floor = sorted[percentile_idx];
 
-        let mut new_threshold = noise_floor * 2.0;
-
-        if self.correction_success_rate < 0.3 {
-            new_threshold *= 0.9;
-        } else if self.correction_success_rate > 0.7 {
-            new_threshold *= 1.1;
-        }
-
-        new_threshold = new_threshold.clamp(0.002, 0.2);
+        let new_threshold = (noise_floor * 2.0).clamp(0.002, 0.2);
         self.vad.set_threshold(new_threshold);
     }
 

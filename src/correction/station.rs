@@ -11,10 +11,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static LANGUAGE_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 
+const LANGUAGE_CONFIDENCE_THRESHOLD: f32 = 0.75;
+const MIN_LOW_CONFIDENCE_RATIO: f32 = 0.4;
+
 /// Pipeline station that applies post-ASR error correction.
 ///
-/// Only corrects languages with a SymSpell dictionary and low-confidence tokens.
-/// Falls back to raw text on timeout or error.
+/// Only corrects English (T5) and whitelisted SymSpell languages with
+/// low-confidence tokens. Falls back to raw text on error.
 pub struct CorrectionStation {
     corrector: Box<dyn Corrector>,
     config: ErrorCorrectionConfig,
@@ -36,14 +39,34 @@ impl Station for CorrectionStation {
             return Ok(Some(input));
         }
 
-        if !prompt::should_correct_language(&input.language) {
+        if !prompt::should_correct_language(&input.language, &self.config.symspell_languages) {
             if !LANGUAGE_SKIP_LOGGED.swap(true, Ordering::Relaxed) {
                 eprintln!("voicsh: correction skipped (language '{}')", input.language);
             }
             return Ok(Some(input));
         }
 
-        if !prompt::needs_correction(&input.token_probabilities, self.config.confidence_threshold) {
+        if input.language == "en" {
+            if !prompt::needs_correction_proportional(
+                &input.token_probabilities,
+                self.config.confidence_threshold,
+                MIN_LOW_CONFIDENCE_RATIO,
+            ) {
+                eprintln!("voicsh: T5 correction skipped (insufficient low-confidence tokens)",);
+                return Ok(Some(input));
+            }
+            if input.confidence < LANGUAGE_CONFIDENCE_THRESHOLD {
+                eprintln!(
+                    "voicsh: T5 correction skipped (low confidence {:.0}% < {:.0}%)",
+                    input.confidence * 100.0,
+                    LANGUAGE_CONFIDENCE_THRESHOLD * 100.0
+                );
+                return Ok(Some(input));
+            }
+        } else if !prompt::needs_correction(
+            &input.token_probabilities,
+            self.config.confidence_threshold,
+        ) {
             eprintln!(
                 "voicsh: correction skipped (all tokens above confidence threshold {})",
                 self.config.confidence_threshold
@@ -53,9 +76,11 @@ impl Station for CorrectionStation {
 
         let raw_text = prompt::extract_raw_text(&input.token_probabilities);
 
-        match self.corrector.correct(&raw_text) {
+        match self
+            .corrector
+            .correct_with_language(&raw_text, &input.language)
+        {
             Ok(corrected) => {
-                // Validate: non-empty, not too divergent
                 if corrected.is_empty() {
                     return Ok(Some(input));
                 }
@@ -155,11 +180,11 @@ mod tests {
         vec![
             TokenProbability {
                 token: "the".into(),
-                probability: 0.95,
+                probability: 0.30,
             },
             TokenProbability {
                 token: " quik".into(),
-                probability: 0.30,
+                probability: 0.35,
             },
             TokenProbability {
                 token: " brown".into(),

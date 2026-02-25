@@ -11,7 +11,17 @@ pub trait Corrector: Send + 'static {
     ///
     /// The prompt contains the original text with low-confidence tokens
     /// annotated with their probability scores.
-    fn correct(&mut self, prompt: &str) -> Result<String>;
+    fn correct(&mut self, prompt: &str) -> Result<String> {
+        self.correct_with_language(prompt, "")
+    }
+
+    /// Correct text with explicit language hint.
+    ///
+    /// This allows multi-language correctors to dispatch to appropriate backends.
+    /// The default implementation falls back to language-agnostic correct().
+    fn correct_with_language(&mut self, prompt: &str, _language: &str) -> Result<String> {
+        self.correct(prompt)
+    }
 
     /// Return the name of this corrector for logging.
     fn name(&self) -> &str;
