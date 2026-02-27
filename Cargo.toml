@@ -86,7 +86,7 @@ symspell = { version = "0.4", optional = true }
 
 [features]
 default = ["full"]
-full = ["whisper", "cpal-audio", "model-download", "cli", "portal", "benchmark", "symspell"]
+full = ["whisper", "cpal-audio", "model-download", "cli", "portal", "benchmark", "symspell", "error-correction"]
 whisper = ["whisper-rs"]
 cpal-audio = ["dep:cpal"]
 model-download = ["dep:reqwest", "dep:sha1", "dep:sha2", "dep:indicatif", "dep:futures-util", "dep:dirs"]

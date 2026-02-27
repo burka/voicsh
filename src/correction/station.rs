@@ -52,7 +52,7 @@ impl Station for CorrectionStation {
                 self.config.confidence_threshold,
                 MIN_LOW_CONFIDENCE_RATIO,
             ) {
-                eprintln!("voicsh: T5 correction skipped (insufficient low-confidence tokens)",);
+                eprintln!("voicsh: correction skipped (insufficient low-confidence tokens)");
                 return Ok(Some(input));
             }
             if input.confidence < LANGUAGE_CONFIDENCE_THRESHOLD {
@@ -100,6 +100,7 @@ impl Station for CorrectionStation {
                     input.raw_text = Some(input.text.clone());
                     input.text = corrected;
                     input.text_origin = TextOrigin::Corrected;
+                    input.corrector_name = Some(self.corrector.name().to_string());
                 }
             }
             Err(e) => {
@@ -173,6 +174,7 @@ mod tests {
             token_probabilities: tokens,
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         }
     }
 
@@ -296,6 +298,7 @@ mod tests {
             token_probabilities: low_confidence_tokens(),
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         };
         let result = station.process(input).unwrap().unwrap();
         assert_eq!(result.text, "the quick brown");

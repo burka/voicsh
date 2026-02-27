@@ -14,9 +14,6 @@ use crate::correction::corrector::Corrector;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[cfg(feature = "error-correction")]
-use crate::correction::candle_t5::CandleT5Corrector;
-
 /// Hybrid corrector that holds both T5 and SymSpell backends.
 ///
 /// The Corrector trait handles language dispatch, calling the
@@ -26,6 +23,7 @@ pub struct HybridCorrector {
     t5: Option<Box<dyn Corrector>>,
     symspell: HashMap<String, Box<dyn Corrector>>,
     symspell_whitelist: Arc<Vec<String>>,
+    last_backend: Option<String>,
 }
 
 #[cfg(feature = "error-correction")]
@@ -34,6 +32,7 @@ pub struct HybridCorrector {
     t5: Option<Box<dyn Corrector>>,
     #[allow(dead_code)]
     symspell_whitelist: Arc<Vec<String>>,
+    last_backend: Option<String>,
 }
 
 #[cfg(feature = "symspell")]
@@ -41,12 +40,14 @@ pub struct HybridCorrector {
 pub struct HybridCorrector {
     symspell: HashMap<String, Box<dyn Corrector>>,
     symspell_whitelist: Arc<Vec<String>>,
+    last_backend: Option<String>,
 }
 
 #[cfg(not(any(feature = "error-correction", feature = "symspell")))]
 pub struct HybridCorrector {
     #[allow(dead_code)]
     symspell_whitelist: Arc<Vec<String>>,
+    last_backend: Option<String>,
 }
 
 #[cfg(all(feature = "error-correction", feature = "symspell"))]
@@ -109,6 +110,7 @@ impl HybridCorrector {
             t5,
             symspell,
             symspell_whitelist: Arc::new(whitelist),
+            last_backend: None,
         }
     }
 
@@ -128,6 +130,7 @@ impl HybridCorrector {
         Self {
             t5,
             symspell_whitelist: Arc::new(Vec::new()),
+            last_backend: None,
         }
     }
 
@@ -143,6 +146,7 @@ impl HybridCorrector {
         Self {
             symspell,
             symspell_whitelist: Arc::new(whitelist),
+            last_backend: None,
         }
     }
 
@@ -156,6 +160,7 @@ impl HybridCorrector {
     pub fn new(whitelist: Vec<String>) -> Self {
         Self {
             symspell_whitelist: Arc::new(whitelist),
+            last_backend: None,
         }
     }
 }
@@ -165,8 +170,10 @@ impl Corrector for HybridCorrector {
     /// Without language context, prefer T5 if available, otherwise passthrough.
     fn correct(&mut self, prompt: &str) -> crate::error::Result<String> {
         if let Some(ref mut t5) = self.t5 {
+            self.last_backend = Some("T5".to_string());
             return t5.correct(prompt);
         }
+        self.last_backend = None;
         Ok(prompt.to_string())
     }
 
@@ -177,23 +184,27 @@ impl Corrector for HybridCorrector {
     ) -> crate::error::Result<String> {
         if language == "en" {
             if let Some(ref mut t5) = self.t5 {
+                self.last_backend = Some("T5".to_string());
                 return t5.correct(prompt);
             }
+            self.last_backend = None;
             return Ok(prompt.to_string());
         }
 
         let whitelisted = self.symspell_whitelist.iter().any(|l| l == language);
         if whitelisted {
             if let Some(corrector) = self.symspell.get_mut(language) {
+                self.last_backend = Some(corrector.name().to_string());
                 return corrector.correct(prompt);
             }
         }
 
+        self.last_backend = None;
         Ok(prompt.to_string())
     }
 
     fn name(&self) -> &str {
-        "hybrid"
+        self.last_backend.as_deref().unwrap_or("hybrid")
     }
 }
 
@@ -203,8 +214,10 @@ impl Corrector for HybridCorrector {
     /// Without language context, prefer T5 if available, otherwise passthrough.
     fn correct(&mut self, prompt: &str) -> crate::error::Result<String> {
         if let Some(ref mut t5) = self.t5 {
+            self.last_backend = Some("T5".to_string());
             t5.correct(prompt)
         } else {
+            self.last_backend = None;
             Ok(prompt.to_string())
         }
     }
@@ -216,14 +229,16 @@ impl Corrector for HybridCorrector {
     ) -> crate::error::Result<String> {
         if language == "en" {
             if let Some(ref mut t5) = self.t5 {
+                self.last_backend = Some("T5".to_string());
                 return t5.correct(prompt);
             }
         }
+        self.last_backend = None;
         Ok(prompt.to_string())
     }
 
     fn name(&self) -> &str {
-        "hybrid"
+        self.last_backend.as_deref().unwrap_or("hybrid")
     }
 }
 
@@ -232,6 +247,7 @@ impl Corrector for HybridCorrector {
 impl Corrector for HybridCorrector {
     /// Without language context, passthrough (no way to pick the right dictionary).
     fn correct(&mut self, prompt: &str) -> crate::error::Result<String> {
+        self.last_backend = None;
         Ok(prompt.to_string())
     }
 
@@ -243,20 +259,23 @@ impl Corrector for HybridCorrector {
         if self.symspell_whitelist.iter().any(|l| l == language)
             && let Some(corrector) = self.symspell.get_mut(language)
         {
+            self.last_backend = Some(corrector.name().to_string());
             return corrector.correct(prompt);
         }
 
+        self.last_backend = None;
         Ok(prompt.to_string())
     }
 
     fn name(&self) -> &str {
-        "hybrid"
+        self.last_backend.as_deref().unwrap_or("hybrid")
     }
 }
 
 #[cfg(not(any(feature = "error-correction", feature = "symspell")))]
 impl Corrector for HybridCorrector {
     fn correct(&mut self, prompt: &str) -> crate::error::Result<String> {
+        self.last_backend = None;
         Ok(prompt.to_string())
     }
 
@@ -265,11 +284,12 @@ impl Corrector for HybridCorrector {
         prompt: &str,
         _language: &str,
     ) -> crate::error::Result<String> {
+        self.last_backend = None;
         Ok(prompt.to_string())
     }
 
     fn name(&self) -> &str {
-        "hybrid"
+        self.last_backend.as_deref().unwrap_or("hybrid")
     }
 }
 

@@ -213,6 +213,7 @@ impl DaemonCommandHandler {
                     token_probabilities: vec![],
                     raw_text: None,
                     text_origin: TextOrigin::default(),
+                    corrector_name: None,
                 });
                 Response::Transcription { text }
             } else {
@@ -649,7 +650,7 @@ impl DaemonCommandHandler {
         use crate::correction::corrector::Corrector;
         use crate::correction::hybrid::HybridCorrector;
         use crate::correction::symspell::SymSpellCorrector;
-        use crate::dictionary::{get_dictionary, list_dictionaries};
+        use crate::dictionary::list_dictionaries;
         use crate::models::correction_catalog::get_correction_model;
         use crate::models::download::{
             dictionary_path, download_dictionary, is_dictionary_installed,
@@ -707,15 +708,13 @@ impl DaemonCommandHandler {
             return None;
         }
 
-        let backends = vec![
-            t5_corrector.as_ref().map(|_| "T5"),
-            if symspell_correctors.is_empty() {
-                None
-            } else {
-                Some(format!("SymSpell ({} langs)", symspell_correctors.len()))
-            },
-        ];
-        let backend_list: Vec<&str> = backends.into_iter().flatten().collect();
+        let mut backend_list = Vec::new();
+        if t5_corrector.is_some() {
+            backend_list.push("T5".to_string());
+        }
+        if !symspell_correctors.is_empty() {
+            backend_list.push(format!("SymSpell ({} langs)", symspell_correctors.len()));
+        }
 
         eprintln!(
             "Hybrid correction active: {} (threshold {:.0}%)",
@@ -1174,6 +1173,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         });
 
         // Should receive the event
@@ -1540,6 +1540,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         });
 
         // Should receive

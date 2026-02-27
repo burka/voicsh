@@ -26,7 +26,7 @@ async fn setup_correction_for_language(lang: &str) -> voicsh::Result<HybridCorre
     symspell_correctors.insert(lang.to_string(), Box::new(corrector));
 
     let whitelist = vec![lang.to_string()];
-    Ok(HybridCorrector::new(symspell_correctors, whitelist))
+    Ok(HybridCorrector::new(None, symspell_correctors, whitelist))
 }
 
 #[test]

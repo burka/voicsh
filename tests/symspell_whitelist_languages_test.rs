@@ -29,7 +29,7 @@ async fn setup_hybrid_for_test() -> Result<HybridCorrector> {
     }
 
     let whitelist = vec!["ja".to_string(), "ko".to_string()];
-    Ok(HybridCorrector::new(symspell_correctors, whitelist))
+    Ok(HybridCorrector::new(None, symspell_correctors, whitelist))
 }
 
 #[test]
@@ -270,7 +270,7 @@ fn test_empty_whitelist_disables_symspell() {
 
     // Empty whitelist - NO languages should use SymSpell
     let empty_whitelist: Vec<String> = vec![];
-    let mut hybrid = HybridCorrector::new(symspell_correctors, empty_whitelist);
+    let mut hybrid = HybridCorrector::new(None, symspell_correctors, empty_whitelist);
 
     let japanese_input = "こんにちは";
     let result = hybrid
@@ -299,7 +299,7 @@ fn test_specific_language_whitelist() {
     }
 
     let whitelist = vec!["ja".to_string()];
-    let mut hybrid = HybridCorrector::new(symspell_correctors, whitelist);
+    let mut hybrid = HybridCorrector::new(None, symspell_correctors, whitelist);
 
     // Japanese should use SymSpell
     let ja_result = hybrid

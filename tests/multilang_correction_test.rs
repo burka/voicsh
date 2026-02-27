@@ -32,7 +32,7 @@ async fn setup_multilang_symspell() -> Result<HybridCorrector, Box<dyn std::erro
         }
     }
 
-    Ok(HybridCorrector::new(symspell_correctors, Vec::new()))
+    Ok(HybridCorrector::new(None, symspell_correctors, Vec::new()))
 }
 
 #[test]
