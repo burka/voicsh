@@ -602,6 +602,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         };
         let event3 = DaemonEvent::RecordingStateChanged { recording: false };
 

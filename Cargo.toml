@@ -64,6 +64,7 @@ hound = "3.5"
 # HTTP client for model downloads
 reqwest = { version = "0.13", features = ["stream"], optional = true }
 sha1 = { version = "0.10", optional = true }
+sha2 = { version = "0.10", optional = true }
 indicatif = { version = "0.18", optional = true }
 futures-util = { version = "0.3", optional = true }
 
@@ -73,15 +74,27 @@ humantime = { version = "2.3", optional = true }
 # Speech-to-text (requires cmake to build)
 whisper-rs = { version = "0.15", optional = true }
 
+# Error correction (T5 via Candle)
+candle-core = { version = "0.9", optional = true }
+candle-nn = { version = "0.9", optional = true }
+candle-transformers = { version = "0.9", optional = true }
+tokenizers = { version = "0.22", default-features = false, features = ["onig"], optional = true }
+hf-hub = { version = "0.4", optional = true }
+
+# Error correction (SymSpell)
+symspell = { version = "0.4", optional = true }
+
 [features]
 default = ["full"]
-full = ["whisper", "cpal-audio", "model-download", "cli", "portal", "benchmark"]
+full = ["whisper", "cpal-audio", "model-download", "cli", "portal", "benchmark", "symspell", "error-correction"]
 whisper = ["whisper-rs"]
 cpal-audio = ["dep:cpal"]
-model-download = ["dep:reqwest", "dep:sha1", "dep:indicatif", "dep:futures-util", "dep:dirs"]
+model-download = ["dep:reqwest", "dep:sha1", "dep:sha2", "dep:indicatif", "dep:futures-util", "dep:dirs"]
 cli = ["dep:clap", "dep:clap_complete", "dep:dirs", "dep:humantime", "dep:owo-colors"]
 portal = ["dep:ashpd", "dep:dirs"]
 benchmark = ["dep:sysinfo", "dep:flate2", "whisper", "model-download", "cli"]
+symspell = ["dep:symspell"]
+error-correction = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub", "model-download"]
 cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
 hipblas = ["whisper-rs/hipblas"]

@@ -355,6 +355,10 @@ mod tests {
                     daemon_version: "0.0.1+test".to_string(),
                     backend: "CPU".to_string(),
                     device: None,
+                    error_correction_enabled: false,
+                    error_correction_model: Some("flan-t5-base".to_string()),
+                    error_correction_backend: Some("symspell".to_string()),
+                    dictionary_language: None,
                 },
                 Command::Toggle => Response::Ok {
                     message: "Recording started".to_string(),
@@ -387,6 +391,18 @@ mod tests {
                 Command::ListModels => Response::Models {
                     models: vec![],
                     current: "base".to_string(),
+                },
+                Command::SetErrorCorrection { .. } => Response::Ok {
+                    message: "Error correction updated".to_string(),
+                },
+                Command::SetCorrectionModel { .. } => Response::Ok {
+                    message: "Correction model updated".to_string(),
+                },
+                Command::ListCorrectionModels => Response::CorrectionModels {
+                    models: vec![],
+                    current: "flan-t5-base".to_string(),
+                    enabled: false,
+                    backend: Some("symspell".to_string()),
                 },
             }
         }
@@ -496,6 +512,10 @@ mod tests {
                 daemon_version,
                 backend,
                 device,
+                error_correction_enabled,
+                error_correction_model,
+                error_correction_backend,
+                dictionary_language,
             } => {
                 assert!(!recording);
                 assert!(model_loaded);
@@ -504,6 +524,10 @@ mod tests {
                 assert_eq!(daemon_version, "0.0.1+test");
                 assert_eq!(backend, "CPU");
                 assert_eq!(device, None);
+                assert!(!error_correction_enabled);
+                assert_eq!(error_correction_model, Some("flan-t5-base".to_string()));
+                assert_eq!(error_correction_backend, Some("symspell".to_string()));
+                assert_eq!(dictionary_language, None);
             }
             _ => panic!("Expected Status response"),
         }

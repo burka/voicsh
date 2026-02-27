@@ -130,17 +130,14 @@ impl VadStation {
     /// Adjusts the VAD threshold based on the noise floor estimate.
     fn adjust_threshold(&mut self) {
         if self.level_history.len() < 10 {
-            // Not enough data yet
             return;
         }
 
-        // Calculate 25th percentile as noise floor
         let mut sorted = self.level_history.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let percentile_idx = sorted.len() / 4;
         let noise_floor = sorted[percentile_idx];
 
-        // Set threshold to noise_floor * 2.0, clamped to reasonable bounds
         let new_threshold = (noise_floor * 2.0).clamp(0.002, 0.2);
         self.vad.set_threshold(new_threshold);
     }

@@ -370,6 +370,10 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                 daemon_version,
                 backend,
                 device,
+                error_correction_enabled,
+                error_correction_model,
+                error_correction_backend,
+                dictionary_language,
             } => {
                 let client_version = voicsh::version_string();
 
@@ -399,6 +403,28 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                 // Language
                 if let Some(lang) = language {
                     println!("  {}  {}", "Language:".dimmed(), lang);
+                }
+                // Error correction
+                if error_correction_enabled {
+                    let backend_name = error_correction_backend.as_deref().unwrap_or("unknown");
+                    let dict_lang = dictionary_language.as_deref().unwrap_or("auto");
+                    if backend_name == "symspell" {
+                        println!(
+                            "  {} enabled (symspell, {})",
+                            "Correction:".dimmed(),
+                            dict_lang,
+                        );
+                    } else {
+                        let model_name =
+                            error_correction_model.as_deref().unwrap_or("flan-t5-base");
+                        println!(
+                            "  {} enabled ({}, {}, {})",
+                            "Correction:".dimmed(),
+                            backend_name,
+                            model_name,
+                            dict_lang,
+                        );
+                    }
                 }
             }
             Response::Languages { languages, current } => {
@@ -431,6 +457,34 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                         );
                     } else {
                         println!("  ○ {} ({}MB, {}, {})", m.name, m.size_mb, lang, installed);
+                    }
+                }
+            }
+            Response::CorrectionModels {
+                models,
+                current,
+                enabled,
+                backend,
+            } => {
+                let status = if enabled { "enabled" } else { "disabled" };
+                let backend_name = backend.as_deref().unwrap_or("unknown");
+                println!(
+                    "Error correction models (backend: {}, current: {}, {}):",
+                    backend_name,
+                    current.green(),
+                    status
+                );
+                for m in &models {
+                    if m.name == current {
+                        println!(
+                            "  {} {} ({}MB) — {}",
+                            "●".green(),
+                            m.name,
+                            m.size_mb,
+                            m.description
+                        );
+                    } else {
+                        println!("  ○ {} ({}MB) — {}", m.name, m.size_mb, m.description);
                     }
                 }
             }

@@ -64,6 +64,16 @@ fn chunker_config_from_secs(
     config
 }
 
+/// Configuration for pipeline execution, bundling CLI parameters.
+struct PipelineRunConfig {
+    quiet: bool,
+    verbosity: u8,
+    buffer_secs: u64,
+    chunk_secs: u32,
+    pre_speech_ms: Option<u32>,
+    post_speech_ms: Option<u32>,
+}
+
 /// Run pipe mode: read WAV from stdin → transcribe → write to stdout.
 ///
 /// # Arguments
@@ -249,12 +259,14 @@ pub async fn run_record_command(record: RecordConfig) -> Result<()> {
         run_single_session(
             &config,
             transcriber,
-            quiet,
-            verbosity,
-            buffer_secs,
-            chunk_secs,
-            pre_speech_ms,
-            post_speech_ms,
+            PipelineRunConfig {
+                quiet,
+                verbosity,
+                buffer_secs,
+                chunk_secs,
+                pre_speech_ms,
+                post_speech_ms,
+            },
             make_sink,
         )
         .await
@@ -262,12 +274,14 @@ pub async fn run_record_command(record: RecordConfig) -> Result<()> {
         run_continuous(
             &config,
             transcriber,
-            quiet,
-            verbosity,
-            buffer_secs,
-            chunk_secs,
-            pre_speech_ms,
-            post_speech_ms,
+            PipelineRunConfig {
+                quiet,
+                verbosity,
+                buffer_secs,
+                chunk_secs,
+                pre_speech_ms,
+                post_speech_ms,
+            },
             make_sink,
         )
         .await
@@ -339,14 +353,18 @@ async fn connect_portal(
 async fn run_continuous(
     config: &Config,
     transcriber: Arc<dyn Transcriber>,
-    quiet: bool,
-    verbosity: u8,
-    buffer_secs: u64,
-    chunk_secs: u32,
-    pre_speech_ms: Option<u32>,
-    post_speech_ms: Option<u32>,
+    run_config: PipelineRunConfig,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
+    let PipelineRunConfig {
+        quiet,
+        verbosity,
+        buffer_secs,
+        chunk_secs,
+        pre_speech_ms,
+        post_speech_ms,
+    } = run_config;
+
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
 
@@ -398,14 +416,18 @@ async fn run_continuous(
 async fn run_single_session(
     config: &Config,
     transcriber: Arc<dyn Transcriber>,
-    quiet: bool,
-    verbosity: u8,
-    buffer_secs: u64,
-    chunk_secs: u32,
-    pre_speech_ms: Option<u32>,
-    post_speech_ms: Option<u32>,
+    run_config: PipelineRunConfig,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
+    let PipelineRunConfig {
+        quiet,
+        verbosity,
+        buffer_secs,
+        chunk_secs,
+        pre_speech_ms,
+        post_speech_ms,
+    } = run_config;
+
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
 

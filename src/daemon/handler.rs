@@ -36,6 +36,24 @@ impl DaemonCommandHandler {
         self.state.subscribe()
     }
 
+    /// Update a config field and emit a ConfigChanged event.
+    ///
+    /// Locks the config mutex, applies the mutation, drops the lock,
+    /// and emits a ConfigChanged event with the given key and value.
+    async fn update_config<F>(&self, key: &str, value: String, mutate: F)
+    where
+        F: FnOnce(&mut Config),
+    {
+        let mut config = self.state.config.lock().await;
+        mutate(&mut config);
+        drop(config);
+
+        self.state.emit(DaemonEvent::ConfigChanged {
+            key: key.to_string(),
+            value,
+        });
+    }
+
     /// Start recording.
     async fn start_recording(&self) -> Response {
         // Lock pipeline for entire operation to prevent race conditions
@@ -54,7 +72,7 @@ impl DaemonCommandHandler {
         // Create audio source
         let audio_source = match self.create_audio_source(&config) {
             Ok(source) => source,
-            Err(e) => return e,
+            Err(e) => return *e,
         };
 
         // Build pipeline configuration
@@ -75,7 +93,17 @@ impl DaemonCommandHandler {
 
         // Start pipeline
         let transcriber = self.state.transcriber.read().await.clone();
-        let pipeline = Pipeline::new(pipeline_config);
+        let mut pipeline = Pipeline::new(pipeline_config);
+
+        // Wire error correction when enabled
+        if config.transcription.error_correction.enabled {
+            let correction_station = self
+                .build_correction_station(&config.transcription.error_correction)
+                .await;
+            if let Some(station) = correction_station {
+                pipeline = pipeline.with_correction(station);
+            }
+        }
 
         match pipeline.start_with_post_processors(audio_source, transcriber, sink, post_processors)
         {
@@ -94,18 +122,18 @@ impl DaemonCommandHandler {
     }
 
     /// Create audio source from config.
-    fn create_audio_source(&self, config: &Config) -> Result<Box<dyn AudioSource>, Response> {
+    fn create_audio_source(&self, config: &Config) -> Result<Box<dyn AudioSource>, Box<Response>> {
         let device_name = config.audio.device.as_deref();
         match CpalAudioSource::new(device_name) {
             Ok(source) => Ok(Box::new(source)),
             Err(e) => {
                 let device_info = device_name.unwrap_or("default");
-                Err(Response::Error {
+                Err(Box::new(Response::Error {
                     message: format!(
                         "Failed to create audio source for device '{}': {}",
                         device_info, e
                     ),
-                })
+                }))
             }
         }
     }
@@ -185,6 +213,7 @@ impl DaemonCommandHandler {
                     token_probabilities: vec![],
                     raw_text: None,
                     text_origin: TextOrigin::default(),
+                    corrector_name: None,
                 });
                 Response::Transcription { text }
             } else {
@@ -233,6 +262,19 @@ impl DaemonCommandHandler {
         let recording = self.state.is_recording().await;
         let model_name = Some(self.state.model_name().await);
         let language = Some(self.state.language().await);
+        let config = self.state.config.lock().await;
+        let error_correction_enabled = config.transcription.error_correction.enabled;
+        let error_correction_model = Some(config.transcription.error_correction.model.clone());
+        let error_correction_backend =
+            Some(format!("{:?}", config.transcription.error_correction.backend).to_lowercase());
+        let dictionary_language = Some(
+            config
+                .transcription
+                .error_correction
+                .dictionary_language
+                .clone(),
+        );
+        drop(config);
 
         Response::Status {
             recording,
@@ -242,6 +284,10 @@ impl DaemonCommandHandler {
             daemon_version: crate::version_string(),
             backend: self.state.backend.clone(),
             device: self.state.device.clone(),
+            error_correction_enabled,
+            error_correction_model,
+            error_correction_backend,
+            dictionary_language,
         }
     }
 
@@ -267,10 +313,13 @@ impl DaemonCommandHandler {
         };
 
         // Update config (for persistence and next recording)
-        let mut config = self.state.config.lock().await;
-        config.stt.language = language.clone();
-        config.stt.allowed_languages = new_langs.clone();
-        drop(config);
+        let lang = language.clone();
+        let allowed = new_langs.clone();
+        self.update_config("language", language, move |cfg| {
+            cfg.stt.language = lang;
+            cfg.stt.allowed_languages = allowed;
+        })
+        .await;
 
         // Update shared Arc (for live pipeline if recording)
         // RwLock poisoning is rare and unrecoverable; if it happens we want to fail loudly.
@@ -282,12 +331,6 @@ impl DaemonCommandHandler {
                 .write()
                 .expect("allowed_languages RwLock poisoned") = new_langs;
         }
-
-        // Emit event
-        self.state.emit(DaemonEvent::ConfigChanged {
-            key: "language".to_string(),
-            value: language,
-        });
 
         Response::Ok {
             message: "Language updated".to_string(),
@@ -393,6 +436,389 @@ impl DaemonCommandHandler {
         }
     }
 
+    /// Handle set error correction command.
+    async fn handle_set_error_correction(&self, enabled: bool) -> Response {
+        self.update_config("error_correction", enabled.to_string(), |cfg| {
+            cfg.transcription.error_correction.enabled = enabled;
+        })
+        .await;
+
+        Response::Ok {
+            message: if enabled {
+                "Error correction enabled".to_string()
+            } else {
+                "Error correction disabled".to_string()
+            },
+        }
+    }
+
+    /// Handle set correction model command.
+    async fn handle_set_correction_model(&self, model: String) -> Response {
+        use crate::config::CorrectionBackend;
+        use crate::models::correction_catalog::get_correction_model;
+
+        let config = self.state.config.lock().await;
+        if config.transcription.error_correction.backend == CorrectionBackend::Symspell {
+            drop(config);
+            return Response::Error {
+                message: "Cannot set correction model: current backend is symspell (only T5 backend supports model selection)".to_string(),
+            };
+        }
+        drop(config);
+
+        if get_correction_model(&model).is_none() {
+            return Response::Error {
+                message: format!(
+                    "Unknown correction model '{}'. Use list-correction-models to see available models.",
+                    model
+                ),
+            };
+        }
+
+        let m = model.clone();
+        self.update_config("correction_model", model, move |cfg| {
+            cfg.transcription.error_correction.model = m;
+        })
+        .await;
+
+        Response::Ok {
+            message: "Correction model updated".to_string(),
+        }
+    }
+
+    /// Handle list correction models command.
+    async fn handle_list_correction_models(&self) -> Response {
+        use crate::ipc::protocol::CorrectionModelInfoResponse;
+        use crate::models::correction_catalog::list_correction_models;
+
+        let config = self.state.config.lock().await;
+        let current = config.transcription.error_correction.model.clone();
+        let enabled = config.transcription.error_correction.enabled;
+        let backend = format!("{:?}", config.transcription.error_correction.backend).to_lowercase();
+        drop(config);
+
+        let models: Vec<CorrectionModelInfoResponse> =
+            list_correction_models().iter().map(Into::into).collect();
+
+        Response::CorrectionModels {
+            models,
+            current,
+            enabled,
+            backend: Some(backend),
+        }
+    }
+
+    /// Build correction station, dispatching to the configured backend.
+    async fn build_correction_station(
+        &self,
+        ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        use crate::config::CorrectionBackend;
+        match ec_config.backend {
+            CorrectionBackend::Symspell => self.build_symspell_station(ec_config).await,
+            CorrectionBackend::T5 => self.build_t5_station(ec_config),
+            CorrectionBackend::Hybrid => self.build_hybrid_station(ec_config).await,
+        }
+    }
+
+    #[cfg(feature = "symspell")]
+    async fn build_symspell_station(
+        &self,
+        ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        use crate::correction::symspell::SymSpellCorrector;
+        use crate::dictionary::{get_dictionary, has_dictionary};
+        use crate::models::download::{
+            dictionary_path, download_dictionary, is_dictionary_installed,
+        };
+
+        // Resolve language: "auto" → check STT language, fall back to "en"
+        let stt_lang = self.state.language().await;
+        let lang = if ec_config.dictionary_language == "auto" {
+            if has_dictionary(&stt_lang) {
+                stt_lang.clone()
+            } else {
+                "en".to_string()
+            }
+        } else {
+            ec_config.dictionary_language.clone()
+        };
+
+        // Validate dictionary exists in catalog
+        if get_dictionary(&lang).is_none() {
+            eprintln!(
+                "voicsh: no SymSpell dictionary for language '{}', skipping correction",
+                lang
+            );
+            return None;
+        }
+
+        // Auto-download if needed
+        if !is_dictionary_installed(&lang) {
+            eprintln!("Downloading SymSpell dictionary for '{}'...", lang);
+            if let Err(e) = download_dictionary(&lang, true).await {
+                eprintln!("voicsh: failed to download dictionary for '{}': {e}", lang);
+                return None;
+            }
+        }
+
+        let path = dictionary_path(&lang);
+        match SymSpellCorrector::from_file(&path, &lang) {
+            Ok(corrector) => {
+                eprintln!(
+                    "SymSpell correction active (language: {}, threshold {:.0}%)",
+                    lang,
+                    ec_config.confidence_threshold * 100.0
+                );
+                Some(crate::correction::station::CorrectionStation::new(
+                    Box::new(corrector),
+                    ec_config.clone(),
+                ))
+            }
+            Err(e) => {
+                eprintln!("voicsh: failed to load SymSpell dictionary: {e}");
+                None
+            }
+        }
+    }
+
+    #[cfg(not(feature = "symspell"))]
+    async fn build_symspell_station(
+        &self,
+        _ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        eprintln!("voicsh: symspell correction requested but 'symspell' feature not compiled in");
+        None
+    }
+
+    #[cfg(feature = "error-correction")]
+    fn build_t5_station(
+        &self,
+        ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        use crate::correction::candle_t5::CandleT5Corrector;
+        use crate::models::correction_catalog::get_correction_model;
+
+        let model_info = match get_correction_model(&ec_config.model) {
+            Some(info) => info,
+            None => {
+                eprintln!(
+                    "voicsh: unknown correction model '{}', skipping",
+                    ec_config.model
+                );
+                return None;
+            }
+        };
+        eprintln!(
+            "Loading correction model '{}'... (downloads ~{} MB on first use)",
+            ec_config.model, model_info.size_mb
+        );
+        match CandleT5Corrector::load(model_info) {
+            Ok(corrector) => {
+                eprintln!(
+                    "Error correction active: {} (threshold {:.0}%)",
+                    ec_config.model,
+                    ec_config.confidence_threshold * 100.0
+                );
+                Some(crate::correction::station::CorrectionStation::new(
+                    Box::new(corrector),
+                    ec_config.clone(),
+                ))
+            }
+            Err(e) => {
+                eprintln!("voicsh: failed to load correction model: {e}");
+                None
+            }
+        }
+    }
+
+    #[cfg(not(feature = "error-correction"))]
+    fn build_t5_station(
+        &self,
+        _ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        eprintln!("voicsh: T5 correction requested but 'error-correction' feature not compiled in");
+        None
+    }
+
+    #[cfg(all(feature = "error-correction", feature = "symspell"))]
+    async fn build_hybrid_station(
+        &self,
+        ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        use crate::correction::candle_t5::CandleT5Corrector;
+        use crate::correction::corrector::Corrector;
+        use crate::correction::hybrid::HybridCorrector;
+        use crate::correction::symspell::SymSpellCorrector;
+        use crate::dictionary::list_dictionaries;
+        use crate::models::correction_catalog::get_correction_model;
+        use crate::models::download::{
+            dictionary_path, download_dictionary, is_dictionary_installed,
+        };
+
+        let mut t5_corrector: Option<Box<dyn Corrector>> = None;
+
+        if let Some(model_info) = get_correction_model(&ec_config.model) {
+            eprintln!(
+                "Loading T5 correction model '{}'... (downloads ~{} MB on first use)",
+                ec_config.model, model_info.size_mb
+            );
+            match CandleT5Corrector::load(model_info) {
+                Ok(c) => t5_corrector = Some(Box::new(c)),
+                Err(e) => eprintln!("voicsh: failed to load T5 model: {e}"),
+            }
+        } else {
+            eprintln!(
+                "voicsh: unknown T5 model '{}', skipping neural correction",
+                ec_config.model
+            );
+        }
+
+        let mut symspell_correctors: std::collections::HashMap<String, Box<dyn Corrector>> =
+            std::collections::HashMap::new();
+
+        for dict in list_dictionaries() {
+            let lang = dict.language;
+
+            let whitelisted = ec_config.symspell_languages.iter().any(|l| l == lang);
+            if !whitelisted && !ec_config.symspell_languages.is_empty() {
+                continue;
+            }
+
+            if !is_dictionary_installed(lang) {
+                eprintln!("Downloading SymSpell dictionary for '{}'...", lang);
+                if download_dictionary(lang, true).await.is_err() {
+                    eprintln!("voicsh: failed to download dictionary: {}", lang);
+                    continue;
+                }
+            }
+
+            let path = dictionary_path(lang);
+            match SymSpellCorrector::from_file(&path, lang) {
+                Ok(c) => {
+                    symspell_correctors.insert(lang.to_string(), Box::new(c) as Box<dyn Corrector>);
+                    eprintln!("SymSpell loaded: {} ({})", lang, dict.display_name);
+                }
+                Err(e) => eprintln!("voicsh: failed to load SymSpell for {}: {}", lang, e),
+            }
+        }
+
+        if t5_corrector.is_none() && symspell_correctors.is_empty() {
+            eprintln!("voicsh: no correction backends available, skipping error correction");
+            return None;
+        }
+
+        let mut backend_list = Vec::new();
+        if t5_corrector.is_some() {
+            backend_list.push("T5".to_string());
+        }
+        if !symspell_correctors.is_empty() {
+            backend_list.push(format!("SymSpell ({} langs)", symspell_correctors.len()));
+        }
+
+        eprintln!(
+            "Hybrid correction active: {} (threshold {:.0}%)",
+            backend_list.join(", "),
+            ec_config.confidence_threshold * 100.0
+        );
+
+        let hybrid = HybridCorrector::new(
+            t5_corrector,
+            symspell_correctors,
+            ec_config.symspell_languages.clone(),
+        );
+        Some(crate::correction::station::CorrectionStation::new(
+            Box::new(hybrid),
+            ec_config.clone(),
+        ))
+    }
+
+    #[cfg(all(feature = "error-correction", not(feature = "symspell")))]
+    async fn build_hybrid_station(
+        &self,
+        ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        eprintln!(
+            "voicsh: hybrid mode requested but 'symspell' feature not compiled in, falling back to T5"
+        );
+        self.build_t5_station(ec_config)
+    }
+
+    #[cfg(all(not(feature = "error-correction"), feature = "symspell"))]
+    async fn build_hybrid_station(
+        &self,
+        ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        eprintln!(
+            "voicsh: hybrid mode requested but 'error-correction' feature not compiled in, loading SymSpell dictionaries"
+        );
+        use crate::correction::corrector::Corrector;
+        use crate::correction::hybrid::HybridCorrector;
+        use crate::correction::symspell::SymSpellCorrector;
+        use crate::dictionary::list_dictionaries;
+        use crate::models::download::{
+            dictionary_path, download_dictionary, is_dictionary_installed,
+        };
+
+        let mut symspell_correctors: std::collections::HashMap<String, Box<dyn Corrector>> =
+            std::collections::HashMap::new();
+
+        for dict in list_dictionaries() {
+            let lang = dict.language;
+
+            let whitelisted = ec_config.symspell_languages.iter().any(|l| l == lang);
+            if !whitelisted && !ec_config.symspell_languages.is_empty() {
+                continue;
+            }
+
+            if !is_dictionary_installed(lang) {
+                eprintln!("Downloading SymSpell dictionary for '{}'...", lang);
+                if download_dictionary(lang, true).await.is_err() {
+                    eprintln!("voicsh: failed to download dictionary: {}", lang);
+                    continue;
+                }
+            }
+
+            let path = dictionary_path(lang);
+            match SymSpellCorrector::from_file(&path, lang) {
+                Ok(c) => {
+                    symspell_correctors.insert(lang.to_string(), Box::new(c) as Box<dyn Corrector>);
+                    eprintln!("SymSpell loaded: {} ({})", lang, dict.display_name);
+                }
+                Err(e) => eprintln!("voicsh: failed to load SymSpell for {}: {}", lang, e),
+            }
+        }
+
+        if symspell_correctors.is_empty() {
+            eprintln!("voicsh: no SymSpell dictionaries available, skipping error correction");
+            return None;
+        }
+
+        eprintln!(
+            "Hybrid correction active: SymSpell ({} langs) (threshold {:.0}%)",
+            symspell_correctors.len(),
+            ec_config.confidence_threshold * 100.0
+        );
+
+        let hybrid =
+            HybridCorrector::new(symspell_correctors, ec_config.symspell_languages.clone());
+        Some(crate::correction::station::CorrectionStation::new(
+            Box::new(hybrid),
+            ec_config.clone(),
+        ))
+    }
+
+    #[cfg(not(any(feature = "error-correction", feature = "symspell")))]
+    async fn build_hybrid_station(
+        &self,
+        _ec_config: &crate::config::ErrorCorrectionConfig,
+    ) -> Option<crate::correction::station::CorrectionStation> {
+        eprintln!(
+            "voicsh: hybrid correction requested but neither 'error-correction' nor 'symspell' features compiled in"
+        );
+        None
+    }
+
     /// Handle list models command.
     async fn handle_list_models(&self) -> Response {
         use crate::ipc::protocol::ModelInfoResponse;
@@ -444,6 +870,11 @@ impl CommandHandler for DaemonCommandHandler {
             Command::ListLanguages => self.handle_list_languages().await,
             Command::SetModel { model } => self.handle_set_model(model).await,
             Command::ListModels => self.handle_list_models().await,
+            Command::SetErrorCorrection { enabled } => {
+                self.handle_set_error_correction(enabled).await
+            }
+            Command::SetCorrectionModel { model } => self.handle_set_correction_model(model).await,
+            Command::ListCorrectionModels => self.handle_list_correction_models().await,
         }
     }
 
@@ -485,6 +916,10 @@ mod tests {
                 daemon_version,
                 backend,
                 device,
+                error_correction_enabled,
+                error_correction_model,
+                error_correction_backend,
+                dictionary_language,
             } => {
                 assert!(!recording, "Should not be recording initially");
                 assert!(model_loaded, "Model should be loaded");
@@ -502,6 +937,25 @@ mod tests {
                 assert!(!backend.is_empty(), "Backend should not be empty");
                 // device may be None in test environment
                 let _ = device;
+                assert!(
+                    error_correction_enabled,
+                    "Error correction should be enabled by default"
+                );
+                assert_eq!(
+                    error_correction_model,
+                    Some("flan-t5-base".to_string()),
+                    "Default correction model should be flan-t5-base"
+                );
+                assert_eq!(
+                    error_correction_backend,
+                    Some("hybrid".to_string()),
+                    "Default correction backend should be hybrid"
+                );
+                assert_eq!(
+                    dictionary_language,
+                    Some("auto".to_string()),
+                    "Default dictionary language should be auto"
+                );
             }
             _ => panic!("Expected Status response"),
         }
@@ -559,7 +1013,11 @@ mod tests {
                 language,
                 daemon_version,
                 backend,
-                device,
+                error_correction_enabled,
+                error_correction_model,
+                error_correction_backend,
+                dictionary_language,
+                ..
             } => {
                 assert!(!recording);
                 assert!(model_loaded);
@@ -575,8 +1033,10 @@ mod tests {
                 );
                 assert!(!daemon_version.is_empty(), "Version should not be empty");
                 assert!(!backend.is_empty(), "Backend should not be empty");
-                // device may be None in test environment
-                let _ = device;
+                assert!(error_correction_enabled);
+                assert_eq!(error_correction_model, Some("flan-t5-base".to_string()));
+                assert_eq!(error_correction_backend, Some("hybrid".to_string()));
+                assert_eq!(dictionary_language, Some("auto".to_string()));
             }
             _ => panic!("Expected Status response"),
         }
@@ -616,7 +1076,7 @@ mod tests {
                 language,
                 daemon_version,
                 backend,
-                device,
+                ..
             } => {
                 assert!(!recording, "Should not be recording initially");
                 assert!(model_loaded, "Model should be loaded");
@@ -624,7 +1084,6 @@ mod tests {
                 assert!(language.is_some(), "Language should be present");
                 assert!(!daemon_version.is_empty(), "Version should not be empty");
                 assert!(!backend.is_empty(), "Backend should not be empty");
-                let _ = device;
             }
             _ => panic!("Expected Status response, got: {:?}", response),
         }
@@ -714,6 +1173,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         });
 
         // Should receive the event
@@ -866,7 +1326,7 @@ mod tests {
 
         let response = handler.get_status().await;
 
-        match response {
+        match &response {
             Response::Status { backend, .. } => {
                 assert!(
                     !backend.is_empty(),
@@ -889,20 +1349,22 @@ mod tests {
 
         // Should return an error
         match result {
-            Err(Response::Error { message }) => {
-                assert!(
-                    message.contains("Failed to create audio source"),
-                    "Error message should mention audio source failure"
-                );
-                assert!(
-                    message.contains("nonexistent-audio-device-12345"),
-                    "Error message should include device name"
-                );
-            }
+            Err(boxed) => match *boxed {
+                Response::Error { message } => {
+                    assert!(
+                        message.contains("Failed to create audio source"),
+                        "Error message should mention audio source failure"
+                    );
+                    assert!(
+                        message.contains("nonexistent-audio-device-12345"),
+                        "Error message should include device name"
+                    );
+                }
+                _ => panic!("Expected Response::Error"),
+            },
             Ok(_) => {
                 // Might succeed if the audio backend is very permissive
             }
-            Err(_) => panic!("Expected Response::Error"),
         }
     }
 
@@ -1078,6 +1540,7 @@ mod tests {
             token_probabilities: vec![],
             raw_text: None,
             text_origin: TextOrigin::default(),
+            corrector_name: None,
         });
 
         // Should receive
@@ -1124,6 +1587,249 @@ mod tests {
         assert!(
             matches!(response, Response::Models { .. }),
             "ListModels should return Models"
+        );
+    }
+
+    // Error correction handler tests
+
+    #[tokio::test]
+    async fn test_handle_set_error_correction_enable() {
+        let handler = create_test_handler();
+        let response = handler.handle_set_error_correction(true).await;
+
+        match response {
+            Response::Ok { message } => {
+                assert_eq!(message, "Error correction enabled");
+            }
+            _ => panic!("Expected Ok response, got: {:?}", response),
+        }
+
+        let config = handler.state.config.lock().await;
+        assert!(
+            config.transcription.error_correction.enabled,
+            "Config should reflect enabled correction"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_error_correction_disable() {
+        let handler = create_test_handler();
+        // First enable, then disable
+        handler.handle_set_error_correction(true).await;
+        let response = handler.handle_set_error_correction(false).await;
+
+        match response {
+            Response::Ok { message } => {
+                assert_eq!(message, "Error correction disabled");
+            }
+            _ => panic!("Expected Ok response, got: {:?}", response),
+        }
+
+        let config = handler.state.config.lock().await;
+        assert!(
+            !config.transcription.error_correction.enabled,
+            "Config should reflect disabled correction"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_error_correction_emits_event() {
+        let handler = create_test_handler();
+        let mut rx = handler.state.subscribe();
+
+        handler.handle_set_error_correction(true).await;
+
+        let event = rx.recv().await.expect("Should receive event");
+        assert_eq!(
+            event,
+            DaemonEvent::ConfigChanged {
+                key: "error_correction".to_string(),
+                value: "true".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_correction_model_valid() {
+        let handler = create_test_handler();
+        // Switch to T5 backend so model selection is allowed
+        handler
+            .state
+            .config
+            .lock()
+            .await
+            .transcription
+            .error_correction
+            .backend = crate::config::CorrectionBackend::T5;
+        let response = handler
+            .handle_set_correction_model("flan-t5-base".to_string())
+            .await;
+
+        match response {
+            Response::Ok { message } => {
+                assert_eq!(message, "Correction model updated");
+            }
+            _ => panic!("Expected Ok response, got: {:?}", response),
+        }
+
+        let config = handler.state.config.lock().await;
+        assert_eq!(
+            config.transcription.error_correction.model, "flan-t5-base",
+            "Config should reflect new correction model"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_correction_model_invalid() {
+        let handler = create_test_handler();
+        // Switch to T5 backend so we test model name validation (not backend rejection)
+        handler
+            .state
+            .config
+            .lock()
+            .await
+            .transcription
+            .error_correction
+            .backend = crate::config::CorrectionBackend::T5;
+        let response = handler
+            .handle_set_correction_model("nonexistent".to_string())
+            .await;
+
+        match response {
+            Response::Error { message } => {
+                assert!(
+                    message.contains("Unknown correction model"),
+                    "Error should mention unknown model: {}",
+                    message
+                );
+                assert!(
+                    message.contains("nonexistent"),
+                    "Error should mention the model name: {}",
+                    message
+                );
+            }
+            _ => panic!("Expected Error response, got: {:?}", response),
+        }
+
+        // Config should not have changed
+        let config = handler.state.config.lock().await;
+        assert_eq!(
+            config.transcription.error_correction.model, "flan-t5-base",
+            "Config should still have default model"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_list_correction_models() {
+        let handler = create_test_handler();
+        let response = handler.handle_list_correction_models().await;
+
+        match response {
+            Response::CorrectionModels {
+                models,
+                current,
+                enabled,
+                ..
+            } => {
+                assert_eq!(models.len(), 3, "Should have 3 correction models");
+                assert_eq!(current, "flan-t5-base", "Default should be flan-t5-base");
+                assert!(enabled, "Should be enabled by default");
+
+                // Verify model structure
+                let names: Vec<&str> = models.iter().map(|m| m.name.as_str()).collect();
+                assert!(names.contains(&"flan-t5-small"));
+                assert!(names.contains(&"flan-t5-base"));
+                assert!(names.contains(&"flan-t5-large"));
+
+                // Verify sizes are ordered
+                for window in models.windows(2) {
+                    assert!(
+                        window[0].size_mb < window[1].size_mb,
+                        "Models should be ordered by size"
+                    );
+                }
+            }
+            _ => panic!("Expected CorrectionModels response, got: {:?}", response),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_status_includes_error_correction_fields() {
+        let handler = create_test_handler();
+
+        let response = handler.get_status().await;
+
+        match response {
+            Response::Status {
+                error_correction_enabled,
+                error_correction_model,
+                error_correction_backend,
+                dictionary_language,
+                ..
+            } => {
+                assert!(
+                    error_correction_enabled,
+                    "Status should show correction enabled by default"
+                );
+                assert_eq!(
+                    error_correction_model,
+                    Some("flan-t5-base".to_string()),
+                    "Status should show current correction model"
+                );
+                assert_eq!(
+                    error_correction_backend,
+                    Some("hybrid".to_string()),
+                    "Status should show current correction backend"
+                );
+                assert_eq!(
+                    dictionary_language,
+                    Some("auto".to_string()),
+                    "Status should show current dictionary language"
+                );
+            }
+            _ => panic!("Expected Status response, got: {:?}", response),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_correction_commands_in_trait_impl() {
+        let handler = create_test_handler();
+
+        // Test SetErrorCorrection via trait
+        let response = handler
+            .handle(Command::SetErrorCorrection { enabled: true })
+            .await;
+        assert!(
+            matches!(response, Response::Ok { .. }),
+            "SetErrorCorrection should return Ok"
+        );
+
+        // Switch to T5 backend so model selection is allowed
+        handler
+            .state
+            .config
+            .lock()
+            .await
+            .transcription
+            .error_correction
+            .backend = crate::config::CorrectionBackend::T5;
+
+        // Test SetCorrectionModel via trait
+        let response = handler
+            .handle(Command::SetCorrectionModel {
+                model: "flan-t5-base".to_string(),
+            })
+            .await;
+        assert!(
+            matches!(response, Response::Ok { .. }),
+            "SetCorrectionModel should return Ok"
+        );
+
+        // Test ListCorrectionModels via trait
+        let response = handler.handle(Command::ListCorrectionModels).await;
+        assert!(
+            matches!(response, Response::CorrectionModels { .. }),
+            "ListCorrectionModels should return CorrectionModels"
         );
     }
 }

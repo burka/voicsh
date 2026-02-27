@@ -77,11 +77,66 @@ impl Default for VoiceCommandConfig {
     }
 }
 
+/// Error correction backend selection
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum CorrectionBackend {
+    /// Dictionary-based correction using SymSpell (fast, ~20 MB memory)
+    Symspell,
+    /// Neural correction using Flan-T5 (English only, requires model download)
+    T5,
+    /// Hybrid: T5 for English, SymSpell for other languages
+    #[default]
+    Hybrid,
+}
+
+/// Error correction configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ErrorCorrectionConfig {
+    /// Enable post-ASR error correction.
+    pub enabled: bool,
+    /// Backend to use for correction
+    pub backend: CorrectionBackend,
+    /// T5 model size: "flan-t5-small" (64 MB), "flan-t5-base" (263 MB), "flan-t5-large" (852 MB).
+    pub model: String,
+    /// Only correct tokens with probability below this threshold (0.0-1.0).
+    pub confidence_threshold: f32,
+    /// Dictionary language for SymSpell backend.
+    /// "auto" = match STT language if dictionary exists, fall back to "en".
+    pub dictionary_language: String,
+    /// Languages enabled for SymSpell correction (only used with hybrid backend).
+    /// SymSpell lowercases all output, so only enable for languages where
+    /// lowercase is acceptable: Hebrew (he), Arabic (ar), Chinese (zh), Japanese (ja), Korean (ko).
+    /// Empty or "auto" = enable all available languages.
+    pub symspell_languages: Vec<String>,
+}
+
+impl Default for ErrorCorrectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            backend: CorrectionBackend::Hybrid,
+            model: "flan-t5-base".to_string(),
+            confidence_threshold: 0.65,
+            dictionary_language: "auto".to_string(),
+            symspell_languages: vec![
+                "he".to_string(),
+                "ar".to_string(),
+                "zh".to_string(),
+                "ja".to_string(),
+                "ko".to_string(),
+            ],
+        }
+    }
+}
+
 /// Transcription post-processing configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct TranscriptionConfig {
     pub hallucination_filters: HallucinationFilterConfig,
+    pub error_correction: ErrorCorrectionConfig,
 }
 
 /// Hallucination filter configuration.
@@ -505,6 +560,17 @@ impl Config {
                 examples.join(", ")
             ));
         }
+        out.push('\n');
+
+        out.push_str("[transcription.error_correction]\n");
+        out.push_str("# enabled = true  # Post-ASR error correction\n");
+        out.push_str("# backend = \"hybrid\"  # Backend: t5 (English, neural), symspell (multi-language, dictionary), hybrid (t5 for en, symspell for others)\n");
+        out.push_str("# model = \"flan-t5-base\"  # T5 model (only used when backend = \"t5\" or \"hybrid\")\n");
+        out.push_str(
+            "# confidence_threshold = 0.65  # Only correct tokens below this probability (0.0-1.0)\n",
+        );
+        out.push_str("# dictionary_language = \"auto\"  # SymSpell dictionary language: auto, en, de, es, fr, he, it, ru\n");
+        out.push_str("# symspell_languages = [\"he\", \"ar\", \"zh\", \"ja\", \"ko\"]  # Languages for SymSpell in hybrid mode (SymSpell lowercases output, so use with languages where lowercase is acceptable)\n");
         out.push('\n');
 
         out.push_str("[transcription.hallucination_filters]\n");
@@ -1948,6 +2014,274 @@ mod tests {
         assert!(
             resolved.contains(&"okay".to_string()),
             "Built-in suspect phrases should still be present"
+        );
+    }
+
+    // ── Error correction config tests ─────────────────────────────────
+
+    #[test]
+    fn test_error_correction_config_defaults() {
+        let config = ErrorCorrectionConfig::default();
+        assert!(config.enabled, "Should be enabled by default");
+        assert_eq!(config.backend, CorrectionBackend::Hybrid);
+        assert_eq!(config.model, "flan-t5-base");
+        assert_eq!(config.confidence_threshold, 0.65);
+        assert_eq!(
+            config.symspell_languages,
+            vec!["he", "ar", "zh", "ja", "ko"]
+        );
+    }
+
+    #[test]
+    fn test_error_correction_config_from_toml() {
+        let toml_content = r#"
+            [transcription.error_correction]
+            enabled = true
+            backend = "t5"
+            model = "flan-t5-base"
+            confidence_threshold = 0.5
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert!(config.transcription.error_correction.enabled);
+        assert_eq!(
+            config.transcription.error_correction.backend,
+            CorrectionBackend::T5
+        );
+        assert_eq!(config.transcription.error_correction.model, "flan-t5-base");
+        assert_eq!(
+            config.transcription.error_correction.confidence_threshold,
+            0.5
+        );
+    }
+
+    #[test]
+    fn test_error_correction_config_omitted_uses_defaults() {
+        let toml_content = r#"
+            [stt]
+            model = "small.en"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert!(config.transcription.error_correction.enabled);
+        assert_eq!(
+            config.transcription.error_correction.backend,
+            CorrectionBackend::Hybrid
+        );
+        assert_eq!(config.transcription.error_correction.model, "flan-t5-base");
+        assert_eq!(
+            config.transcription.error_correction.confidence_threshold,
+            0.65
+        );
+    }
+
+    #[test]
+    fn test_error_correction_get_value_by_path() {
+        let config = Config::default();
+        let enabled = config
+            .get_value_by_path("transcription.error_correction.enabled")
+            .unwrap();
+        assert_eq!(enabled, "true");
+
+        let model = config
+            .get_value_by_path("transcription.error_correction.model")
+            .unwrap();
+        assert_eq!(model, "flan-t5-base");
+
+        let threshold: f64 = config
+            .get_value_by_path("transcription.error_correction.confidence_threshold")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            (threshold - 0.65).abs() < 0.001,
+            "threshold should be ~0.65, got {threshold}"
+        );
+    }
+
+    #[test]
+    fn test_error_correction_set_value_by_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config::default().save(&path).unwrap();
+
+        Config::set_value_by_path(&path, "transcription.error_correction.enabled", "true").unwrap();
+        let reloaded = Config::load(&path).unwrap();
+        assert!(reloaded.transcription.error_correction.enabled);
+
+        Config::set_value_by_path(
+            &path,
+            "transcription.error_correction.model",
+            "flan-t5-large",
+        )
+        .unwrap();
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(
+            reloaded.transcription.error_correction.model,
+            "flan-t5-large"
+        );
+    }
+
+    #[test]
+    fn test_error_correction_in_dump_template() {
+        let template = Config::dump_template();
+        assert!(
+            template.contains("[transcription.error_correction]"),
+            "Missing [transcription.error_correction] section"
+        );
+        assert!(
+            template.contains("symspell"),
+            "Missing symspell backend in template"
+        );
+        assert!(
+            template.contains("flan-t5-base"),
+            "Missing default model in template"
+        );
+        assert!(
+            template.contains("confidence_threshold"),
+            "Missing confidence_threshold in template"
+        );
+    }
+
+    #[test]
+    fn test_error_correction_roundtrip() {
+        let config = Config {
+            transcription: TranscriptionConfig {
+                error_correction: ErrorCorrectionConfig {
+                    enabled: true,
+                    backend: CorrectionBackend::T5,
+                    model: "flan-t5-large".to_string(),
+                    confidence_threshold: 0.5,
+                    dictionary_language: "auto".to_string(),
+                    symspell_languages: Default::default(),
+                },
+                ..TranscriptionConfig::default()
+            },
+            ..Config::default()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(
+            reloaded.transcription.error_correction,
+            config.transcription.error_correction
+        );
+    }
+
+    #[test]
+    fn test_correction_backend_from_toml() {
+        // Test loading symspell backend
+        let toml = r#"
+            [transcription.error_correction]
+            backend = "symspell"
+        "#;
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml.as_bytes()).unwrap();
+        let config = Config::load(temp_file.path()).unwrap();
+        assert_eq!(
+            config.transcription.error_correction.backend,
+            CorrectionBackend::Symspell
+        );
+
+        // Test loading t5 backend
+        let toml = r#"
+            [transcription.error_correction]
+            backend = "t5"
+        "#;
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml.as_bytes()).unwrap();
+        let config = Config::load(temp_file.path()).unwrap();
+        assert_eq!(
+            config.transcription.error_correction.backend,
+            CorrectionBackend::T5
+        );
+    }
+
+    #[test]
+    fn test_correction_backend_default_is_hybrid() {
+        let config = Config::default();
+        assert_eq!(
+            config.transcription.error_correction.backend,
+            CorrectionBackend::Hybrid
+        );
+    }
+
+    #[test]
+    fn test_error_correction_config_dictionary_language_default() {
+        let config = ErrorCorrectionConfig::default();
+        assert_eq!(config.dictionary_language, "auto");
+    }
+
+    #[test]
+    fn test_error_correction_config_dictionary_language_from_toml() {
+        let toml_content = r#"
+            [transcription.error_correction]
+            enabled = true
+            backend = "symspell"
+            dictionary_language = "de"
+        "#;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_content.as_bytes()).unwrap();
+
+        let config = Config::load(temp_file.path()).unwrap();
+        assert_eq!(
+            config.transcription.error_correction.dictionary_language,
+            "de"
+        );
+    }
+
+    #[test]
+    fn test_error_correction_config_dictionary_language_roundtrip() {
+        let config = Config {
+            transcription: TranscriptionConfig {
+                error_correction: ErrorCorrectionConfig {
+                    enabled: true,
+                    backend: CorrectionBackend::Symspell,
+                    model: "flan-t5-base".to_string(),
+                    confidence_threshold: 0.85,
+                    dictionary_language: "fr".to_string(),
+                    symspell_languages: Default::default(),
+                },
+                ..TranscriptionConfig::default()
+            },
+            ..Config::default()
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        config.save(&path).unwrap();
+
+        let reloaded = Config::load(&path).unwrap();
+        assert_eq!(
+            reloaded.transcription.error_correction.dictionary_language,
+            "fr"
+        );
+    }
+
+    #[test]
+    fn test_dump_template_contains_dictionary_language() {
+        let template = Config::dump_template();
+        assert!(
+            template.contains("dictionary_language"),
+            "Missing dictionary_language field in template"
+        );
+        assert!(
+            template.contains("auto"),
+            "Missing 'auto' default value in template"
+        );
+        assert!(
+            template.contains("en, de, es, fr, he, it, ru"),
+            "Missing language list in template"
         );
     }
 }
