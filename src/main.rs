@@ -1,17 +1,25 @@
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use owo_colors::OwoColorize;
+#[cfg(all(feature = "cpal-audio", feature = "model-download"))]
 use std::io::IsTerminal;
+#[cfg(all(feature = "cpal-audio", feature = "model-download"))]
 use voicsh::app::{RecordConfig, run_record_command};
+#[cfg(feature = "cpal-audio")]
 use voicsh::audio::capture::list_devices;
-use voicsh::cli::{Cli, ConfigAction, ModelsAction};
+#[cfg(feature = "model-download")]
+use voicsh::cli::ModelsAction;
+use voicsh::cli::{Cli, ConfigAction, DebugAction};
 use voicsh::config::Config;
+#[cfg(all(feature = "cpal-audio", feature = "model-download"))]
 use voicsh::daemon::run_daemon;
 use voicsh::diagnostics::check_dependencies;
 use voicsh::ipc::client::send_command;
 use voicsh::ipc::protocol::{Command, Response};
 use voicsh::ipc::server::IpcServer;
+#[cfg(feature = "model-download")]
 use voicsh::models::catalog::{get_model, list_models, resolve_name};
+#[cfg(feature = "model-download")]
 use voicsh::models::download::{download_model, format_model_info, is_model_installed};
 
 #[tokio::main]
@@ -19,6 +27,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        #[cfg(all(feature = "cpal-audio", feature = "model-download"))]
         None => {
             let config = load_config(cli.config.as_deref())?;
             if std::io::stdin().is_terminal() {
@@ -54,15 +63,24 @@ async fn main() -> Result<()> {
                 .await?;
             }
         }
+        #[cfg(not(all(feature = "cpal-audio", feature = "model-download")))]
+        None => {
+            eprintln!("Error: mic/pipe mode requires features 'cpal-audio' and 'model-download'");
+            eprintln!("Rebuild with: cargo build --features full");
+            std::process::exit(1);
+        }
+        #[cfg(feature = "cpal-audio")]
         Some(voicsh::cli::Commands::Devices) => {
             list_audio_devices()?;
         }
+        #[cfg(feature = "model-download")]
         Some(voicsh::cli::Commands::Models { action }) => {
             handle_models_command(action, cli.config.as_deref()).await?;
         }
         Some(voicsh::cli::Commands::Check) => {
             check_dependencies();
         }
+        #[cfg(all(feature = "cpal-audio", feature = "model-download"))]
         Some(voicsh::cli::Commands::Daemon { socket }) => {
             let config = load_config(cli.config.as_deref())?;
             run_daemon(config, socket, cli.quiet, cli.verbose, cli.no_download).await?;
@@ -90,6 +108,9 @@ async fn main() -> Result<()> {
         }
         Some(voicsh::cli::Commands::UninstallGnomeExtension) => {
             voicsh::gnome_extension::uninstall_gnome_extension()?;
+        }
+        Some(voicsh::cli::Commands::Debug { action }) => {
+            handle_debug_command(action);
         }
         Some(voicsh::cli::Commands::Config { action }) => {
             handle_config_command(action, cli.config.as_deref())?;
@@ -152,6 +173,7 @@ async fn main() -> Result<()> {
 /// 1. Custom config path from CLI (--config)
 /// 2. Default config path (~/.config/voicsh/config.toml)
 /// 3. Built-in defaults with environment variable overrides
+#[cfg(all(feature = "cpal-audio", feature = "model-download"))]
 fn load_config(custom_path: Option<&std::path::Path>) -> Result<Config> {
     let config = if let Some(path) = custom_path {
         // Load from custom path
@@ -167,6 +189,7 @@ fn load_config(custom_path: Option<&std::path::Path>) -> Result<Config> {
 }
 
 /// List available audio input devices.
+#[cfg(feature = "cpal-audio")]
 fn list_audio_devices() -> Result<()> {
     let devices = list_devices()?;
 
@@ -184,6 +207,7 @@ fn list_audio_devices() -> Result<()> {
 }
 
 /// Handle model management commands.
+#[cfg(feature = "model-download")]
 async fn handle_models_command(
     action: ModelsAction,
     custom_path: Option<&std::path::Path>,
@@ -348,6 +372,87 @@ fn handle_config_command(
         }
     }
     Ok(())
+}
+
+/// Handle debug diagnostic commands.
+fn handle_debug_command(action: DebugAction) {
+    match action {
+        DebugAction::FocusedWindow { follow } => {
+            if follow {
+                follow_focused_window();
+            } else {
+                print_focused_window_info();
+            }
+        }
+    }
+}
+
+/// Print focused window info once (one-shot mode).
+fn print_focused_window_info() {
+    let info = voicsh::inject::focused_window::detect_focused_window_info();
+    println!("Focused window:");
+    println!(
+        "  {:<14} {}",
+        "App ID:",
+        if info.app_id.is_empty() {
+            "(none)"
+        } else {
+            &info.app_id
+        }
+    );
+    println!(
+        "  {:<14} {}",
+        "PID:",
+        info.pid
+            .map(|p| p.to_string())
+            .as_deref()
+            .unwrap_or("(unknown)")
+    );
+    println!("  {:<14} {}", "Toolkit:", info.toolkit);
+    println!("  {:<14} {:?}", "Window kind:", info.window_kind);
+    println!("  {:<14} {}", "Detected via:", info.detection_method);
+}
+
+/// Poll focused window and print on change (Ctrl+C to stop).
+fn follow_focused_window() {
+    use voicsh::inject::focused_window::{detect_focused_window_info, reset_broken_flags};
+
+    println!("Following focused window changes... (Ctrl+C to stop)");
+
+    let mut prev: Option<(String, Option<u32>)> = None;
+
+    loop {
+        // Reset broken-backend flags so every poll retries all backends.
+        // The toolkit cache is preserved across iterations to avoid redundant
+        // /proc reads for windows whose PID has not changed.
+        reset_broken_flags();
+        let info = detect_focused_window_info();
+
+        let changed = match &prev {
+            None => true,
+            Some((app_id, pid)) => info.app_id != *app_id || info.pid != *pid,
+        };
+
+        if changed {
+            let pid_str = info
+                .pid
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "-".to_string());
+            let app = if info.app_id.is_empty() {
+                "(none)"
+            } else {
+                &info.app_id
+            };
+            println!(
+                "{} | pid={} | {} | {:?} | {}",
+                app, pid_str, info.toolkit, info.window_kind, info.detection_method,
+            );
+
+            prev = Some((info.app_id, info.pid));
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
 }
 
 /// Send IPC command to daemon and handle response.

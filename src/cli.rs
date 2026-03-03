@@ -90,9 +90,11 @@ fn parse_buffer_secs(s: &str) -> Result<u64, String> {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// List available audio input devices
+    #[cfg(feature = "cpal-audio")]
     Devices,
 
     /// Manage Whisper models
+    #[cfg(feature = "model-download")]
     Models {
         /// Action to perform
         #[command(subcommand)]
@@ -103,6 +105,7 @@ pub enum Commands {
     Check,
 
     /// Start the daemon (foreground process for systemd)
+    #[cfg(all(feature = "cpal-audio", feature = "model-download"))]
     Daemon {
         /// Path to Unix socket (default: $XDG_RUNTIME_DIR/voicsh.sock)
         #[arg(long, value_name = "PATH")]
@@ -199,6 +202,12 @@ pub enum Commands {
         action: ConfigAction,
     },
 
+    /// Diagnostic tools for debugging
+    Debug {
+        #[command(subcommand)]
+        action: DebugAction,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
@@ -242,6 +251,17 @@ pub enum ConfigAction {
     },
     /// Dump a commented configuration template
     Dump,
+}
+
+/// Debug diagnostic actions
+#[derive(Subcommand, Debug)]
+pub enum DebugAction {
+    /// Show focused window info (app ID, PID, toolkit, window kind)
+    FocusedWindow {
+        /// Continuously monitor focus changes (poll every 500ms, print on change)
+        #[arg(long)]
+        follow: bool,
+    },
 }
 
 /// Model management actions
@@ -323,6 +343,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "cpal-audio")]
     fn test_parse_devices() {
         let cli = Cli::try_parse_from(["voicsh", "devices"]).unwrap();
         match cli.command {
@@ -339,6 +360,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "cpal-audio")]
     fn test_parse_global_quiet() {
         let cli = Cli::try_parse_from(["voicsh", "--quiet", "devices"]).unwrap();
         assert!(cli.quiet);
@@ -383,6 +405,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "cpal-audio")]
     fn test_global_options_after_command() {
         // Global options should work before or after the command
         let cli =
@@ -416,6 +439,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "model-download")]
     fn test_parse_models_list() {
         let cli = Cli::try_parse_from(["voicsh", "models", "list"]).unwrap();
         match cli.command {
@@ -428,6 +452,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "model-download")]
     fn test_parse_models_install() {
         let cli = Cli::try_parse_from(["voicsh", "models", "install", "base.en"]).unwrap();
         match cli.command {
@@ -442,6 +467,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "model-download")]
     fn test_parse_models_install_different_model() {
         let cli = Cli::try_parse_from(["voicsh", "models", "install", "tiny"]).unwrap();
         match cli.command {
@@ -456,6 +482,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "model-download")]
     fn test_models_requires_subcommand() {
         let result = Cli::try_parse_from(["voicsh", "models"]);
         let err = result.unwrap_err();
@@ -466,6 +493,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "model-download")]
     fn test_models_install_requires_name() {
         let result = Cli::try_parse_from(["voicsh", "models", "install"]);
         let err = result.unwrap_err();
@@ -477,6 +505,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "model-download")]
     fn test_parse_models_use() {
         let cli = Cli::try_parse_from(["voicsh", "models", "use", "tiny.en"]).unwrap();
         match cli.command {
@@ -491,6 +520,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "model-download")]
     fn test_models_use_requires_name() {
         let result = Cli::try_parse_from(["voicsh", "models", "use"]);
         let err = result.unwrap_err();
@@ -537,6 +567,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(all(feature = "cpal-audio", feature = "model-download"))]
     fn test_parse_daemon() {
         let cli = Cli::try_parse_from(["voicsh", "daemon"]).unwrap();
         match cli.command {
@@ -548,6 +579,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(all(feature = "cpal-audio", feature = "model-download"))]
     fn test_parse_daemon_with_socket() {
         let cli = Cli::try_parse_from(["voicsh", "daemon", "--socket", "/tmp/test.sock"]).unwrap();
         match cli.command {
@@ -1095,5 +1127,43 @@ mod tests {
     fn test_parse_injection_backend_portal() {
         let cli = Cli::try_parse_from(["voicsh", "--injection-backend", "portal"]).unwrap();
         assert_eq!(cli.injection_backend.as_deref(), Some("portal"));
+    }
+
+    // ── Debug command tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_debug_focused_window() {
+        let cli = Cli::try_parse_from(["voicsh", "debug", "focused-window"]).unwrap();
+        match cli.command {
+            Some(Commands::Debug { action }) => match action {
+                DebugAction::FocusedWindow { follow } => {
+                    assert!(!follow);
+                }
+            },
+            _ => panic!("Expected Debug FocusedWindow command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_debug_focused_window_follow() {
+        let cli = Cli::try_parse_from(["voicsh", "debug", "focused-window", "--follow"]).unwrap();
+        match cli.command {
+            Some(Commands::Debug { action }) => match action {
+                DebugAction::FocusedWindow { follow } => {
+                    assert!(follow);
+                }
+            },
+            _ => panic!("Expected Debug FocusedWindow command"),
+        }
+    }
+
+    #[test]
+    fn test_debug_requires_subcommand() {
+        let result = Cli::try_parse_from(["voicsh", "debug"]);
+        let err = result.unwrap_err();
+        assert_eq!(
+            err.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
     }
 }

@@ -16,6 +16,17 @@ const ICON_DISCONNECTED = 'microphone-sensitivity-muted-symbolic';
 const ICON_IDLE = 'microphone-sensitivity-high-symbolic';
 const ICON_RECORDING = 'audio-input-microphone-symbolic';
 
+const FOCUSED_WINDOW_IFACE = `
+<node>
+  <interface name="org.gnome.Shell.Extensions.voicsh">
+    <method name="GetFocusedWindow">
+      <arg type="s" name="app_id" direction="out"/>
+      <arg type="u" name="pid" direction="out"/>
+      <arg type="s" name="wm_class" direction="out"/>
+    </method>
+  </interface>
+</node>`;
+
 export default class VoicshExtension extends Extension {
     enable() {
         this._indicator = new PanelMenu.Button(0.0, 'voicsh', false);
@@ -143,8 +154,22 @@ export default class VoicshExtension extends Extension {
             () => this._sendCommand('toggle'),
         );
 
+        // Export D-Bus interface for focused window queries
+        this._dbusImpl = Gio.DBusExportedObject.wrapJSObject(FOCUSED_WINDOW_IFACE, this);
+        this._dbusImpl.export(Gio.DBus.session, '/org/gnome/Shell/Extensions/voicsh');
+
         // Start follow mode (persistent connection)
         this._startFollow();
+    }
+
+    GetFocusedWindow() {
+        const focusWindow = global.display.focus_window;
+        if (!focusWindow) return ['', 0, ''];
+        return [
+            focusWindow.get_sandboxed_app_id() || '',
+            focusWindow.get_pid() || 0,
+            focusWindow.get_wm_class() || '',
+        ];
     }
 
     disable() {
@@ -158,6 +183,11 @@ export default class VoicshExtension extends Extension {
         this._stopPulse();
 
         Main.wm.removeKeybinding('toggle-shortcut');
+
+        if (this._dbusImpl) {
+            this._dbusImpl.unexport();
+            this._dbusImpl = null;
+        }
 
         if (this._indicator) {
             this._indicator.destroy();
