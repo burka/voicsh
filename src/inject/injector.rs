@@ -254,14 +254,34 @@ impl<E: CommandExecutor> TextInjector<E> {
     /// Arch: `sudo pacman -S wtype`
     pub fn inject_direct(&self, text: &str) -> Result<()> {
         match self.backend {
+            InjectionBackend::Portal => {
+                #[cfg(feature = "portal")]
+                {
+                    let Some(portal) = &self.portal else {
+                        return Err(VoicshError::InjectionFailed {
+                            message: "Portal backend selected but portal session not available."
+                                .to_string(),
+                        });
+                    };
+                    portal.type_text(text)
+                }
+                #[cfg(not(feature = "portal"))]
+                Err(VoicshError::InjectionFailed {
+                    message:
+                        "Portal backend requires the portal feature. Rebuild with --features portal."
+                            .to_string(),
+                })
+            }
             InjectionBackend::Wtype => self.run_wtype(&[text]),
             InjectionBackend::Ydotool => self.run_ydotool(&["type", "--delay", "10", text]),
-            InjectionBackend::Portal => Err(VoicshError::InjectionFailed {
-                message:
-                    "Portal backend does not support direct text injection. Use clipboard method."
-                        .to_string(),
-            }),
             InjectionBackend::Auto => {
+                #[cfg(feature = "portal")]
+                if let Some(portal) = &self.portal
+                    && portal.type_text(text).is_ok()
+                {
+                    return Ok(());
+                }
+
                 if self.executor.execute("wtype", &[text]).is_ok() {
                     return Ok(());
                 }

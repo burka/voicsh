@@ -220,7 +220,7 @@ impl Default for SttConfig {
 impl Default for InjectionConfig {
     fn default() -> Self {
         Self {
-            method: InjectionMethod::Clipboard,
+            method: InjectionMethod::Direct,
             paste_key: "auto".to_string(),
             backend: InjectionBackend::Auto,
         }
@@ -515,7 +515,7 @@ impl Config {
         out.push('\n');
 
         out.push_str("[injection]\n");
-        out.push_str("# method = \"Clipboard\"  # Injection method: Clipboard or Direct\n");
+        out.push_str("# method = \"Direct\"  # Injection method: Direct (keysym typing) or Clipboard (paste via wl-copy)\n");
         out.push_str("# paste_key = \"auto\"  # Paste key combo (auto, ctrl+v, ctrl+shift+v)\n");
         out.push_str("# backend = \"auto\"  # Injection backend: auto, portal, wtype, ydotool\n");
         out.push('\n');
@@ -849,7 +849,7 @@ mod tests {
         assert_eq!(config.stt.language, "auto");
 
         // Injection defaults
-        assert_eq!(config.injection.method, InjectionMethod::Clipboard);
+        assert_eq!(config.injection.method, InjectionMethod::Direct);
         assert_eq!(config.injection.paste_key, "auto");
     }
 
@@ -933,7 +933,7 @@ mod tests {
         assert_eq!(config.audio.vad_threshold, 0.02);
         assert_eq!(config.audio.silence_duration_ms, 1500);
         assert_eq!(config.stt.language, "auto");
-        assert_eq!(config.injection.method, InjectionMethod::Clipboard);
+        assert_eq!(config.injection.method, InjectionMethod::Direct);
         assert_eq!(config.injection.paste_key, "auto");
     }
 

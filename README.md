@@ -78,7 +78,7 @@ Override in config: `[injection]` section — run `voicsh config dump` to see al
 
 `wl-clipboard` (`wl-copy`) is required for clipboard-based injection.
 
-> **Note:** wtype/ydotool inject via clipboard paste — this **overwrites your clipboard**. Portal types directly without touching the clipboard.
+> **Note:** The default injection method (`Direct`) types text via keysym events — no clipboard involved. If you set `method = "Clipboard"` (or your backend requires it), `wl-copy` is used, which **overwrites your clipboard**.
 
 ## Voice commands
 

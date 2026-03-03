@@ -32,6 +32,8 @@ pub(crate) mod keycodes {
 pub(crate) trait KeySender: Send + Sync {
     async fn press_key(&self, code: i32) -> Result<()>;
     async fn release_key(&self, code: i32) -> Result<()>;
+    async fn press_keysym(&self, keysym: i32) -> Result<()>;
+    async fn release_keysym(&self, keysym: i32) -> Result<()>;
 }
 
 /// Abstracts the D-Bus portal bootstrap sequence.
@@ -66,7 +68,29 @@ impl KeySender for PortalKeySender {
                 message: format!("Portal key release failed: {e}"),
             })
     }
+
+    async fn press_keysym(&self, keysym: i32) -> Result<()> {
+        self.proxy
+            .notify_keyboard_keysym(&self.session, keysym, KeyState::Pressed)
+            .await
+            .map_err(|e| VoicshError::InjectionFailed {
+                message: format!("Portal keysym press failed: {e}"),
+            })
+    }
+
+    async fn release_keysym(&self, keysym: i32) -> Result<()> {
+        self.proxy
+            .notify_keyboard_keysym(&self.session, keysym, KeyState::Released)
+            .await
+            .map_err(|e| VoicshError::InjectionFailed {
+                message: format!("Portal keysym release failed: {e}"),
+            })
+    }
 }
+
+/// Delay between key events to ensure the compositor registers each input frame separately.
+/// At 60 Hz a frame is ~16ms; 5ms provides a safe margin without excessive latency.
+const KEY_EVENT_DELAY: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// Send a sequence of keycodes as press-all then release-all-reversed.
 ///
@@ -74,18 +98,43 @@ impl KeySender for PortalKeySender {
 /// modifier+key combo (without delays, all events may arrive in the
 /// same input frame and the combo isn't recognized).
 async fn send_key_sequence(sender: &dyn KeySender, codes: &[i32]) -> Result<()> {
-    let delay = std::time::Duration::from_millis(5);
-
     // Press all keys in order (modifier first, then key)
     for &code in codes {
         sender.press_key(code).await?;
-        tokio::time::sleep(delay).await;
+        tokio::time::sleep(KEY_EVENT_DELAY).await;
     }
 
     // Release all keys in reverse order (key first, then modifier)
     for &code in codes.iter().rev() {
         sender.release_key(code).await?;
-        tokio::time::sleep(delay).await;
+        tokio::time::sleep(KEY_EVENT_DELAY).await;
+    }
+
+    Ok(())
+}
+
+/// Type text by sending individual keysym press/release events for each character.
+///
+/// Converts each character to its X11 keysym via `xkeysym::Keysym::from_char()`,
+/// then sends press+release events with a delay between press and release to ensure
+/// the compositor registers them as separate events. Characters without a valid
+/// keysym mapping are logged and skipped.
+async fn send_text(sender: &dyn KeySender, text: &str) -> Result<()> {
+    for ch in text.chars() {
+        let keysym = xkeysym::Keysym::from_char(ch);
+        if keysym == xkeysym::NO_SYMBOL {
+            eprintln!(
+                "voicsh: skipping character without X11 keysym: U+{:04X}",
+                ch as u32
+            );
+            continue;
+        }
+        // keysym.raw() is u32; ashpd takes i32. Valid X11 keysyms (including
+        // Unicode keysyms 0x0100xxxx) fit within i32's positive range.
+        let keysym_i32 = keysym.raw() as i32;
+        sender.press_keysym(keysym_i32).await?;
+        tokio::time::sleep(KEY_EVENT_DELAY).await;
+        sender.release_keysym(keysym_i32).await?;
     }
 
     Ok(())
@@ -177,6 +226,70 @@ impl PortalConnector for AshpdConnector {
     }
 }
 
+/// Execute an async portal operation with automatic reconnect on D-Bus failure.
+///
+/// Handles: check broken flag → lock sender → run operation →
+/// on injection failure: refresh D-Bus, reconnect once, retry →
+/// on reconnect failure: mark session broken.
+macro_rules! portal_with_reconnect {
+    ($self:expr, $op_name:expr, $sender:ident => { $op:expr }) => {{
+        if $self.broken.load(Ordering::Relaxed) {
+            return Err(VoicshError::InjectionFailed {
+                message:
+                    "Portal session is broken. Restart voicsh to restore portal keyboard access."
+                        .to_string(),
+            });
+        }
+
+        let $sender = $self
+            .key_sender
+            .lock()
+            .map_err(|e| VoicshError::InjectionFailed {
+                message: format!("Portal session lock poisoned: {e}"),
+            })?
+            .clone();
+
+        let first_err = match $self.handle.block_on($op) {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+
+        // Only retry on injection failures (D-Bus errors), not parse errors
+        if !matches!(first_err, VoicshError::InjectionFailed { .. }) {
+            return Err(first_err);
+        }
+
+        eprintln!(concat!(
+            "voicsh: portal ",
+            $op_name,
+            " failed, attempting reconnect..."
+        ));
+
+        // Refresh D-Bus address from running gnome-shell
+        if let Some(fresh_addr) = crate::inject::focused_window::fresh_gnome_dbus_address() {
+            crate::sys::set_env("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
+        }
+
+        match $self.handle.block_on($self.connector.connect()) {
+            Ok($sender) => {
+                if let Ok(mut guard) = $self.key_sender.lock() {
+                    *guard = $sender.clone();
+                }
+                eprintln!(concat!("voicsh: portal reconnected, retrying ", $op_name));
+                $self.handle.block_on($op)
+            }
+            Err(reconnect_err) => {
+                $self.broken.store(true, Ordering::Relaxed);
+                eprintln!(
+                    "voicsh: portal session lost. Restart voicsh to restore portal keyboard access."
+                );
+                eprintln!("voicsh: portal reconnect failed: {reconnect_err}");
+                Err(first_err)
+            }
+        }
+    }};
+}
+
 /// Active RemoteDesktop portal session for keyboard input injection.
 ///
 /// Holds a `KeySender` (real D-Bus or mock) and a tokio `Handle`.
@@ -238,61 +351,24 @@ impl PortalSession {
     /// This is synchronous (blocks on the tokio runtime) so it can be called
     /// from pipeline station threads that are not tokio worker threads.
     pub fn simulate_paste(&self, paste_key: &str) -> Result<()> {
-        if self.broken.load(Ordering::Relaxed) {
-            return Err(VoicshError::InjectionFailed {
-                message:
-                    "Portal session is broken. Restart voicsh to restore portal keyboard access."
-                        .to_string(),
-            });
-        }
-
         let key_sequence = parse_paste_key(paste_key)?;
-        let sender = self
-            .key_sender
-            .lock()
-            .map_err(|e| VoicshError::InjectionFailed {
-                message: format!("Portal session lock poisoned: {e}"),
-            })?
-            .clone();
+        portal_with_reconnect!(self, "key injection", sender => {
+            send_key_sequence(sender.as_ref(), &key_sequence)
+        })
+    }
 
-        let first_err = match self
-            .handle
-            .block_on(send_key_sequence(sender.as_ref(), &key_sequence))
-        {
-            Ok(()) => return Ok(()),
-            Err(e) => e,
-        };
-
-        // Only retry on injection failures (D-Bus errors), not parse errors
-        if !matches!(first_err, VoicshError::InjectionFailed { .. }) {
-            return Err(first_err);
-        }
-
-        eprintln!("voicsh: portal key injection failed, attempting reconnect...");
-
-        // Refresh D-Bus address from running gnome-shell
-        if let Some(fresh_addr) = crate::inject::focused_window::fresh_gnome_dbus_address() {
-            crate::sys::set_env("DBUS_SESSION_BUS_ADDRESS", &fresh_addr);
-        }
-
-        match self.handle.block_on(self.connector.connect()) {
-            Ok(new_sender) => {
-                if let Ok(mut guard) = self.key_sender.lock() {
-                    *guard = new_sender.clone();
-                }
-                eprintln!("voicsh: portal reconnected, retrying paste");
-                self.handle
-                    .block_on(send_key_sequence(new_sender.as_ref(), &key_sequence))
-            }
-            Err(reconnect_err) => {
-                self.broken.store(true, Ordering::Relaxed);
-                eprintln!(
-                    "voicsh: portal session lost. Restart voicsh to restore portal keyboard access."
-                );
-                eprintln!("voicsh: portal reconnect failed: {reconnect_err}");
-                Err(first_err)
-            }
-        }
+    /// Type text directly via keysym events, without touching the clipboard.
+    ///
+    /// Converts each character to its X11 keysym and sends press/release events
+    /// through the portal. This is the preferred injection method on GNOME/KDE
+    /// as it avoids overwriting the user's clipboard.
+    ///
+    /// Like `simulate_paste`, this is synchronous and attempts one automatic
+    /// reconnect on D-Bus failures.
+    pub fn type_text(&self, text: &str) -> Result<()> {
+        portal_with_reconnect!(self, "text typing", sender => {
+            send_text(sender.as_ref(), text)
+        })
     }
 
     /// Returns true if the portal session is permanently broken.
@@ -368,6 +444,22 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(("release".to_string(), code));
+            Ok(())
+        }
+
+        async fn press_keysym(&self, keysym: i32) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("press_keysym".to_string(), keysym));
+            Ok(())
+        }
+
+        async fn release_keysym(&self, keysym: i32) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("release_keysym".to_string(), keysym));
             Ok(())
         }
     }
@@ -615,6 +707,12 @@ mod tests {
             async fn release_key(&self, _code: i32) -> Result<()> {
                 Ok(())
             }
+            async fn press_keysym(&self, _keysym: i32) -> Result<()> {
+                Ok(())
+            }
+            async fn release_keysym(&self, _keysym: i32) -> Result<()> {
+                Ok(())
+            }
         }
 
         let result = send_key_sequence(&FailingKeySender, &[29]).await;
@@ -634,6 +732,12 @@ mod tests {
                 Err(VoicshError::InjectionFailed {
                     message: "release failed".to_string(),
                 })
+            }
+            async fn press_keysym(&self, _keysym: i32) -> Result<()> {
+                Ok(())
+            }
+            async fn release_keysym(&self, _keysym: i32) -> Result<()> {
+                Ok(())
             }
         }
 
@@ -850,6 +954,29 @@ mod tests {
                 .push(("release".to_string(), code));
             Ok(())
         }
+
+        async fn press_keysym(&self, keysym: i32) -> Result<()> {
+            let mut count = self.fail_count.lock().unwrap();
+            if *count > 0 {
+                *count -= 1;
+                return Err(VoicshError::InjectionFailed {
+                    message: "stale D-Bus session".to_string(),
+                });
+            }
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("press_keysym".to_string(), keysym));
+            Ok(())
+        }
+
+        async fn release_keysym(&self, keysym: i32) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(("release_keysym".to_string(), keysym));
+            Ok(())
+        }
     }
 
     #[tokio::test]
@@ -1021,5 +1148,141 @@ mod tests {
             .unwrap();
 
         assert!(!session.is_broken(), "Healthy session should not be broken");
+    }
+
+    #[tokio::test]
+    async fn test_send_text_converts_chars_to_keysyms() {
+        let sender = RecordingKeySender::new();
+        send_text(&sender, "Hi").await.unwrap();
+
+        let calls = sender.calls();
+        // 'H' and 'i' → 4 keysym events (press+release each)
+        assert_eq!(calls.len(), 4, "Expected 4 keysym events for 'Hi'");
+        assert_eq!(calls[0].0, "press_keysym");
+        assert_eq!(calls[1].0, "release_keysym");
+        assert_eq!(
+            calls[0].1, calls[1].1,
+            "Press and release should have same keysym"
+        );
+        assert_eq!(calls[2].0, "press_keysym");
+        assert_eq!(calls[3].0, "release_keysym");
+        assert_eq!(
+            calls[2].1, calls[3].1,
+            "Press and release should have same keysym"
+        );
+        // 'H' and 'i' should have different keysyms
+        assert_ne!(
+            calls[0].1, calls[2].1,
+            "'H' and 'i' should have different keysyms"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_send_text_empty_string() {
+        let sender = RecordingKeySender::new();
+        send_text(&sender, "").await.unwrap();
+        assert!(
+            sender.calls().is_empty(),
+            "Empty text should produce no events"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_send_text_space_character() {
+        let sender = RecordingKeySender::new();
+        send_text(&sender, " ").await.unwrap();
+
+        let calls = sender.calls();
+        assert_eq!(calls.len(), 2, "Space should produce press+release");
+        assert_eq!(calls[0].0, "press_keysym");
+        assert_eq!(calls[1].0, "release_keysym");
+        // X11 keysym for space is 0x20
+        assert_eq!(calls[0].1, 0x20, "Space keysym should be 0x20");
+    }
+
+    #[tokio::test]
+    async fn test_type_text_with_mock() {
+        let recorder = Arc::new(RecordingKeySender::new());
+        let connector = TestConnector::success(recorder.clone());
+        let session = PortalSession::with_connector(Box::new(connector))
+            .await
+            .unwrap();
+
+        let recorder_clone = recorder.clone();
+        let result = tokio::task::spawn_blocking(move || session.type_text("ab"))
+            .await
+            .unwrap();
+
+        assert!(result.is_ok(), "type_text should succeed: {result:?}");
+        let calls = recorder_clone.calls();
+        assert_eq!(calls.len(), 4, "Expected 4 keysym events for 'ab'");
+        assert_eq!(calls[0].0, "press_keysym");
+        assert_eq!(calls[1].0, "release_keysym");
+        assert_eq!(calls[2].0, "press_keysym");
+        assert_eq!(calls[3].0, "release_keysym");
+    }
+
+    #[tokio::test]
+    async fn test_type_text_broken_session_returns_error() {
+        let stale_sender: Arc<dyn KeySender> = Arc::new(FailThenSucceedKeySender::new(1));
+        let connector = TestConnector::sequence(vec![
+            Ok(stale_sender),
+            Err(VoicshError::Other("reconnect failed".to_string())),
+        ]);
+        let session = Arc::new(
+            PortalSession::with_connector(Box::new(connector))
+                .await
+                .unwrap(),
+        );
+
+        // First call: triggers reconnect failure, sets broken
+        let session_clone = session.clone();
+        let _ = tokio::task::spawn_blocking(move || session_clone.type_text("x"))
+            .await
+            .unwrap();
+
+        assert!(session.is_broken());
+
+        // Second call: should return error immediately
+        let session_clone = session.clone();
+        let result = tokio::task::spawn_blocking(move || session_clone.type_text("y"))
+            .await
+            .unwrap();
+
+        assert!(result.is_err());
+        match result {
+            Err(VoicshError::InjectionFailed { message }) => {
+                assert!(
+                    message.contains("broken"),
+                    "Error should mention broken session, got: {message}"
+                );
+            }
+            other => panic!("Expected InjectionFailed for broken portal, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_type_text_reconnects_on_failure() {
+        let stale_sender: Arc<dyn KeySender> = Arc::new(FailThenSucceedKeySender::new(1));
+        let fresh_sender = Arc::new(RecordingKeySender::new());
+        let fresh_sender_clone = fresh_sender.clone();
+
+        let connector = TestConnector::sequence(vec![
+            Ok(stale_sender),
+            Ok(fresh_sender.clone() as Arc<dyn KeySender>),
+        ]);
+        let session = PortalSession::with_connector(Box::new(connector))
+            .await
+            .unwrap();
+
+        let result = tokio::task::spawn_blocking(move || session.type_text("a"))
+            .await
+            .unwrap();
+
+        assert!(result.is_ok(), "Expected reconnect to succeed: {result:?}");
+        let calls = fresh_sender_clone.calls();
+        assert_eq!(calls.len(), 2, "Expected 2 keysym events after reconnect");
+        assert_eq!(calls[0].0, "press_keysym");
+        assert_eq!(calls[1].0, "release_keysym");
     }
 }
