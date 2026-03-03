@@ -29,7 +29,7 @@ async fn setup_hybrid_for_test() -> Result<HybridCorrector> {
     }
 
     let whitelist = vec!["ja".to_string(), "ko".to_string()];
-    Ok(HybridCorrector::new(None, symspell_correctors, whitelist))
+    Ok(HybridCorrector::new(symspell_correctors, whitelist))
 }
 
 #[test]
@@ -258,7 +258,6 @@ fn test_default_backend_is_hybrid() {
 #[cfg(feature = "symspell")]
 fn test_empty_whitelist_disables_symspell() {
     // Empty whitelist should disable SymSpell for ALL languages
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     let mut symspell_correctors: HashMap<String, Box<dyn Corrector>> = HashMap::new();
 
     // Load a dictionary (but it won't be used due to empty whitelist)
@@ -270,7 +269,7 @@ fn test_empty_whitelist_disables_symspell() {
 
     // Empty whitelist - NO languages should use SymSpell
     let empty_whitelist: Vec<String> = vec![];
-    let mut hybrid = HybridCorrector::new(None, symspell_correctors, empty_whitelist);
+    let mut hybrid = HybridCorrector::new(symspell_correctors, empty_whitelist);
 
     let japanese_input = "こんにちは";
     let result = hybrid
@@ -288,7 +287,6 @@ fn test_empty_whitelist_disables_symspell() {
 #[cfg(feature = "symspell")]
 fn test_specific_language_whitelist() {
     // Test that only specified language uses SymSpell
-    let runtime = tokio::runtime::Runtime::new().expect("Failed to create runtime");
     let mut symspell_correctors: HashMap<String, Box<dyn Corrector>> = HashMap::new();
 
     // Only add Japanese to whitelist
@@ -299,7 +297,7 @@ fn test_specific_language_whitelist() {
     }
 
     let whitelist = vec!["ja".to_string()];
-    let mut hybrid = HybridCorrector::new(None, symspell_correctors, whitelist);
+    let mut hybrid = HybridCorrector::new(symspell_correctors, whitelist);
 
     // Japanese should use SymSpell
     let ja_result = hybrid

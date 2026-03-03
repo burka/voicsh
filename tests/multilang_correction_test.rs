@@ -32,7 +32,8 @@ async fn setup_multilang_symspell() -> Result<HybridCorrector, Box<dyn std::erro
         }
     }
 
-    Ok(HybridCorrector::new(None, symspell_correctors, Vec::new()))
+    let whitelist: Vec<String> = symspell_correctors.keys().cloned().collect();
+    Ok(HybridCorrector::new(symspell_correctors, whitelist))
 }
 
 #[test]

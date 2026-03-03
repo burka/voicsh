@@ -293,7 +293,7 @@ impl Corrector for HybridCorrector {
     }
 }
 
-#[cfg(all(test, feature = "symspell"))]
+#[cfg(all(test, feature = "error-correction", feature = "symspell"))]
 mod tests {
     use super::*;
 
@@ -319,7 +319,6 @@ mod tests {
         }
     }
 
-    #[cfg(all(feature = "error-correction", feature = "symspell"))]
     #[test]
     fn hybrid_english_uses_t5() {
         let mut corrector = HybridCorrector::new(
@@ -331,7 +330,6 @@ mod tests {
         assert_eq!(result, "T5:test");
     }
 
-    #[cfg(all(feature = "error-correction", feature = "symspell"))]
     #[test]
     fn hybrid_whitelisted_uses_symspell() {
         let mut symspell = std::collections::HashMap::new();
@@ -345,7 +343,6 @@ mod tests {
         assert_eq!(result, "SS-he:Shalom");
     }
 
-    #[cfg(all(feature = "error-correction", feature = "symspell"))]
     #[test]
     fn hybrid_non_whitelisted_uses_t5_fallback() {
         let mut symspell = std::collections::HashMap::new();
@@ -363,7 +360,6 @@ mod tests {
         assert_eq!(result, "T5:Hallo");
     }
 
-    #[cfg(all(feature = "error-correction", feature = "symspell"))]
     #[test]
     fn hybrid_supports_multiple_languages() {
         let mut symspell = std::collections::HashMap::new();
@@ -388,7 +384,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "error-correction")]
     #[test]
     fn hybrid_corrector_is_send() {
         fn assert_send<T: Send + 'static>() {}
