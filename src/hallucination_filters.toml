@@ -22,8 +22,12 @@ phrases = [
     "Oh God",
     "Oh my God",
     "Oh my god",
+    "Amen",
+    "laughter",
+    "Pfff",
+    "Meow",
 ]
-suspect_phrases = ["okay", "oh", "yeah", "yes", "no", "alright", "all right", "right", "sure", "so", "well", "hey", "hi", "wow", "huh", "uh", "oop", "oops", "ah"]
+suspect_phrases = ["okay", "oh", "yeah", "yes", "no", "alright", "all right", "right", "sure", "so", "well", "hey", "hi", "wow", "huh", "uh", "oop", "oops", "ah", "good", "sorry", "thanks", "exactly", "peace", "four", "what", "fine"]
 
 [de]
 phrases = [
@@ -59,6 +63,7 @@ phrases = [
     "Sous-titrage ST' 501",
     "Sous-titres réalisés par la communauté d'Amara.org",
     "Merci d'avoir regardé cette vidéo",
+    "Sous-titrage Société Radio-Canada",
 ]
 suspect_phrases = ["oui", "non", "oh", "bon", "bien", "ah", "ouais", "ok", "hein", "bah"]
 
@@ -71,6 +76,7 @@ phrases = [
     "Legendas pela comunidade de Amara.org",
     "Legendas pela comunidade da Amara.org",
     "Obrigado por assistir",
+    "Foi difícil fazer",
 ]
 suspect_phrases = ["sim", "não", "ok", "tá", "ah", "oh", "bem", "pois", "é"]
 
@@ -120,6 +126,7 @@ phrases = [
     "謝謝觀看",
     "由 Amara.org 社群提供的字幕",
     "字幕志愿者 杨茜茜",
+    "好,好,好,好",
 ]
 suspect_phrases = ["好", "对", "嗯", "哦", "啊", "是", "没有"]
 
@@ -139,6 +146,7 @@ phrases = [
     "구독해주세요",
     "구독 부탁드려요",
     "자막제작 기획 앤디 퀸즈",
+    "2부에서 계속 됩니다",
 ]
 suspect_phrases = ["네", "아니요", "응", "어", "아", "그래", "예"]
 
