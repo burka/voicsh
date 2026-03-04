@@ -48,7 +48,7 @@ Multi-language support, GNOME Shell extension, spoken punctuation, per-token con
 - [x] Hallucination filter: 76+ phrases, CJK punctuation normalization, punctuation-only skip
 - [x] Quantized model support (q5_0, q5_1, q8_0 variants)
 
-## 0.2.0 — Cleaner output, leaner internals (in progress)
+## 0.2.0 — Cleaner output, leaner internals (done)
 
 Output polish, code health, CLI ergonomics, GNOME extension cleanup.
 
@@ -67,9 +67,41 @@ Output polish, code health, CLI ergonomics, GNOME extension cleanup.
 - [x] GPU preflight checks (Vulkan glslc, libclang-dev, unversioned clang)
 - [x] Voice command provenance tracking in pipeline
 
-## 0.3.0 — Post-ASR error correction
+## 0.3.0 — Wayland overlay and spoken punctuation
+
+Wayland overlay for live feedback. Spoken punctuation that works reliably.
+
+- Wayland layer-shell overlay: recording indicator + live transcription display
+- Per-token confidence visualization in overlay (color-coded, same scale as terminal)
+- Sentence collector: buffer dictated chunks in the overlay instead of injecting immediately
+- Reliable spoken punctuation end-to-end (building on 0.1.0 foundation)
+
+## 0.4.0 — GPU acceleration
+
+GPU acceleration for Whisper inference.
+
+- [x] CUDA working on dev machine
+- [x] Vulkan working on dev machine
+- **Research task:** Evaluate candle Whisper — if viable, migrate from whisper.cpp for unified GPU context
+- **N-best reality:** whisper-rs/whisper.cpp BeamSearch returns single-best only (no n-best extraction). True n-best requires either candle Whisper or multi-pass with different temperatures.
+- **Alternative path:** Keep whisper.cpp + BeamSearch for better single-best, feed per-token probabilities to corrector (already wired)
+- GPU compilation gates: CUDA, Vulkan, hipBLAS in CI containers
+- Vulkan runtime tests via lavapipe
+
+## 0.5.0 — Voice commands
+
+Full voice commands beyond punctuation — navigation, selection, editing, app control.
+
+- Navigation: "go to line", "scroll up/down", "page up/down"
+- Selection: "select word", "select line", "select all"
+- Editing: "undo", "redo", "copy", "paste", "cut"
+- Extensible command vocabulary via config
+
+## 0.6.0 — Post-ASR error correction
 
 LLM-based error correction using per-token confidence as a guide.
+
+**Current state:** Early prototype exists (T5 via candle + SymSpell hybrid corrector). CPU-only, slow, and corrections are often wrong. SymSpell is lowercase-only which breaks casing. Needs a fundamentally better approach before shipping.
 
 - Per-token probability data already available (`TokenProbability { token, probability }`)
 - Low-probability tokens are flagged as correction candidates for the LLM
@@ -79,42 +111,11 @@ LLM-based error correction using per-token confidence as a guide.
 - Greedy reranking: bump `best_of: 1` → `best_of: 5` for better base accuracy before correction
 - English-only guard initially (passthrough for other languages)
 - `[error_correction]` config section
-
-## 0.4.0 — GPU and improved correction
-
-GPU acceleration and enhanced error correction pipeline.
-
-- **Research task:** Evaluate candle Whisper — if viable, migrate from whisper.cpp for unified GPU context
-- **N-best reality:** whisper-rs/whisper.cpp BeamSearch returns single-best only (no n-best extraction). True n-best requires either candle Whisper or multi-pass with different temperatures.
-- **Alternative path:** Keep whisper.cpp + BeamSearch for better single-best, feed per-token probabilities to LLM corrector (already wired)
-- CUDA already partially working on dev machine
-- Unified `candle-core/cuda` feature covers both Whisper + correction model (if candle path chosen)
-- GPU compilation gates: CUDA, Vulkan, hipBLAS in CI containers
-- Vulkan runtime tests via lavapipe
-
-## 0.5.0 — Reliable spoken punctuation and overlay
-
-Spoken punctuation that works reliably. Wayland overlay for live feedback.
-
-- Reliable spoken punctuation end-to-end (building on 0.1.0 foundation + 0.3.0 error correction)
-- Wayland layer-shell overlay: recording indicator + live transcription display
-- Per-token confidence visualization in overlay (color-coded, same scale as terminal)
-- Sentence collector: buffer dictated chunks in the overlay instead of injecting immediately
 - LLM sentence stitcher: when a sentence is complete (detected by LLM), refine and inject
   - Receives token-level probabilities to focus corrections on uncertain tokens
   - Context-aware: knows the previous sentence for coherent flow
   - Uses local LLM (Ollama / llama.cpp) or cloud (Anthropic, OpenAI)
   - Timeout + fallback to raw transcription if LLM is unavailable
-
-## 0.6.0 — Voice commands
-
-Full voice commands beyond punctuation — navigation, selection, editing, app control.
-
-- Voice commands working reliably end-to-end (leveraging 0.5.0 reliable punctuation pipeline)
-- Navigation: "go to line", "scroll up/down", "page up/down"
-- Selection: "select word", "select line", "select all"
-- Editing: "undo", "redo", "copy", "paste", "cut"
-- Extensible command vocabulary via config
 
 ## 0.7.0 — LLM assistant
 
