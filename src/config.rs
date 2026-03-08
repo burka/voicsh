@@ -53,6 +53,16 @@ pub struct InjectionConfig {
     pub method: InjectionMethod,
     pub paste_key: String,
     pub backend: InjectionBackend,
+    /// Keyboard layout for USB HID backend (e.g. "us", "de").
+    /// Determines which scancodes are sent for each character.
+    #[serde(default = "defaults::keyboard_layout")]
+    pub layout: String,
+    /// HID gadget device path (default: /dev/hidg0).
+    #[serde(default = "defaults::hid_device")]
+    pub hid_device: String,
+    /// Inter-key delay in milliseconds for USB HID backend (default: 2).
+    #[serde(default = "defaults::hid_key_delay_ms")]
+    pub hid_key_delay_ms: u64,
 }
 
 /// Voice command configuration
@@ -175,6 +185,10 @@ pub enum InjectionBackend {
     Portal,
     Wtype,
     Ydotool,
+    /// USB HID Gadget — writes HID keyboard reports to /dev/hidg0.
+    /// For Raspberry Pi (or similar) acting as a USB keyboard.
+    #[serde(alias = "usb_hid")]
+    UsbHid,
 }
 
 impl std::str::FromStr for InjectionBackend {
@@ -186,8 +200,9 @@ impl std::str::FromStr for InjectionBackend {
             "portal" => Ok(Self::Portal),
             "wtype" => Ok(Self::Wtype),
             "ydotool" => Ok(Self::Ydotool),
+            "usb-hid" | "usb_hid" | "usbhid" => Ok(Self::UsbHid),
             other => Err(format!(
-                "Unknown backend '{}'. Valid options: auto, portal, wtype, ydotool",
+                "Unknown backend '{}'. Valid options: auto, portal, wtype, ydotool, usb-hid",
                 other
             )),
         }
@@ -223,6 +238,9 @@ impl Default for InjectionConfig {
             method: InjectionMethod::Direct,
             paste_key: "auto".to_string(),
             backend: InjectionBackend::Auto,
+            layout: defaults::keyboard_layout(),
+            hid_device: defaults::hid_device(),
+            hid_key_delay_ms: defaults::hid_key_delay_ms(),
         }
     }
 }
@@ -1895,6 +1913,7 @@ mod tests {
                 method: InjectionMethod::Clipboard,
                 paste_key: "auto".to_string(),
                 backend: InjectionBackend::Portal,
+                ..InjectionConfig::default()
             },
             ..Config::default()
         };

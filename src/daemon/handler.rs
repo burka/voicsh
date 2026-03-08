@@ -80,10 +80,24 @@ impl DaemonCommandHandler {
 
         // Create sink
         #[cfg(feature = "portal")]
-        let sink = self.create_sink(&config, self.state.portal.clone());
+        let sink = match self.create_sink(&config, self.state.portal.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("Failed to create sink: {e}"),
+                };
+            }
+        };
 
         #[cfg(not(feature = "portal"))]
-        let sink = self.create_sink(&config);
+        let sink = match self.create_sink(&config) {
+            Ok(s) => s,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("Failed to create sink: {e}"),
+                };
+            }
+        };
 
         // Build post-processors
         let post_processors = build_post_processors(&config);
@@ -166,31 +180,60 @@ impl DaemonCommandHandler {
         }
     }
 
-    /// Create sink with portal support based on config.
+    /// Create sink based on config (USB HID, portal, or system backend).
     #[cfg(feature = "portal")]
     fn create_sink(
         &self,
         config: &Config,
         portal: Option<Arc<crate::inject::portal::PortalSession>>,
-    ) -> Box<dyn crate::pipeline::sink::TextSink> {
-        Box::new(InjectorSink::with_portal(
+    ) -> crate::error::Result<Box<dyn crate::pipeline::sink::TextSink>> {
+        #[cfg(feature = "usb-hid")]
+        if matches!(
+            config.injection.backend,
+            crate::config::InjectionBackend::UsbHid
+        ) {
+            let sink = crate::inject::usb_hid::UsbHidSink::open(
+                &config.injection.hid_device,
+                &config.injection.layout,
+                config.injection.hid_key_delay_ms,
+            )?;
+            return Ok(Box::new(sink));
+        }
+
+        Ok(Box::new(InjectorSink::with_portal(
             config.injection.method.clone(),
             config.injection.paste_key.clone(),
             self.verbosity,
             portal,
             config.injection.backend.clone(),
-        ))
+        )))
     }
 
-    /// Create sink without portal support.
+    /// Create sink based on config (USB HID or system backend).
     #[cfg(not(feature = "portal"))]
-    fn create_sink(&self, config: &Config) -> Box<dyn crate::pipeline::sink::TextSink> {
-        Box::new(InjectorSink::system(
+    fn create_sink(
+        &self,
+        config: &Config,
+    ) -> crate::error::Result<Box<dyn crate::pipeline::sink::TextSink>> {
+        #[cfg(feature = "usb-hid")]
+        if matches!(
+            config.injection.backend,
+            crate::config::InjectionBackend::UsbHid
+        ) {
+            let sink = crate::inject::usb_hid::UsbHidSink::open(
+                &config.injection.hid_device,
+                &config.injection.layout,
+                config.injection.hid_key_delay_ms,
+            )?;
+            return Ok(Box::new(sink));
+        }
+
+        Ok(Box::new(InjectorSink::system(
             config.injection.method.clone(),
             config.injection.paste_key.clone(),
             self.verbosity,
             config.injection.backend.clone(),
-        ))
+        )))
     }
 
     /// Stop recording and return transcription.

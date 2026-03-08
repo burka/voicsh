@@ -222,6 +222,9 @@ pub fn print_environment_summary(env: &DetectedEnvironment) {
         InjectionBackend::Auto => {
             eprintln!("  Will try available backends at runtime.");
         }
+        InjectionBackend::UsbHid => {
+            eprintln!("  USB HID gadget mode — writes keyboard reports to /dev/hidg0.");
+        }
     }
 }
 

@@ -85,6 +85,9 @@ hf-hub = { version = "0.4", optional = true }
 symspell = { version = "0.4", optional = true }
 xkeysym = { version = "0.2", optional = true }
 
+# FAT32 filesystem reading (for USB mass storage config on Raspberry Pi)
+fatfs = { version = "0.3", default-features = false, features = ["std", "alloc"], optional = true }
+
 [features]
 default = ["full"]
 full = ["whisper", "cpal-audio", "model-download", "cli", "portal", "benchmark", "symspell"]
@@ -100,6 +103,9 @@ cuda = ["full", "whisper-rs/cuda"]
 vulkan = ["full", "whisper-rs/vulkan"]
 hipblas = ["full", "whisper-rs/hipblas"]
 openblas = ["full", "whisper-rs/openblas"]
+usb-hid = ["dep:fatfs"]
+gpio = []
+pi = ["usb-hid", "gpio", "cpal-audio", "whisper", "cli"]
 
 [dependencies.sysinfo]
 version = "0.38"

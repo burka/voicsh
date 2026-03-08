@@ -1,0 +1,16 @@
+[Unit]
+Description=voicsh Voice Keyboard
+After=voicsh-gadget.service sound.target
+Requires=voicsh-gadget.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/voicsh daemon --backend usb-hid
+Restart=on-failure
+RestartSec=3
+User=voicsh
+Group=gpio
+SupplementaryGroups=audio
+
+[Install]
+WantedBy=multi-user.target

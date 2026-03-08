@@ -13,6 +13,8 @@ pub mod benchmark;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod config;
+#[cfg(feature = "usb-hid")]
+pub mod config_watch;
 pub mod correction;
 #[cfg(all(feature = "cpal-audio", feature = "model-download"))]
 pub mod daemon;
@@ -23,6 +25,8 @@ pub mod dictionary;
 pub mod error;
 #[cfg(feature = "cli")]
 pub mod gnome_extension;
+#[cfg(feature = "gpio")]
+pub mod gpio;
 #[cfg(feature = "benchmark")]
 pub mod init;
 pub mod inject;

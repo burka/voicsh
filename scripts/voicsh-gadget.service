@@ -1,0 +1,12 @@
+[Unit]
+Description=voicsh USB Gadget Setup
+After=sys-kernel-config.mount
+ConditionPathExists=/sys/kernel/config/usb_gadgets
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/voicsh-gadget-setup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

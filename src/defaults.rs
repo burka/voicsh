@@ -68,6 +68,30 @@ pub const PRE_SPEECH_MS: u32 = 500;
 /// Ensures word endings are not clipped when the gap threshold is very short.
 pub const POST_SPEECH_MS: u32 = 150;
 
+/// Default keyboard layout for USB HID backend.
+pub fn keyboard_layout() -> String {
+    DEFAULT_KEYBOARD_LAYOUT.to_string()
+}
+
+/// Default keyboard layout name.
+pub const DEFAULT_KEYBOARD_LAYOUT: &str = "us";
+
+/// Default HID gadget device path.
+pub const DEFAULT_HID_DEVICE: &str = "/dev/hidg0";
+
+/// Default inter-key delay for USB HID backend (milliseconds).
+pub const DEFAULT_HID_KEY_DELAY_MS: u64 = 2;
+
+/// Serde default for HID device path.
+pub fn hid_device() -> String {
+    DEFAULT_HID_DEVICE.to_string()
+}
+
+/// Serde default for HID key delay.
+pub fn hid_key_delay_ms() -> u64 {
+    DEFAULT_HID_KEY_DELAY_MS
+}
+
 /// Report the GPU backend compiled into this build.
 ///
 /// Returns a human-readable name based on the compile-time feature flags.

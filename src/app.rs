@@ -10,7 +10,6 @@ use crate::audio::wav::WavAudioSource;
 use crate::config::{Config, resolve_hallucination_filters};
 use crate::defaults;
 use crate::error::{Result, VoicshError};
-use crate::inject::injector::SystemCommandExecutor;
 use crate::models::catalog::{english_variant, get_model, resolve_model_for_language};
 use crate::models::download::{
     download_model, find_any_installed_model, is_model_installed, model_path,
@@ -18,7 +17,7 @@ use crate::models::download::{
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
 use crate::pipeline::post_processor::build_post_processors;
-use crate::pipeline::sink::{CollectorSink, InjectorSink, StdoutSink};
+use crate::pipeline::sink::{CollectorSink, InjectorSink, StdoutSink, TextSink};
 use crate::stt::fan_out::FanOutTranscriber;
 use crate::stt::transcriber::Transcriber;
 use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
@@ -235,24 +234,36 @@ pub async fn run_record_command(record: RecordConfig) -> Result<()> {
         eprintln!("Ready. Listening...");
     }
 
-    #[cfg(feature = "portal")]
-    let make_sink = |config: &Config| {
-        InjectorSink::with_portal(
+    let make_sink = |config: &Config| -> Result<Box<dyn TextSink>> {
+        #[cfg(feature = "usb-hid")]
+        if matches!(
+            config.injection.backend,
+            crate::config::InjectionBackend::UsbHid
+        ) {
+            let sink = crate::inject::usb_hid::UsbHidSink::open(
+                &config.injection.hid_device,
+                &config.injection.layout,
+                config.injection.hid_key_delay_ms,
+            )?;
+            return Ok(Box::new(sink));
+        }
+
+        #[cfg(feature = "portal")]
+        let sink = InjectorSink::with_portal(
             config.injection.method.clone(),
             config.injection.paste_key.clone(),
             verbosity,
             portal.clone(),
             config.injection.backend.clone(),
-        )
-    };
-    #[cfg(not(feature = "portal"))]
-    let make_sink = |config: &Config| {
-        InjectorSink::system(
+        );
+        #[cfg(not(feature = "portal"))]
+        let sink = InjectorSink::system(
             config.injection.method.clone(),
             config.injection.paste_key.clone(),
             verbosity,
             config.injection.backend.clone(),
-        )
+        );
+        Ok(Box::new(sink))
     };
 
     if once {
@@ -345,7 +356,7 @@ async fn connect_portal(
                 }
             }
         }
-        InjectionBackend::Wtype | InjectionBackend::Ydotool => Ok(None),
+        InjectionBackend::Wtype | InjectionBackend::Ydotool | InjectionBackend::UsbHid => Ok(None),
     }
 }
 
@@ -354,7 +365,7 @@ async fn run_continuous(
     config: &Config,
     transcriber: Arc<dyn Transcriber>,
     run_config: PipelineRunConfig,
-    make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
+    make_sink: impl FnOnce(&Config) -> Result<Box<dyn TextSink>>,
 ) -> Result<()> {
     let PipelineRunConfig {
         quiet,
@@ -386,16 +397,12 @@ async fn run_continuous(
         ..Default::default()
     };
 
-    let sink = make_sink(config);
+    let sink = make_sink(config)?;
     let post_processors = build_post_processors(config);
 
     let pipeline = Pipeline::new(pipeline_config);
-    let handle = pipeline.start_with_post_processors(
-        audio_source,
-        transcriber,
-        Box::new(sink),
-        post_processors,
-    )?;
+    let handle =
+        pipeline.start_with_post_processors(audio_source, transcriber, sink, post_processors)?;
 
     // Wait for Ctrl+C
     tokio::signal::ctrl_c()
@@ -417,7 +424,7 @@ async fn run_single_session(
     config: &Config,
     transcriber: Arc<dyn Transcriber>,
     run_config: PipelineRunConfig,
-    make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
+    make_sink: impl FnOnce(&Config) -> Result<Box<dyn TextSink>>,
 ) -> Result<()> {
     let PipelineRunConfig {
         quiet,
@@ -478,8 +485,7 @@ async fn run_single_session(
             eprintln!("\"{}\"", text);
         }
         // Use the same sink factory to get portal-aware injection
-        let mut injector_sink = make_sink(config);
-        use crate::pipeline::sink::TextSink;
+        let mut injector_sink = make_sink(config)?;
         injector_sink.handle(&text)?;
         if !quiet && verbosity >= 2 {
             eprintln!("  [injected]");

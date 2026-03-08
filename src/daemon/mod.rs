@@ -233,6 +233,33 @@ pub async fn run_daemon(
         eprintln!("Daemon ready.");
     }
 
+    // Spawn USB config image watcher if usb-hid backend is active
+    #[cfg(feature = "usb-hid")]
+    {
+        use crate::config::InjectionBackend;
+        let is_usb_hid = {
+            let cfg = state.config.lock().await;
+            cfg.injection.backend == InjectionBackend::UsbHid
+        };
+        if is_usb_hid {
+            let config_image = PathBuf::from(crate::config_watch::DEFAULT_CONFIG_IMAGE);
+            let config_mutex = Arc::clone(&state.config);
+            let event_tx = state.event_tx.clone();
+            std::thread::spawn(move || {
+                crate::config_watch::run_config_watcher(config_image, move |new_config| {
+                    let mut current = config_mutex.blocking_lock();
+                    apply_config_diff(&mut current, &new_config, &event_tx);
+                });
+            });
+            if !quiet {
+                eprintln!(
+                    "Config watcher active on {}",
+                    crate::config_watch::DEFAULT_CONFIG_IMAGE
+                );
+            }
+        }
+    }
+
     // Create command handler
     let handler = handler::DaemonCommandHandler::new(state, quiet, verbosity);
 
@@ -270,6 +297,55 @@ pub async fn run_daemon(
     }
 
     Ok(())
+}
+
+/// Apply config diff: update changed fields and emit ConfigChanged events.
+#[cfg(feature = "usb-hid")]
+fn apply_config_diff(
+    current: &mut Config,
+    new: &Config,
+    event_tx: &tokio::sync::broadcast::Sender<crate::ipc::protocol::DaemonEvent>,
+) {
+    use crate::ipc::protocol::DaemonEvent;
+
+    /// Emit a ConfigChanged event if `current` differs from `new`.
+    /// Assigns `new` to `current` and returns `true` if changed.
+    macro_rules! diff_field {
+        ($current:expr, $new:expr, $key:literal) => {{
+            if $current != $new {
+                $current = $new.clone();
+                drop(event_tx.send(DaemonEvent::ConfigChanged {
+                    key: $key.to_string(),
+                    value: format!("{}", $new),
+                }));
+                true
+            } else {
+                false
+            }
+        }};
+    }
+
+    let changed = diff_field!(current.stt.model, new.stt.model, "stt.model")
+        | diff_field!(current.stt.language, new.stt.language, "stt.language")
+        | diff_field!(
+            current.injection.layout,
+            new.injection.layout,
+            "injection.layout"
+        )
+        | diff_field!(
+            current.injection.hid_key_delay_ms,
+            new.injection.hid_key_delay_ms,
+            "injection.hid_key_delay_ms"
+        )
+        | diff_field!(
+            current.audio.vad_threshold,
+            new.audio.vad_threshold,
+            "audio.vad_threshold"
+        );
+
+    if !changed {
+        eprintln!("voicsh: config watcher: config.toml changed but no actionable fields differ");
+    }
 }
 
 /// Wait for SIGTERM signal (used by systemd).

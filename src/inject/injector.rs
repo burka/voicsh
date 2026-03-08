@@ -12,6 +12,13 @@ use std::process::{Command, Stdio};
 #[cfg(feature = "portal")]
 use std::sync::Arc;
 
+fn usb_hid_wrong_path() -> VoicshError {
+    VoicshError::InjectionFailed {
+        message: "USB HID backend was routed incorrectly — this is a bug, please report it."
+            .to_string(),
+    }
+}
+
 /// Trait for executing system commands.
 ///
 /// Object-safe, Send + Sync for use in concurrent contexts.
@@ -220,6 +227,7 @@ impl<E: CommandExecutor> TextInjector<E> {
                 self.run_wtype(&wtype_arg_refs)
             }
             InjectionBackend::Ydotool => self.run_ydotool(&["key", "--delay", "10", paste_key]),
+            InjectionBackend::UsbHid => Err(usb_hid_wrong_path()),
             InjectionBackend::Auto => {
                 #[cfg(feature = "portal")]
                 if let Some(portal) = &self.portal
@@ -274,6 +282,7 @@ impl<E: CommandExecutor> TextInjector<E> {
             }
             InjectionBackend::Wtype => self.run_wtype(&[text]),
             InjectionBackend::Ydotool => self.run_ydotool(&["type", "--delay", "10", text]),
+            InjectionBackend::UsbHid => Err(usb_hid_wrong_path()),
             InjectionBackend::Auto => {
                 #[cfg(feature = "portal")]
                 if let Some(portal) = &self.portal
@@ -328,6 +337,7 @@ impl<E: CommandExecutor> TextInjector<E> {
                 self.run_wtype(&wtype_arg_refs)
             }
             InjectionBackend::Ydotool => self.run_ydotool(&["key", "--delay", "10", combo]),
+            InjectionBackend::UsbHid => Err(usb_hid_wrong_path()),
             InjectionBackend::Auto => {
                 #[cfg(feature = "portal")]
                 if let Some(portal) = &self.portal
