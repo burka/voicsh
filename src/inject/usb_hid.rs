@@ -342,7 +342,7 @@ impl DeviceHidWriter {
                 message: format!(
                     "Failed to open HID device '{}': {}.\n\
                      Hint: Ensure the USB gadget is configured.\n\
-                     Run: voicsh setup-gadget (or see RASPBERRY_PI.md)",
+                     Run: voicsh setup-gadget (or see VOICE_KEYBOARD.md)",
                     path, e
                 ),
             })?;
