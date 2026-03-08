@@ -66,12 +66,12 @@ Quantisierte Modelle (q5_0) sind ~2x schneller bei minimalem Qualitaetsverlust.
 
 ### Empfehlung
 
-**Fuer Prototyping: Raspberry Pi 5 (4GB) — ~65 EUR**
+**Fuer Prototyping: Raspberry Pi 5 (4GB) — ~87 EUR**
 - Einfacher Einstieg, 4x USB-A fuer Mikrofon, viel Doku
 - Alu-Passivkuehlgehaeuse erhaeltlich (~15 EUR)
 - 85 x 56 mm — Kreditkartengroesse
 
-**Fuer kompaktes Endgeraet: CM5 (4GB) + CM5 MINIMA — ~110 EUR**
+**Fuer kompaktes Endgeraet: CM5 (4GB) + CM5 MINIMA — ~117 EUR**
 - Gleicher BCM2712 Chip wie Pi 5, identische Performance
 - 61 x 61 mm — deutlich kleiner
 - USB-C OTG Port fuer Gadget-Modus
@@ -91,14 +91,14 @@ Quantisierte Modelle (q5_0) sind ~2x schneller bei minimalem Qualitaetsverlust.
 
 | Teil | Beispiel | ca. Preis |
 |------|----------|-----------|
-| Raspberry Pi 5 (4GB) | [offizieller Shop](https://www.raspberrypi.com/products/raspberry-pi-5/) | ~65 EUR |
+| Raspberry Pi 5 (4GB) | [offizieller Shop](https://www.raspberrypi.com/products/raspberry-pi-5/) | ~87 EUR |
 | Alu-Passivkuehlgehaeuse | Geekworm P573, GeeekPi, KKSB oder 52Pi CNC Case | ~15 EUR |
 | microSD-Karte (16GB+) | SanDisk Ultra 32GB | ~8 EUR |
 | USB-C Datenkabel | Pi → Host | ~5 EUR |
 | USB-Mikrofon | Mini-USB-Konferenzmikrofon | ~15 EUR |
 | Taster + Jumperkabel | Push-to-Talk | ~2 EUR |
 
-**Gesamt: ~110 EUR**
+**Gesamt: ~132 EUR**
 
 USB-Mikrofon geht an einen der 4x USB-A Ports, USB-C geht zum Host-Rechner. Kein Hub noetig.
 
@@ -106,13 +106,13 @@ USB-Mikrofon geht an einen der 4x USB-A Ports, USB-C geht zum Host-Rechner. Kein
 
 | Teil | Beispiel | ca. Preis |
 |------|----------|-----------|
-| CM5 4GB (mit Wireless) | [CM5104032](https://www.raspberrypi.com/products/compute-module-5/) | ~55 EUR |
-| CM5 MINIMA Carrier Board | [Seeed Studio](https://www.seeedstudio.com/CM5-MINIMA-p-6485.html) | ~65 EUR |
+| CM5 4GB (mit Wireless) | [CM5104032](https://www.raspberrypi.com/products/compute-module-5/) | ~57 EUR |
+| CM5 MINIMA Carrier Board | [Seeed Studio](https://www.seeedstudio.com/CM5-MINIMA-p-6485.html) | ~60 EUR |
 | I2S MEMS Mikrofon (INMP441) | kein USB-Port noetig, direkt an I2S/SPI Header | ~5 EUR |
 | Taster + Jumperkabel | Push-to-Talk, an I2C/SPI Header | ~2 EUR |
 | USB-C Datenkabel | MINIMA USB-C OTG → Host | ~5 EUR |
 
-**Gesamt: ~132 EUR**
+**Gesamt: ~129 EUR**
 
 CM5 MINIMA hat 2x USB-C: einen fuer Power (PD), einen fuer Daten/OTG (Gadget-Modus).
 Kein USB-A Port — daher I2S-Mikrofon statt USB-Mikrofon.
