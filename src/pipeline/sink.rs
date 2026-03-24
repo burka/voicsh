@@ -177,7 +177,7 @@ impl Station for SinkStation {
                 }
                 Ok(Some(()))
             }
-            Err(e) => Err(StationError::Recoverable(format!("Injection failed: {e}"))),
+            Err(e) => Err(StationError::recoverable(format!("Injection failed: {e}"))),
         }
     }
 
@@ -571,7 +571,8 @@ mod tests {
 
         let result = station.process(text);
         match result {
-            Err(StationError::Recoverable(msg)) => {
+            Err(StationError::Recoverable(err)) => {
+                let msg = err.to_string();
                 assert!(
                     msg.contains("Injection failed"),
                     "Expected 'Injection failed' in error message, got: {msg}"
