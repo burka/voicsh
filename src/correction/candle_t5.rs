@@ -6,6 +6,7 @@
 use crate::correction::corrector::Corrector;
 use crate::error::{Result, VoicshError};
 use crate::models::correction_catalog::CorrectionModelInfo;
+use sha2::{Digest, Sha256};
 
 use candle_core::{Device, Tensor};
 use candle_transformers::models::quantized_t5::{Config as T5Config, T5ForConditionalGeneration};
@@ -51,6 +52,29 @@ fn clean_t5_output(raw_output: &str) -> Option<String> {
     Some(text)
 }
 
+/// Verify a file's SHA-256 digest against an expected hex string.
+///
+/// Returns `Ok(())` if `expected` is empty (not yet catalogued) or matches.
+/// Returns an error — and removes the file — if the digest mismatches.
+fn verify_sha256(path: &std::path::Path, expected: &str) -> Result<()> {
+    if expected.is_empty() {
+        return Ok(());
+    }
+    let bytes = std::fs::read(path)
+        .map_err(|e| VoicshError::Other(format!("Read {} for checksum: {e}", path.display())))?;
+    let calculated = format!("{:x}", Sha256::digest(&bytes));
+    if calculated != expected {
+        if let Err(e) = std::fs::remove_file(path) {
+            eprintln!("voicsh: failed to remove corrupted download: {e}");
+        }
+        return Err(VoicshError::Other(format!(
+            "SHA-256 mismatch for {}. Expected: {expected}, got: {calculated}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Flan-T5 corrector that runs quantized inference via candle.
 pub struct CandleT5Corrector {
     model: T5ForConditionalGeneration,
@@ -72,14 +96,17 @@ impl CandleT5Corrector {
         let model_path = repo
             .get(info.hf_filename)
             .map_err(|e| VoicshError::Other(format!("Download model {}: {e}", info.hf_filename)))?;
+        verify_sha256(&model_path, info.sha256_model)?;
 
         let config_path = repo.get(info.config_filename).map_err(|e| {
             VoicshError::Other(format!("Download config {}: {e}", info.config_filename))
         })?;
+        verify_sha256(&config_path, info.sha256_config)?;
 
         let tokenizer_path = repo
             .get(crate::models::correction_catalog::TOKENIZER_FILENAME)
             .map_err(|e| VoicshError::Other(format!("Download tokenizer: {e}")))?;
+        verify_sha256(&tokenizer_path, info.sha256_tokenizer)?;
 
         // Load config
         let config_bytes = std::fs::read(&config_path).map_err(|e| {

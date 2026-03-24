@@ -15,7 +15,16 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 /// Shared HTTP client — reuses TLS sessions across all requests.
-pub(crate) static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+/// Configured with timeouts and HTTPS-only enforcement.
+#[allow(clippy::expect_used)]
+pub(crate) static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .https_only(true)
+        .build()
+        .expect("HTTP client configuration is valid")
+});
 
 /// Get the directory where models are stored.
 ///

@@ -17,6 +17,12 @@ pub struct CorrectionModelInfo {
     pub config_filename: &'static str,
     /// Short description with expected latency.
     pub description: &'static str,
+    /// SHA-256 checksum of the GGUF model file (empty string = not yet verified).
+    pub sha256_model: &'static str,
+    /// SHA-256 checksum of the JSON config file (empty string = not yet verified).
+    pub sha256_config: &'static str,
+    /// SHA-256 checksum of the tokenizer.json file (empty string = not yet verified).
+    pub sha256_tokenizer: &'static str,
 }
 
 /// Shared tokenizer filename — all Flan-T5 variants use the same tokenizer.
@@ -35,6 +41,10 @@ pub const CORRECTION_MODELS: &[CorrectionModelInfo] = &[
         hf_filename: "model.gguf",
         config_filename: "config.json",
         description: "Fast, lower quality. ~50-150 ms per correction on CPU.",
+        // TODO: populate SHA-256 values by fetching from HuggingFace after first download
+        sha256_model: "",
+        sha256_config: "",
+        sha256_tokenizer: "",
     },
     CorrectionModelInfo {
         name: "flan-t5-base",
@@ -44,6 +54,10 @@ pub const CORRECTION_MODELS: &[CorrectionModelInfo] = &[
         hf_filename: "model-flan-t5-base.gguf",
         config_filename: "config-flan-t5-base.json",
         description: "Balanced speed and quality. ~150-400 ms per correction on CPU.",
+        // TODO: populate SHA-256 values by fetching from HuggingFace after first download
+        sha256_model: "",
+        sha256_config: "",
+        sha256_tokenizer: "",
     },
     CorrectionModelInfo {
         name: "flan-t5-large",
@@ -53,6 +67,10 @@ pub const CORRECTION_MODELS: &[CorrectionModelInfo] = &[
         hf_filename: "model-flan-t5-large.gguf",
         config_filename: "config-flan-t5-large.json",
         description: "Best quality, slower. ~400-1000 ms per correction on CPU.",
+        // TODO: populate SHA-256 values by fetching from HuggingFace after first download
+        sha256_model: "",
+        sha256_config: "",
+        sha256_tokenizer: "",
     },
 ];
 
