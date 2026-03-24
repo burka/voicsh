@@ -675,8 +675,8 @@ mod tests {
             .available_backends
             .iter()
             .find(|b| b.name == "CPU");
-        assert!(cpu_backend.is_some());
-        assert!(cpu_backend.unwrap().available);
+        let cpu = cpu_backend.unwrap();
+        assert!(cpu.available);
     }
 
     #[test]

@@ -488,9 +488,20 @@ mod tests {
 
     #[test]
     fn test_event_sender_builder() {
-        let (tx, _rx) = crossbeam_channel::bounded(16);
+        let (tx, rx) = crossbeam_channel::bounded(16);
         let config = VadConfig::default();
         let station = VadStation::new(config).with_event_sender(tx);
-        assert!(station.event_tx.is_some());
+        // Verify the sender was stored and is functional by sending a message through it
+        let sender = station.event_tx.unwrap();
+        sender
+            .send(DaemonEvent::Log {
+                message: "test".to_string(),
+            })
+            .unwrap();
+        let received = rx.recv().unwrap();
+        assert!(
+            matches!(received, DaemonEvent::Log { message } if message == "test"),
+            "Expected Log event with message 'test'"
+        );
     }
 }

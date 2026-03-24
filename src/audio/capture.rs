@@ -489,9 +489,7 @@ mod tests {
     #[test]
     #[ignore] // Requires audio hardware
     fn test_list_devices_returns_at_least_one_device() {
-        let devices = list_devices();
-        assert!(devices.is_ok());
-        let device_list = devices.unwrap();
+        let device_list = list_devices().unwrap();
         assert!(
             !device_list.is_empty(),
             "Expected at least one audio device"
@@ -532,17 +530,12 @@ mod tests {
     #[test]
     #[ignore] // Requires audio hardware
     fn test_get_best_default_device() {
-        let device = get_best_default_device();
-        assert!(device.is_ok(), "Failed to get best default device");
-
-        if let Ok(dev) = device {
-            if let Ok(name) = dev.description().map(|d| d.name().to_string()) {
-                println!("Best default device: {}", name);
-                // If on a system with PipeWire/Pulse, verify preference
-                if name.to_lowercase().contains("pipewire") || name.to_lowercase().contains("pulse")
-                {
-                    println!("  -> Correctly selected preferred device");
-                }
+        let dev = get_best_default_device().expect("Failed to get best default device");
+        if let Ok(name) = dev.description().map(|d| d.name().to_string()) {
+            println!("Best default device: {}", name);
+            // If on a system with PipeWire/Pulse, verify preference
+            if name.to_lowercase().contains("pipewire") || name.to_lowercase().contains("pulse") {
+                println!("  -> Correctly selected preferred device");
             }
         }
     }
@@ -550,11 +543,7 @@ mod tests {
     #[test]
     #[ignore] // Requires audio hardware
     fn test_create_with_default_device() {
-        let source = CpalAudioSource::new(None);
-        assert!(
-            source.is_ok(),
-            "Failed to create audio source with default device"
-        );
+        CpalAudioSource::new(None).expect("Failed to create audio source with default device");
     }
 
     #[test]
@@ -617,9 +606,9 @@ mod tests {
         let mut source = CpalAudioSource::new(None).expect("Failed to create audio source");
 
         for _ in 0..3 {
-            assert!(source.start().is_ok());
+            source.start().unwrap();
             std::thread::sleep(std::time::Duration::from_millis(50));
-            assert!(source.stop().is_ok());
+            source.stop().unwrap();
         }
     }
 
@@ -630,8 +619,9 @@ mod tests {
             Box::new(CpalAudioSource::new(None).expect("Failed to create audio source"));
 
         let mut boxed_source = source;
-        assert!(boxed_source.start().is_ok());
-        assert!(boxed_source.read_samples().is_ok());
-        assert!(boxed_source.stop().is_ok());
+        boxed_source.start().unwrap();
+        let samples = boxed_source.read_samples().unwrap();
+        assert!(!samples.is_empty(), "Expected audio samples from hardware");
+        boxed_source.stop().unwrap();
     }
 }

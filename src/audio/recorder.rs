@@ -241,8 +241,8 @@ mod tests {
 
         let result = source.read_samples();
 
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), test_samples);
+        let samples = result.unwrap();
+        assert_eq!(samples, test_samples);
     }
 
     #[test]
@@ -297,13 +297,11 @@ mod tests {
         assert!(!source.is_started());
 
         // Start the source
-        let start_result = source.start();
-        assert!(start_result.is_ok());
+        source.start().unwrap();
         assert!(source.is_started());
 
         // Stop the source
-        let stop_result = source.stop();
-        assert!(stop_result.is_ok());
+        source.stop().unwrap();
         assert!(!source.is_started());
     }
 
@@ -421,15 +419,12 @@ mod tests {
             Box::new(MockAudioSource::new().with_samples(vec![1i16, 2, 3, 4, 5]));
 
         let mut boxed_source = source;
-        let start_result = boxed_source.start();
-        assert!(start_result.is_ok());
+        boxed_source.start().unwrap();
 
-        let samples_result = boxed_source.read_samples();
-        assert!(samples_result.is_ok());
-        assert_eq!(samples_result.unwrap(), vec![1i16, 2, 3, 4, 5]);
+        let samples = boxed_source.read_samples().unwrap();
+        assert_eq!(samples, vec![1i16, 2, 3, 4, 5]);
 
-        let stop_result = boxed_source.stop();
-        assert!(stop_result.is_ok());
+        boxed_source.stop().unwrap();
     }
 
     #[test]
@@ -465,9 +460,9 @@ mod tests {
 
         // Start and stop multiple times
         for _ in 0..3 {
-            assert!(source.start().is_ok());
+            source.start().unwrap();
             assert!(source.is_started());
-            assert!(source.stop().is_ok());
+            source.stop().unwrap();
             assert!(!source.is_started());
         }
     }
@@ -477,18 +472,16 @@ mod tests {
         let mut source = MockAudioSource::new().with_samples(vec![10i16, 20, 30]);
 
         // Should be able to read even when not started
-        let result = source.read_samples();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), vec![10i16, 20, 30]);
+        let samples = source.read_samples().unwrap();
+        assert_eq!(samples, vec![10i16, 20, 30]);
     }
 
     #[test]
     fn test_mock_audio_source_empty_samples() {
         let mut source = MockAudioSource::new().with_samples(vec![]);
 
-        let result = source.read_samples();
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Vec::<i16>::new());
+        let samples = source.read_samples().unwrap();
+        assert_eq!(samples, Vec::<i16>::new());
     }
 
     #[test]

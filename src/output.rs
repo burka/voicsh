@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn build_word_prob_map_empty() {
         let map = build_word_prob_map(&[]);
-        assert!(map.is_empty());
+        assert_eq!(map.len(), 0);
     }
 
     // ── LCS tests ──────────────────────────────────────────────────────
@@ -573,7 +573,7 @@ mod tests {
         let old = vec!["a", "b"];
         let new = vec!["c", "d"];
         let matches = lcs_indices(&old, &new);
-        assert!(matches.is_empty());
+        assert_eq!(matches, vec![]);
     }
 
     // ── probability color tests ────────────────────────────────────────

@@ -949,8 +949,8 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert!(
-            elapsed < Duration::from_secs(5),
-            "stop() took {:?} — should complete within 5s even with stuck threads",
+            elapsed < Duration::from_secs(2),
+            "stop() took {:?} — should complete within 2s (production timeout is 1s)",
             elapsed
         );
         assert!(result.is_none(), "Stuck pipeline should return None");
