@@ -78,6 +78,20 @@ impl SinkStation {
     }
 }
 
+/// Build a `DaemonEvent::Transcription` from a transcribed text and optional wait time.
+fn transcription_event(text: &TranscribedText, wait_ms: Option<u32>) -> DaemonEvent {
+    DaemonEvent::Transcription {
+        text: text.text.clone(),
+        language: text.language.clone(),
+        confidence: text.confidence,
+        wait_ms,
+        token_probabilities: text.token_probabilities.clone(),
+        raw_text: text.raw_text.clone(),
+        text_origin: text.text_origin.clone(),
+        corrector_name: text.corrector_name.clone(),
+    }
+}
+
 impl Station for SinkStation {
     type Input = TranscribedText;
     type Output = ();
@@ -111,24 +125,13 @@ impl Station for SinkStation {
 
                 // Emit transcription event for follow clients (with timing)
                 if let Some(ref tx) = self.event_tx
-                    && tx
-                        .try_send(DaemonEvent::Transcription {
-                            text: text.text.clone(),
-                            language: text.language.clone(),
-                            confidence: text.confidence,
-                            wait_ms,
-                            token_probabilities: text.token_probabilities.clone(),
-                            raw_text: text.raw_text.clone(),
-                            text_origin: text.text_origin.clone(),
-                            corrector_name: text.corrector_name.clone(),
-                        })
-                        .is_err()
+                    && tx.try_send(transcription_event(&text, wait_ms)).is_err()
                 {
                     // Channel full or closed - OK to ignore in sink
                 }
 
                 // Record timing and show output
-                if let Some(chunk_timing) = text.timing {
+                if let Some(ref chunk_timing) = text.timing {
                     let timing = TranscriptionTiming {
                         capture_start: chunk_timing.capture_start,
                         vad_start: chunk_timing.vad_start,
@@ -143,16 +146,7 @@ impl Station for SinkStation {
 
                     if !self.quiet {
                         // Show transcription (with inline wait) for all verbosity levels
-                        render_event(&DaemonEvent::Transcription {
-                            text: text.text.clone(),
-                            language: text.language.clone(),
-                            confidence: text.confidence,
-                            wait_ms,
-                            token_probabilities: text.token_probabilities.clone(),
-                            raw_text: text.raw_text.clone(),
-                            text_origin: text.text_origin.clone(),
-                            corrector_name: text.corrector_name.clone(),
-                        });
+                        render_event(&transcription_event(&text, wait_ms));
                         // Verbose >= 2: supplementary detailed breakdown
                         if self.verbosity >= 2 {
                             self.latency_tracker.print_detailed(
@@ -164,16 +158,7 @@ impl Station for SinkStation {
                     }
                 } else if !self.quiet && self.verbosity == 0 {
                     // No timing - just show transcription event
-                    render_event(&DaemonEvent::Transcription {
-                        text: text.text.clone(),
-                        language: text.language.clone(),
-                        confidence: text.confidence,
-                        wait_ms: None,
-                        token_probabilities: text.token_probabilities.clone(),
-                        raw_text: text.raw_text.clone(),
-                        text_origin: text.text_origin.clone(),
-                        corrector_name: text.corrector_name.clone(),
-                    });
+                    render_event(&transcription_event(&text, None));
                 }
                 Ok(Some(()))
             }

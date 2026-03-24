@@ -98,7 +98,8 @@ pub fn build_post_processors(config: &Config) -> Vec<Box<dyn PostProcessor>> {
 /// and user-configurable overrides.
 pub struct VoiceCommandProcessor {
     /// Sorted by descending key length so longer phrases match first.
-    commands: Vec<(String, CommandAction)>,
+    /// The `Vec<char>` is pre-computed at construction to avoid per-call allocation.
+    commands: Vec<(String, Vec<char>, CommandAction)>,
     /// Current caps-lock state toggled by "all caps" / "end caps".
     caps_active: bool,
 }
@@ -237,7 +238,13 @@ impl VoiceCommandProcessor {
         }
 
         // Sort by descending key length so "new paragraph" matches before "new"
-        let mut commands: Vec<(String, CommandAction)> = map.into_iter().collect();
+        let mut commands: Vec<(String, Vec<char>, CommandAction)> = map
+            .into_iter()
+            .map(|(phrase, action)| {
+                let chars = phrase.chars().collect();
+                (phrase, chars, action)
+            })
+            .collect();
         commands.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
 
         Self {
@@ -292,8 +299,7 @@ impl VoiceCommandProcessor {
 
         let stripped_chars: Vec<char> = stripped.chars().collect();
 
-        for (phrase, action) in &self.commands {
-            let phrase_chars: Vec<char> = phrase.chars().collect();
+        for (_phrase, phrase_chars, action) in &self.commands {
             if stripped_chars.len() != phrase_chars.len() {
                 continue;
             }

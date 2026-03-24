@@ -161,9 +161,19 @@ pub struct HallucinationFilterConfig {
 
 /// Injection method enumeration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum InjectionMethod {
     Clipboard,
     Direct,
+}
+
+impl std::fmt::Display for InjectionMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Clipboard => f.write_str("clipboard"),
+            Self::Direct => f.write_str("direct"),
+        }
+    }
 }
 
 /// Injection backend selection
@@ -877,7 +887,7 @@ mod tests {
             language = "es"
 
             [injection]
-            method = "Direct"
+            method = "direct"
             paste_key = "ctrl+shift+v"
         "#;
 
@@ -907,7 +917,7 @@ mod tests {
             language = "en"
 
             [input]
-            method = "Direct"
+            method = "direct"
             paste_key = "ctrl+v"
             backend = "portal"
         "#;
@@ -2334,15 +2344,11 @@ mod tests {
 
     #[test]
     fn test_parse_filter_toml_embedded_resource_is_valid() {
-        // Ensures the embedded hallucination_filters.toml is well-formed TOML and
-        // non-empty. The runtime code panics on parse failure (invariant violation),
-        // so catching it here at test time is the right place to surface corruption.
         let filters = default_hallucination_filters();
         assert!(
             !filters.is_empty(),
             "parse_filter_toml must return a non-empty map; embedded resource may be corrupt"
         );
-        // Verify at least one well-known language entry is present
         assert!(
             filters.contains_key("en"),
             "Expected 'en' key in hallucination filters"
@@ -2351,5 +2357,23 @@ mod tests {
             !filters["en"].is_empty(),
             "English hallucination filter list must not be empty"
         );
+    }
+
+    #[test]
+    fn injection_method_display_matches_serde_lowercase() {
+        assert_eq!(InjectionMethod::Direct.to_string(), "direct");
+        assert_eq!(InjectionMethod::Clipboard.to_string(), "clipboard");
+
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            method: InjectionMethod,
+        }
+
+        let direct: Wrapper = toml::from_str("method = \"direct\"").expect("deserialize direct");
+        assert_eq!(direct.method, InjectionMethod::Direct);
+
+        let clipboard: Wrapper =
+            toml::from_str("method = \"clipboard\"").expect("deserialize clipboard");
+        assert_eq!(clipboard.method, InjectionMethod::Clipboard);
     }
 }

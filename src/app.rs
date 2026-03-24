@@ -129,7 +129,7 @@ pub async fn run_pipe_command(
         verbosity,
         auto_level: false, // No auto-level for file input
         quiet: true,       // No meter display for pipe mode
-        sample_rate: 16000,
+        sample_rate: defaults::SAMPLE_RATE,
         chunk_buffer: chunk_buffer_capacity(buffer_secs, 3),
         hallucination_filters,
         ..Default::default()
@@ -349,6 +349,34 @@ async fn connect_portal(
     }
 }
 
+/// Build a `PipelineConfig` for the interactive recording path.
+///
+/// Both `run_continuous` and `run_single_session` share identical config
+/// construction; this helper eliminates the duplication.
+fn build_pipeline_config(config: &Config, run_config: &PipelineRunConfig) -> PipelineConfig {
+    let hallucination_filters =
+        resolve_hallucination_filters(&config.transcription.hallucination_filters);
+    PipelineConfig {
+        vad: VadConfig {
+            speech_threshold: config.audio.vad_threshold,
+            silence_duration_ms: config.audio.silence_duration_ms,
+            ..Default::default()
+        },
+        chunker: chunker_config_from_secs(
+            run_config.chunk_secs,
+            run_config.pre_speech_ms,
+            run_config.post_speech_ms,
+        ),
+        verbosity: run_config.verbosity,
+        auto_level: true,
+        quiet: run_config.quiet,
+        sample_rate: defaults::SAMPLE_RATE,
+        chunk_buffer: chunk_buffer_capacity(run_config.buffer_secs, run_config.chunk_secs),
+        hallucination_filters,
+        ..Default::default()
+    }
+}
+
 /// Run the continuous pipeline until interrupted.
 async fn run_continuous(
     config: &Config,
@@ -356,35 +384,10 @@ async fn run_continuous(
     run_config: PipelineRunConfig,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
-    let PipelineRunConfig {
-        quiet,
-        verbosity,
-        buffer_secs,
-        chunk_secs,
-        pre_speech_ms,
-        post_speech_ms,
-    } = run_config;
-
+    let quiet = run_config.quiet;
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
-
-    let hallucination_filters =
-        resolve_hallucination_filters(&config.transcription.hallucination_filters);
-    let pipeline_config = PipelineConfig {
-        vad: VadConfig {
-            speech_threshold: config.audio.vad_threshold,
-            silence_duration_ms: config.audio.silence_duration_ms,
-            ..Default::default()
-        },
-        chunker: chunker_config_from_secs(chunk_secs, pre_speech_ms, post_speech_ms),
-        verbosity,
-        auto_level: true,
-        quiet,
-        sample_rate: 16000,
-        chunk_buffer: chunk_buffer_capacity(buffer_secs, chunk_secs),
-        hallucination_filters,
-        ..Default::default()
-    };
+    let pipeline_config = build_pipeline_config(config, &run_config);
 
     let sink = make_sink(config);
     let post_processors = build_post_processors(config);
@@ -419,35 +422,10 @@ async fn run_single_session(
     run_config: PipelineRunConfig,
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
-    let PipelineRunConfig {
-        quiet,
-        verbosity,
-        buffer_secs,
-        chunk_secs,
-        pre_speech_ms,
-        post_speech_ms,
-    } = run_config;
-
+    let quiet = run_config.quiet;
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
-
-    let hallucination_filters =
-        resolve_hallucination_filters(&config.transcription.hallucination_filters);
-    let pipeline_config = PipelineConfig {
-        vad: VadConfig {
-            speech_threshold: config.audio.vad_threshold,
-            silence_duration_ms: config.audio.silence_duration_ms,
-            ..Default::default()
-        },
-        chunker: chunker_config_from_secs(chunk_secs, pre_speech_ms, post_speech_ms),
-        verbosity,
-        auto_level: true,
-        quiet,
-        sample_rate: 16000,
-        chunk_buffer: chunk_buffer_capacity(buffer_secs, chunk_secs),
-        hallucination_filters,
-        ..Default::default()
-    };
+    let pipeline_config = build_pipeline_config(config, &run_config);
 
     let sink = CollectorSink::new();
     let post_processors = build_post_processors(config);

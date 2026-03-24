@@ -3,6 +3,7 @@
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::{Clock, SystemClock, VadConfig};
 use crate::correction::station::CorrectionStation;
+use crate::defaults;
 use crate::error::Result;
 use crate::ipc::protocol::DaemonEvent;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
@@ -62,7 +63,7 @@ impl Default for PipelineConfig {
             verbosity: 0,
             auto_level: true,
             quiet: false,
-            sample_rate: 16000,
+            sample_rate: defaults::SAMPLE_RATE,
             hallucination_filters: HashSet::new(),
             suspect_phrases: HashSet::new(),
             audio_buffer: 1024,
