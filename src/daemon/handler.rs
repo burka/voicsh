@@ -234,8 +234,8 @@ impl DaemonCommandHandler {
         let mut pipeline_guard = self.state.pipeline.lock().await;
 
         if let Some(handle) = pipeline_guard.take() {
-            // Just drop the handle to stop pipeline
-            drop(handle);
+            // Signal shutdown and wait for threads to finish before emitting the state change.
+            handle.stop();
             self.state
                 .emit(DaemonEvent::RecordingStateChanged { recording: false });
             Response::Ok {
