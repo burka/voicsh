@@ -28,11 +28,13 @@ pub struct RemoteModel {
 /// Returns an error on network failure or unexpected response format.
 pub async fn fetch_remote_models() -> Result<Vec<RemoteModel>> {
     let response =
-        HTTP_CLIENT.get(HF_TREE_URL).send().await.map_err(|e| {
-            VoicshError::ModelDownload {
+        HTTP_CLIENT
+            .get(HF_TREE_URL)
+            .send()
+            .await
+            .map_err(|e| VoicshError::ModelDownload {
                 message: format!("Failed to fetch HuggingFace model list: {e}"),
-            }
-        })?;
+            })?;
 
     if !response.status().is_success() {
         return Err(VoicshError::ModelDownload {

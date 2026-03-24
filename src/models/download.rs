@@ -232,12 +232,15 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
             .map(|m| m.name)
             .collect::<Vec<_>>()
             .join(", ");
-        VoicshError::ModelDownload { message: format!(
-            "Model '{name}' is not in the catalog. Downloads are restricted to \
-             known models to ensure integrity.\n\
-             Available models: {available}\n\
-             Run 'voicsh models list' for details."
-        })})?;
+        VoicshError::ModelDownload {
+            message: format!(
+                "Model '{name}' is not in the catalog. Downloads are restricted to \
+                 known models to ensure integrity.\n\
+                 Available models: {available}\n\
+                 Run 'voicsh models list' for details."
+            ),
+        }
+    })?;
 
     download_to_path(
         name,
