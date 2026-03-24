@@ -165,9 +165,12 @@ fn recommend_backend(
     }
 }
 
-/// Print a human-readable environment summary to stderr.
+/// Print a human-readable environment summary to stdout.
+///
+/// This is interactive wizard output, not an error message, so it uses
+/// `println!` for consistency with the rest of the init wizard.
 pub fn print_environment_summary(env: &DetectedEnvironment) {
-    eprintln!("Environment: {} (Wayland)", env.desktop);
+    println!("Environment: {} (Wayland)", env.desktop);
 
     let status = |available: bool, note: &str| -> String {
         if available {
@@ -184,43 +187,43 @@ pub fn print_environment_summary(env: &DetectedEnvironment) {
         _ => "",
     };
 
-    eprintln!(
+    println!(
         "  Portal (RemoteDesktop): {}",
         status(env.portal_available, "")
     );
-    eprintln!(
+    println!(
         "  wtype:                  {}",
         status(env.wtype_available, wtype_note)
     );
-    eprintln!(
+    println!(
         "  ydotool:                {}",
         status(env.ydotool_available, "")
     );
-    eprintln!(
+    println!(
         "  wl-copy:                {}",
         status(env.wl_copy_available, "")
     );
-    eprintln!();
-    eprintln!("Recommended backend: {:?}", env.recommended_backend);
+    println!();
+    println!("Recommended backend: {}", env.recommended_backend);
 
     // Print explanatory note based on recommendation
     match env.recommended_backend {
         InjectionBackend::Portal => {
-            eprintln!(
+            println!(
                 "  Note: {} uses the \"Remote Desktop\" portal for keyboard access.",
                 env.desktop
             );
-            eprintln!("  You may see a system dialog on first use — this is normal.");
-            eprintln!("  voicsh only simulates keyboard input, not screen sharing.");
+            println!("  You may see a system dialog on first use — this is normal.");
+            println!("  voicsh only simulates keyboard input, not screen sharing.");
         }
         InjectionBackend::Wtype => {
-            eprintln!("  wtype provides direct keyboard simulation — no daemon needed.");
+            println!("  wtype provides direct keyboard simulation — no daemon needed.");
         }
         InjectionBackend::Ydotool => {
-            eprintln!("  ydotool requires the ydotoold daemon to be running.");
+            println!("  ydotool requires the ydotoold daemon to be running.");
         }
         InjectionBackend::Auto => {
-            eprintln!("  Will try available backends at runtime.");
+            println!("  Will try available backends at runtime.");
         }
     }
 }

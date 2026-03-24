@@ -7,7 +7,7 @@ use crate::audio::capture::CpalAudioSource;
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
 use crate::audio::wav::WavAudioSource;
-use crate::config::{Config, resolve_hallucination_filters};
+use crate::config::{Config, InjectionMethod, resolve_hallucination_filters};
 use crate::defaults;
 use crate::error::{Result, VoicshError};
 use crate::inject::injector::SystemCommandExecutor;
@@ -194,7 +194,7 @@ pub async fn run_record_command(record: RecordConfig) -> Result<()> {
     suppress_audio_warnings();
 
     // Check prerequisites first (before any heavy work)
-    check_prerequisites()?;
+    check_prerequisites(&config.injection.method)?;
 
     // Apply CLI overrides
     if let Some(d) = device {
@@ -623,8 +623,14 @@ fn build_model_path(model: &str) -> Result<PathBuf> {
 }
 
 /// Check that required system tools are available.
-fn check_prerequisites() -> Result<()> {
-    if Command::new("wl-copy").arg("--version").output().is_err() {
+///
+/// The `wl-copy` prerequisite is only required when `method` is
+/// `InjectionMethod::Clipboard`. Portal-only setups (`InjectionMethod::Direct`)
+/// do not use the clipboard path and must not fail on a missing `wl-copy`.
+fn check_prerequisites(method: &InjectionMethod) -> Result<()> {
+    if *method == InjectionMethod::Clipboard
+        && Command::new("wl-copy").arg("--version").output().is_err()
+    {
         return Err(VoicshError::InjectionToolNotFound {
             tool: "wl-copy".to_string(),
         });

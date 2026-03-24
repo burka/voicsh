@@ -440,7 +440,7 @@ pub async fn run_full_init(
     let config_exists = config_path.exists();
 
     // Load existing config or start with defaults
-    let mut config = Config::load_or_default(&config_path);
+    let mut config = Config::load_or_default(&config_path).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Init always updates the backend — that's what "init" means.
     // force=true will also overwrite model settings in the benchmark step.
@@ -454,7 +454,7 @@ pub async fn run_full_init(
     } else {
         println!("Created config at {}", config_path.display());
     }
-    println!("  injection.backend = {:?}", config.injection.backend);
+    println!("  injection.backend = {}", config.injection.backend);
     println!();
 
     // Step 3: Run benchmark auto-tuning

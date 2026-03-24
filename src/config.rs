@@ -177,6 +177,17 @@ pub enum InjectionBackend {
     Ydotool,
 }
 
+impl std::fmt::Display for InjectionBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::Portal => write!(f, "portal"),
+            Self::Wtype => write!(f, "wtype"),
+            Self::Ydotool => write!(f, "ydotool"),
+        }
+    }
+}
+
 impl std::str::FromStr for InjectionBackend {
     type Err = String;
 
@@ -246,18 +257,17 @@ impl Config {
         Ok(config)
     }
 
-    /// Load configuration from a file or return defaults if file doesn't exist
+    /// Load configuration from a file or return defaults if file doesn't exist.
     ///
-    /// Only returns defaults if the file is missing.
-    /// Returns errors for invalid TOML.
-    pub fn load_or_default(path: &Path) -> Self {
+    /// Returns `Ok(Default::default())` when the file is missing.
+    /// Returns `Err` for invalid TOML or other I/O errors.
+    pub fn load_or_default(path: &Path) -> crate::error::Result<Self> {
         match Self::load(path) {
-            Ok(config) => config,
-            Err(crate::error::VoicshError::ConfigFileNotFound { .. }) => Self::default(),
-            Err(e) => {
-                // Re-panic on invalid TOML or other errors
-                panic!("Failed to load config from {}: {}", path.display(), e);
-            }
+            Ok(config) => Ok(config),
+            Err(crate::error::VoicshError::ConfigFileNotFound { .. }) => Ok(Self::default()),
+            Err(e) => Err(crate::error::VoicshError::ConfigParse {
+                message: format!("Failed to load config from {}: {}", path.display(), e),
+            }),
         }
     }
 
@@ -1058,6 +1068,39 @@ mod tests {
     }
 
     #[test]
+    fn test_injection_backend_display_is_lowercase() {
+        assert_eq!(InjectionBackend::Auto.to_string(), "auto");
+        assert_eq!(InjectionBackend::Portal.to_string(), "portal");
+        assert_eq!(InjectionBackend::Wtype.to_string(), "wtype");
+        assert_eq!(InjectionBackend::Ydotool.to_string(), "ydotool");
+    }
+
+    #[test]
+    fn test_injection_backend_display_matches_serde() {
+        // Display output must match serde lowercase serialization.
+        // Serialize via a wrapper struct because TOML requires a table at the root.
+        #[derive(serde::Serialize)]
+        struct Wrapper {
+            backend: InjectionBackend,
+        }
+        for (variant, expected) in [
+            (InjectionBackend::Auto, "auto"),
+            (InjectionBackend::Portal, "portal"),
+            (InjectionBackend::Wtype, "wtype"),
+            (InjectionBackend::Ydotool, "ydotool"),
+        ] {
+            let serialized = toml::to_string(&Wrapper {
+                backend: variant.clone(),
+            })
+            .unwrap();
+            assert!(
+                serialized.contains(&format!("backend = \"{expected}\"")),
+                "Display '{variant}' must match serde output '{serialized}'"
+            );
+        }
+    }
+
+    #[test]
     fn test_invalid_toml_returns_error() {
         let invalid_toml = r#"
             [audio
@@ -1087,15 +1130,14 @@ mod tests {
     #[test]
     fn test_load_or_default_returns_default_for_missing_file() {
         let missing_path = Path::new("/tmp/nonexistent_voicsh_config_12345.toml");
-        let config = Config::load_or_default(missing_path);
+        let config = Config::load_or_default(missing_path).unwrap();
 
         // Should return defaults
         assert_eq!(config, Config::default());
     }
 
     #[test]
-    #[should_panic(expected = "Failed to load config")]
-    fn test_load_or_default_panics_on_invalid_toml() {
+    fn test_load_or_default_errors_on_invalid_toml() {
         let invalid_toml = r#"
             [audio
             device = "broken
@@ -1104,8 +1146,13 @@ mod tests {
         let mut temp_file = NamedTempFile::new().unwrap();
         temp_file.write_all(invalid_toml.as_bytes()).unwrap();
 
-        // Should panic on invalid TOML, not return defaults
-        Config::load_or_default(temp_file.path());
+        let result = Config::load_or_default(temp_file.path());
+        assert!(result.is_err(), "Should return Err on invalid TOML");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Failed to load config"),
+            "Error message should mention config failure, got: {err_msg}"
+        );
     }
 
     // Malformed config tests
@@ -2282,6 +2329,27 @@ mod tests {
         assert!(
             template.contains("en, de, es, fr, he, it, ru"),
             "Missing language list in template"
+        );
+    }
+
+    #[test]
+    fn test_parse_filter_toml_embedded_resource_is_valid() {
+        // Ensures the embedded hallucination_filters.toml is well-formed TOML and
+        // non-empty. The runtime code panics on parse failure (invariant violation),
+        // so catching it here at test time is the right place to surface corruption.
+        let filters = default_hallucination_filters();
+        assert!(
+            !filters.is_empty(),
+            "parse_filter_toml must return a non-empty map; embedded resource may be corrupt"
+        );
+        // Verify at least one well-known language entry is present
+        assert!(
+            filters.contains_key("en"),
+            "Expected 'en' key in hallucination filters"
+        );
+        assert!(
+            !filters["en"].is_empty(),
+            "English hallucination filter list must not be empty"
         );
     }
 }

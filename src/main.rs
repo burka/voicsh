@@ -181,7 +181,7 @@ fn load_config(custom_path: Option<&std::path::Path>) -> Result<Config> {
     } else {
         // Try default path, fall back to defaults
         let default_path = Config::default_path();
-        Config::load_or_default(&default_path)
+        Config::load_or_default(&default_path)?
     };
 
     // Apply environment variable overrides
@@ -291,7 +291,7 @@ fn handle_config_command(
 
     match action {
         ConfigAction::Get { key } => {
-            let config = Config::load_or_default(&config_path).with_env_overrides();
+            let config = Config::load_or_default(&config_path)?.with_env_overrides();
             match config.get_value_by_path(&key) {
                 Ok(value) => println!("{}", value),
                 Err(e) => {
@@ -305,7 +305,7 @@ fn handle_config_command(
             println!("Set {} = {}", key, value);
         }
         ConfigAction::List { key, language } => {
-            let config = Config::load_or_default(&config_path).with_env_overrides();
+            let config = Config::load_or_default(&config_path)?.with_env_overrides();
 
             // Parse languages if provided
             let lang_codes: Option<Vec<&str>> = language
