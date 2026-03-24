@@ -1,7 +1,27 @@
 //! Data types for the continuous audio pipeline.
 
-use crate::ipc::protocol::TextOrigin;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
+
+/// How the final transcription text was produced.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextOrigin {
+    /// Direct Whisper output, unmodified.
+    #[default]
+    Transcription,
+    /// Post-ASR error correction applied (e.g. Flan-T5).
+    Corrected,
+    /// Voice command replacement applied.
+    VoiceCommand,
+}
+
+impl TextOrigin {
+    /// Returns true if this is the default (unmodified transcription).
+    pub fn is_transcription(&self) -> bool {
+        matches!(self, Self::Transcription)
+    }
+}
 
 /// Events that can be sent to the sink for processing.
 #[derive(Debug, Clone, PartialEq)]
@@ -121,6 +141,7 @@ impl AudioChunk {
         sequence: u64,
         capture_start: Instant,
         vad_start: Instant,
+        chunk_created: Instant,
     ) -> Self {
         Self {
             samples,
@@ -129,7 +150,7 @@ impl AudioChunk {
             timing: Some(Box::new(ChunkTiming {
                 capture_start,
                 vad_start,
-                chunk_created: Instant::now(),
+                chunk_created,
                 audio_duration_ms: duration_ms,
             })),
         }
@@ -266,7 +287,8 @@ mod tests {
         let samples = vec![100, 200, 300];
         let capture = Instant::now();
         let vad = Instant::now();
-        let chunk = AudioChunk::with_timing(samples.clone(), 1000, 5, capture, vad);
+        let created = Instant::now();
+        let chunk = AudioChunk::with_timing(samples.clone(), 1000, 5, capture, vad, created);
 
         assert_eq!(chunk.samples, samples);
         assert_eq!(chunk.duration_ms, 1000);
@@ -275,7 +297,7 @@ mod tests {
         let timing = chunk.timing.unwrap();
         assert_eq!(timing.capture_start, capture);
         assert_eq!(timing.vad_start, vad);
-        assert!(timing.chunk_created >= vad);
+        assert_eq!(timing.chunk_created, created);
     }
 
     #[test]

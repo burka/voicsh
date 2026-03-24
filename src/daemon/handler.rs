@@ -321,8 +321,10 @@ impl DaemonCommandHandler {
         })
         .await;
 
-        // Update shared Arc (for live pipeline if recording)
-        // RwLock poisoning is rare and unrecoverable; if it happens we want to fail loudly.
+        // Update shared Arc (for live pipeline if recording).
+        // This is the write side: if we panic here while holding the lock, the read side
+        // in TranscriberStation recovers via `unwrap_or_else(|e| e.into_inner())`. We
+        // still propagate loudly on the write side so operator errors surface immediately.
         #[allow(clippy::expect_used)]
         {
             *self

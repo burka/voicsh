@@ -290,13 +290,12 @@ impl Station for TranscriberStation {
         }
 
         // Language allowlist filter
-        // RwLock poisoning (another thread panicked while holding the lock) is rare and unrecoverable.
-        // If it happens, we want the pipeline to fail loudly rather than silently skip filtering.
-        #[allow(clippy::expect_used)]
+        // If the write-side thread panicked while holding the lock, recover the last
+        // consistent value rather than cascading the panic into the audio hot path.
         let allowed_languages = self
             .allowed_languages
             .read()
-            .expect("allowed_languages RwLock poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         if !allowed_languages.is_empty()
             && !result.language.is_empty()
             && !allowed_languages.iter().any(|l| l == &result.language)
@@ -327,11 +326,12 @@ impl Station for TranscriberStation {
         drop(allowed_languages);
 
         // Confidence threshold filter
-        #[allow(clippy::expect_used)]
+        // If the write-side thread panicked while holding the lock, recover the last
+        // consistent value rather than cascading the panic into the audio hot path.
         let min_confidence = *self
             .min_confidence
             .read()
-            .expect("min_confidence RwLock poisoned");
+            .unwrap_or_else(|e| e.into_inner());
         if min_confidence > 0.0 && result.confidence < min_confidence {
             let reason = format!(
                 "confidence {:.2} below threshold {:.2}",

@@ -135,24 +135,10 @@ impl Response {
 }
 
 /// How the final transcription text was produced.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TextOrigin {
-    /// Direct Whisper output, unmodified.
-    #[default]
-    Transcription,
-    /// Post-ASR error correction applied (e.g. Flan-T5).
-    Corrected,
-    /// Voice command replacement applied.
-    VoiceCommand,
-}
-
-impl TextOrigin {
-    /// Returns true if this is the default (unmodified transcription).
-    pub fn is_transcription(&self) -> bool {
-        matches!(self, Self::Transcription)
-    }
-}
+///
+/// Defined in `pipeline::types` — re-exported here for backward compatibility
+/// and for use in IPC serialization.
+pub use crate::pipeline::types::TextOrigin;
 
 /// Events streamed from daemon to follow clients.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

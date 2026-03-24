@@ -101,7 +101,14 @@ impl ChunkerStation {
             // Populate timing when verbosity >= 1
             let capture_start = self.first_frame_capture.unwrap_or_else(Instant::now);
             let vad_start = self.first_frame_vad.unwrap_or_else(Instant::now);
-            AudioChunk::with_timing(samples, duration_ms, seq, capture_start, vad_start)
+            AudioChunk::with_timing(
+                samples,
+                duration_ms,
+                seq,
+                capture_start,
+                vad_start,
+                self.clock.now(),
+            )
         } else {
             // No timing when verbosity < 1
             AudioChunk::new(samples, duration_ms, seq)
