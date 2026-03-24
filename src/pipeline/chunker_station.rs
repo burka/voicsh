@@ -193,6 +193,8 @@ impl Station for ChunkerStation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::vad::MockClock;
+    use std::time::Duration;
 
     fn make_test_config() -> AdaptiveChunkerConfig {
         AdaptiveChunkerConfig {
@@ -240,19 +242,20 @@ mod tests {
 
     #[test]
     fn test_emits_chunk_on_gap_threshold() {
+        let clock = MockClock::new();
         let config = make_test_config();
-        let mut station = ChunkerStation::new(config);
+        let mut station = ChunkerStation::with_clock(config, Arc::new(clock.clone()));
 
         // Generate enough samples to exceed target duration (3 seconds)
         let samples_per_second = 16000;
         let samples: Vec<i16> = (0..samples_per_second).map(|i| i as i16).collect();
 
-        // Feed 3 seconds of speech with delays to let time pass
+        // Feed 3 seconds of speech, advancing mock clock instead of sleeping
         for _ in 0..3 {
             let frame = make_speech_frame(samples.clone());
             let result = station.process(frame).unwrap();
             assert!(result.is_none());
-            std::thread::sleep(std::time::Duration::from_millis(1001));
+            clock.advance(Duration::from_millis(1001));
         }
 
         // Feed a silence frame to start silence tracking
@@ -260,8 +263,8 @@ mod tests {
         let result = station.process(silence_frame).unwrap();
         assert!(result.is_none()); // First silence frame won't emit yet
 
-        // Wait for 250ms+ (required gap at 3000ms is 250ms)
-        std::thread::sleep(std::time::Duration::from_millis(260));
+        // Advance 260ms (required gap at 3000ms is 250ms)
+        clock.advance(Duration::from_millis(260));
 
         // Feed another silence frame - now we should emit
         let silence_frame = make_silence_frame(samples.clone());
@@ -276,8 +279,9 @@ mod tests {
 
     #[test]
     fn test_sequence_numbers_increment() {
+        let clock = MockClock::new();
         let config = make_test_config();
-        let mut station = ChunkerStation::new(config);
+        let mut station = ChunkerStation::with_clock(config, Arc::new(clock.clone()));
 
         let samples_per_second = 16000;
         let samples: Vec<i16> = (0..samples_per_second).map(|i| i as i16).collect();
@@ -286,13 +290,13 @@ mod tests {
         for _ in 0..3 {
             let frame = make_speech_frame(samples.clone());
             station.process(frame).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(1001));
+            clock.advance(Duration::from_millis(1001));
         }
 
         // Start silence tracking
         let silence_frame = make_silence_frame(samples.clone());
         station.process(silence_frame).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(260));
+        clock.advance(Duration::from_millis(260));
 
         let silence_frame = make_silence_frame(samples.clone());
         let chunk1 = station.process(silence_frame).unwrap();
@@ -303,13 +307,13 @@ mod tests {
         for _ in 0..3 {
             let frame = make_speech_frame(samples.clone());
             station.process(frame).unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(1001));
+            clock.advance(Duration::from_millis(1001));
         }
 
         // Start silence tracking for second chunk
         let silence_frame = make_silence_frame(samples.clone());
         station.process(silence_frame).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(260));
+        clock.advance(Duration::from_millis(260));
 
         let silence_frame = make_silence_frame(samples.clone());
         let chunk2 = station.process(silence_frame).unwrap();
