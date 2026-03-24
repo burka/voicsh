@@ -4,9 +4,10 @@ use crate::error::{Result, VoicshError};
 use crate::ipc::protocol::{Command, DaemonEvent, Response};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Semaphore;
 
 /// Maximum number of bytes accepted in a single IPC command line (64 KiB).
 /// Prevents a malicious local process from causing unbounded memory growth.
@@ -32,22 +33,22 @@ pub trait CommandHandler: Send + Sync {
 /// State for managing server shutdown.
 #[derive(Debug, Clone)]
 struct ServerState {
-    shutdown: Arc<Mutex<bool>>,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl ServerState {
     fn new() -> Self {
         Self {
-            shutdown: Arc::new(Mutex::new(false)),
+            shutdown: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    async fn is_shutdown(&self) -> bool {
-        *self.shutdown.lock().await
+    fn is_shutdown(&self) -> bool {
+        self.shutdown.load(Ordering::Acquire)
     }
 
-    async fn set_shutdown(&self) {
-        *self.shutdown.lock().await = true;
+    fn set_shutdown(&self) {
+        self.shutdown.store(true, Ordering::Release);
     }
 }
 
@@ -123,7 +124,7 @@ impl IpcServer {
 
         loop {
             // Check if shutdown was requested
-            if self.state.is_shutdown().await {
+            if self.state.is_shutdown() {
                 break;
             }
 
@@ -173,7 +174,7 @@ impl IpcServer {
 
     /// Stop the IPC server and clean up the socket file.
     pub async fn stop(&self) -> Result<()> {
-        self.state.set_shutdown().await;
+        self.state.set_shutdown();
 
         // Remove the socket file unconditionally to avoid a TOCTOU race.
         // Ignore NotFound — the file may already be gone.

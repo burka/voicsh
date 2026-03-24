@@ -133,8 +133,10 @@ async fn main() -> Result<()> {
             threads,
         }) => {
             if models.is_some() {
-                eprintln!("Warning: --models is deprecated, use positional argument instead:");
-                eprintln!("  voicsh benchmark tiny.en,base.en");
+                eprintln!(
+                    "Warning: --models is deprecated and will be removed in a future release."
+                );
+                eprintln!("Use the positional argument instead: voicsh benchmark tiny.en,base.en");
             }
             let models = model.or(models);
             handle_benchmark_command(
