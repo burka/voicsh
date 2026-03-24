@@ -304,7 +304,12 @@ fn handle_config_command(
         }
         ConfigAction::Set { key, value } => {
             Config::set_value_by_path(&config_path, &key, &value)?;
-            println!("Set {} = {}", key, value);
+            println!(
+                "Set {} = {} (saved to {})",
+                key,
+                value,
+                config_path.display()
+            );
         }
         ConfigAction::List { key, language } => {
             let config = Config::load_or_default(&config_path)?.with_env_overrides();
@@ -411,7 +416,7 @@ fn print_focused_window_info() {
             .unwrap_or("(unknown)")
     );
     println!("  {:<14} {}", "Toolkit:", info.toolkit);
-    println!("  {:<14} {:?}", "Window kind:", info.window_kind);
+    println!("  {:<14} {}", "Window kind:", info.window_kind);
     println!("  {:<14} {}", "Detected via:", info.detection_method);
 }
 
@@ -446,7 +451,7 @@ fn follow_focused_window() {
                 &info.app_id
             };
             println!(
-                "{} | pid={} | {} | {:?} | {}",
+                "{} | pid={} | {} | {} | {}",
                 app, pid_str, info.toolkit, info.window_kind, info.detection_method,
             );
 
@@ -486,30 +491,32 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
 
                 println!("Status:");
                 // Version info
-                println!("  {}    {}", "Client:".dimmed(), client_version);
-                print!("  {}    {}", "Daemon:".dimmed(), daemon_version);
+                println!("  {:<12} {}", "Client:".dimmed(), client_version);
+                print!("  {:<12} {}", "Daemon:".dimmed(), daemon_version);
                 if client_version != daemon_version {
                     print!(" {}", "(version mismatch!)".yellow());
                 }
                 println!();
                 // Backend + device
                 match device {
-                    Some(dev) => println!("  {}   {} — {}", "Backend:".dimmed(), backend, dev),
-                    None => println!("  {}   {}", "Backend:".dimmed(), backend),
+                    Some(dev) => {
+                        println!("  {:<12} {} — {}", "Backend:".dimmed(), backend, dev);
+                    }
+                    None => println!("  {:<12} {}", "Backend:".dimmed(), backend),
                 }
                 // Recording
                 println!(
-                    "  {} {}",
+                    "  {:<12} {}",
                     "Recording:".dimmed(),
                     if recording { "yes" } else { "no" }
                 );
                 // Model
                 if model_loaded && let Some(name) = model_name {
-                    println!("  {}     {}", "Model:".dimmed(), name);
+                    println!("  {:<12} {}", "Model:".dimmed(), name);
                 }
                 // Language
                 if let Some(lang) = language {
-                    println!("  {}  {}", "Language:".dimmed(), lang);
+                    println!("  {:<12} {}", "Language:".dimmed(), lang);
                 }
                 // Error correction
                 if error_correction_enabled {
@@ -517,7 +524,7 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                     let dict_lang = dictionary_language.as_deref().unwrap_or("auto");
                     if backend_name == "symspell" {
                         println!(
-                            "  {} enabled (symspell, {})",
+                            "  {:<12} enabled (symspell, {})",
                             "Correction:".dimmed(),
                             dict_lang,
                         );
@@ -525,7 +532,7 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
                         let model_name =
                             error_correction_model.as_deref().unwrap_or("flan-t5-base");
                         println!(
-                            "  {} enabled ({}, {}, {})",
+                            "  {:<12} enabled ({}, {}, {})",
                             "Correction:".dimmed(),
                             backend_name,
                             model_name,
@@ -626,7 +633,7 @@ async fn handle_follow(socket: Option<std::path::PathBuf>) -> Result<()> {
     {
         Ok(()) => {
             voicsh::output::clear_line();
-            println!("Daemon connection closed");
+            println!("Daemon connection closed. To reconnect: voicsh follow");
         }
         Err(e) => {
             eprintln!("Failed to follow daemon: {}", e);

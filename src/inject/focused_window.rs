@@ -217,6 +217,17 @@ fn detect_toolkit_from_maps_content(content: &str) -> Toolkit {
     Toolkit::Unknown
 }
 
+/// Sanitize an app_id from compositor GVariant data.
+///
+/// Retains only alphanumeric, `-`, `.`, and `_` characters and caps at 256 chars.
+/// This guards against ANSI escape sequences or other unexpected content.
+fn sanitize_app_id(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, '-' | '.' | '_'))
+        .take(256)
+        .collect()
+}
+
 /// Build `FocusedWindowInfo` from app_id, optional PID, and detection method.
 fn build_window_info(
     app_id: String,
@@ -363,11 +374,14 @@ fn parse_voicsh_extension_response(output: &str) -> Option<FocusedWindowInfo> {
     let pid = pid_str.parse::<u32>().ok().filter(|&p| p > 0);
 
     // Use wm_class as app_id if sandboxed app_id is empty
-    let effective_app_id = if app_id.is_empty() && !wm_class.is_empty() {
+    let raw_app_id = if app_id.is_empty() && !wm_class.is_empty() {
         wm_class
     } else {
         app_id
     };
+
+    // Sanitize: keep only alphanumeric, '-', '.', '_'; cap at 256 chars.
+    let effective_app_id = sanitize_app_id(&raw_app_id);
 
     if effective_app_id.is_empty() {
         return None;
@@ -474,6 +488,15 @@ pub enum WindowKind {
     Terminal,
     /// Graphical application (pastes with Ctrl+V)
     GraphicalApp,
+}
+
+impl std::fmt::Display for WindowKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WindowKind::Terminal => write!(f, "terminal"),
+            WindowKind::GraphicalApp => write!(f, "graphical-app"),
+        }
+    }
 }
 
 /// Known terminal emulator app IDs (compared case-insensitively).
@@ -689,19 +712,21 @@ pub(crate) fn fresh_gnome_dbus_address() -> Option<String> {
         return None;
     }
 
-    let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if pid.is_empty() {
-        return None;
-    }
+    // Validate that the output is a numeric PID before using it in a path.
+    let pid: u32 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .ok()?;
 
     // Read its environment
     let environ = fs::read(format!("/proc/{}/environ", pid)).ok()?;
     let env_str = String::from_utf8_lossy(&environ);
 
-    // Find DBUS_SESSION_BUS_ADDRESS
+    // Find DBUS_SESSION_BUS_ADDRESS and validate it is a well-formed address.
     for entry in env_str.split('\0') {
         if let Some(addr) = entry.strip_prefix("DBUS_SESSION_BUS_ADDRESS=")
             && !addr.is_empty()
+            && (addr.starts_with("unix:") || addr.starts_with("tcp:"))
         {
             return Some(addr.to_string());
         }
