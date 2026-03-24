@@ -60,6 +60,32 @@ jobs:
       - name: Test (no features)
         run: cargo test --lib --no-default-features
 
+  check-full:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (full features)
+        run: cargo clippy -- -D warnings
+
+      - name: Build (full features)
+        run: cargo build
+
+      - name: Test (full features)
+        run: cargo test
+
   audit:
     runs-on: ubuntu-latest
     permissions:
