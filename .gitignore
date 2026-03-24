@@ -3,6 +3,7 @@
 .serena/
 lcov.info
 gschemas.compiled
+.fastembed_cache/
 
 # Secrets and credentials
 *.env

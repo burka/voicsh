@@ -31,7 +31,7 @@ voicsh --once                   # single utterance → exit
 # Pipe mode (no mic/runtime deps needed):
 cat file.wav | voicsh
 
-voicsh help                     # all commands and options
+voicsh --help                   # all commands and options
 ```
 
 ## How it works
