@@ -42,8 +42,8 @@ pub mod app;
 
 // Core traits (source → process → sink)
 pub use audio::recorder::AudioSource;
-pub use inject::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
-pub use pipeline::sink::{CollectorSink, InjectorSink, StdoutSink, TextSink};
+pub use inject::injector::CommandExecutor;
+pub use pipeline::sink::TextSink;
 pub use stt::transcriber::Transcriber;
 
 // Pipeline
@@ -55,17 +55,11 @@ pub use error::{Result, VoicshError};
 // Config
 pub use config::{Config, InjectionMethod, resolve_hallucination_filters};
 
-// Station framework (for advanced users)
+// Station framework
 pub use pipeline::error::{ErrorReporter, StationError};
-pub use pipeline::station::Station;
 
 // Correction
-#[cfg(feature = "error-correction")]
-pub use correction::candle_t5::CandleT5Corrector;
 pub use correction::corrector::Corrector;
-pub use correction::station::CorrectionStation;
-#[cfg(feature = "symspell")]
-pub use correction::{hybrid::HybridCorrector, symspell::SymSpellCorrector};
 
 /// Build version string with optional git commit hash.
 ///
