@@ -266,8 +266,11 @@ mod tests {
     fn test_mock_transcriber_empty_audio() {
         let transcriber = MockTranscriber::new("test-model");
         let empty_audio: Vec<i16> = vec![];
-        let result = transcriber.transcribe(&empty_audio);
-        assert!(result.is_ok());
+        let result = transcriber.transcribe(&empty_audio).unwrap();
+        // MockTranscriber ignores audio content and returns its configured response.
+        // Default response is "mock transcription" regardless of input size.
+        assert_eq!(result.text, "mock transcription");
+        assert_eq!(result.confidence, 1.0);
     }
 
     #[test]

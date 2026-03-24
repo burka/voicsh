@@ -101,8 +101,14 @@ mod tests {
     #[test]
     fn from_file_loads_dictionary() {
         let (_file, path) = create_test_dictionary();
-        let corrector = SymSpellCorrector::from_file(&path, "en");
-        assert!(corrector.is_ok(), "Should load dictionary without error");
+        let mut corrector = SymSpellCorrector::from_file(&path, "en")
+            .expect("should load dictionary without error");
+        // Verify the corrector is functional by correcting a known dictionary word.
+        let result = corrector.correct("hello").unwrap();
+        assert_eq!(
+            result, "hello",
+            "known dictionary word should pass through unchanged"
+        );
     }
 
     #[test]
@@ -159,10 +165,13 @@ mod tests {
     fn from_file_empty_dictionary() {
         let file = tempfile::NamedTempFile::new().unwrap();
         let path = file.path().to_path_buf();
-        let corrector = SymSpellCorrector::from_file(&path, "en");
-        assert!(
-            corrector.is_ok(),
-            "Empty dictionary should load without error"
+        let mut corrector = SymSpellCorrector::from_file(&path, "en")
+            .expect("empty dictionary should load without error");
+        // With no dictionary entries, correct() should return input unchanged (no suggestions).
+        let result = corrector.correct("hello").unwrap();
+        assert_eq!(
+            result, "hello",
+            "empty dictionary should return input unchanged"
         );
     }
 
@@ -175,10 +184,13 @@ mod tests {
         writeln!(file, "good 500000").unwrap();
         file.flush().unwrap();
         let path = file.path().to_path_buf();
-        let corrector = SymSpellCorrector::from_file(&path, "en");
-        assert!(
-            corrector.is_ok(),
-            "Malformed lines should be skipped silently"
+        let mut corrector = SymSpellCorrector::from_file(&path, "en")
+            .expect("malformed lines should be skipped silently");
+        // The two valid entries (hello, good) should be loaded; correct() should still work.
+        let result = corrector.correct("hello").unwrap();
+        assert_eq!(
+            result, "hello",
+            "valid dictionary entry should pass through unchanged"
         );
     }
 }

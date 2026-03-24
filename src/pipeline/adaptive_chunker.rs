@@ -335,46 +335,63 @@ mod tests {
     #[test]
     fn test_emits_on_gap_threshold() {
         let config = make_test_config();
-        let mut chunker = AdaptiveChunker::new(config);
+        let clock = MockClock::new();
+        let mut chunker = AdaptiveChunker::with_clock(config, Arc::new(clock.clone()));
 
         // Generate enough samples to exceed target duration
         let samples_per_feed = 16000; // 1 second of audio at 16kHz
         let samples: Vec<i16> = (0..samples_per_feed).map(|i| i as i16).collect();
 
-        // Feed speech for 3 seconds
+        // Feed speech for 3 seconds, advancing clock by 1s per iteration
         for _ in 0..3 {
             let result = chunker.feed(true, &samples, 0);
             assert!(result.is_none());
-            std::thread::sleep(std::time::Duration::from_millis(1001));
+            clock.advance(Duration::from_millis(1001));
         }
 
         // At 3000ms, required gap is 250ms
         // Feed silence with 250ms gap - should emit
-        let result = chunker.feed(false, &samples, 250);
-        assert!(result.is_some());
-        assert!(!result.unwrap().is_empty());
+        let chunk = chunker
+            .feed(false, &samples, 250)
+            .expect("should emit when silence >= required gap");
+        assert!(
+            !chunk.is_empty(),
+            "emitted chunk should contain accumulated samples"
+        );
+        // 3 speech feeds + 1 silence feed (samples are always appended before emit check)
+        assert_eq!(
+            chunk.len(),
+            4 * samples_per_feed,
+            "should contain 3 speech feeds plus the triggering silence feed"
+        );
     }
 
     #[test]
     fn test_emits_on_max_duration() {
         let config = make_test_config();
-        let mut chunker = AdaptiveChunker::new(config);
+        let clock = MockClock::new();
+        let mut chunker = AdaptiveChunker::with_clock(config, Arc::new(clock.clone()));
 
         let samples_per_feed = 16000; // 1 second
         let samples: Vec<i16> = (0..samples_per_feed).map(|i| i as i16).collect();
 
-        // Feed speech for max duration (6 seconds)
+        // Feed speech for max duration (6 seconds), advancing clock per iteration
         for i in 0..6 {
             let result = chunker.feed(true, &samples, 0);
             if i < 5 {
                 assert!(result.is_none(), "Should not emit before max duration");
             }
-            std::thread::sleep(std::time::Duration::from_millis(1001));
+            clock.advance(Duration::from_millis(1001));
         }
 
         // Next feed should force emit (at max duration)
-        let result = chunker.feed(true, &samples, 0);
-        assert!(result.is_some(), "Should force emit at max duration");
+        let chunk = chunker
+            .feed(true, &samples, 0)
+            .expect("should force emit at max duration");
+        assert!(
+            !chunk.is_empty(),
+            "force-emitted chunk should contain accumulated samples"
+        );
     }
 
     #[test]

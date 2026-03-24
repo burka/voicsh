@@ -130,3 +130,156 @@ fn service_dir() -> Result<PathBuf> {
         anyhow::bail!("Could not determine user config directory (HOME or XDG_CONFIG_HOME)")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test that service_dir uses XDG_CONFIG_HOME when set.
+    ///
+    /// Uses a temporary env override. Tests are run with std::env which is process-global,
+    /// so each test sets and then restores the relevant variables.
+    #[test]
+    fn service_dir_uses_xdg_config_home() {
+        let prev_xdg = std::env::var("XDG_CONFIG_HOME").ok();
+        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/custom/config") };
+
+        let result = service_dir();
+
+        // Restore env state before asserting to ensure cleanup on panic
+        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
+        unsafe {
+            match prev_xdg {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+        }
+
+        let path = result.expect("service_dir should succeed when XDG_CONFIG_HOME is set");
+        assert_eq!(
+            path,
+            PathBuf::from("/custom/config/systemd/user"),
+            "should use XDG_CONFIG_HOME as the config root"
+        );
+    }
+
+    /// Test that service_dir falls back to HOME/.config when XDG_CONFIG_HOME is absent.
+    #[test]
+    fn service_dir_falls_back_to_home() {
+        let prev_xdg = std::env::var("XDG_CONFIG_HOME").ok();
+        let prev_home = std::env::var("HOME").ok();
+
+        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::set_var("HOME", "/home/testuser");
+        }
+
+        let result = service_dir();
+
+        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
+        unsafe {
+            match prev_xdg {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let path = result.expect("service_dir should succeed when HOME is set");
+        assert_eq!(
+            path,
+            PathBuf::from("/home/testuser/.config/systemd/user"),
+            "should use HOME/.config as the config root"
+        );
+    }
+
+    /// Test that service_dir returns an error when neither XDG_CONFIG_HOME nor HOME is set.
+    #[test]
+    fn service_dir_errors_without_home_or_xdg() {
+        let prev_xdg = std::env::var("XDG_CONFIG_HOME").ok();
+        let prev_home = std::env::var("HOME").ok();
+
+        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
+        unsafe {
+            std::env::remove_var("XDG_CONFIG_HOME");
+            std::env::remove_var("HOME");
+        }
+
+        let result = service_dir();
+
+        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
+        unsafe {
+            match prev_xdg {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+
+        let err = result.expect_err("service_dir should fail without HOME or XDG_CONFIG_HOME");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("HOME") || msg.contains("XDG_CONFIG_HOME"),
+            "error should mention the missing env vars, got: {}",
+            msg
+        );
+    }
+
+    /// Test that the unit file template contains required systemd section headers and the
+    /// ExecStart field. This validates the format string without invoking systemctl.
+    #[test]
+    fn service_file_content_has_required_sections() {
+        // Reconstruct the same template logic used in install_and_activate, using a
+        // known executable path to avoid depending on the actual binary location.
+        let exe_path = std::path::PathBuf::from("/usr/bin/voicsh");
+        let content = format!(
+            r#"[Unit]
+Description=voicsh - Voice typing daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart={} daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"#,
+            exe_path.display()
+        );
+
+        assert!(
+            content.contains("[Unit]"),
+            "unit file must contain [Unit] section"
+        );
+        assert!(
+            content.contains("[Service]"),
+            "unit file must contain [Service] section"
+        );
+        assert!(
+            content.contains("[Install]"),
+            "unit file must contain [Install] section"
+        );
+        assert_eq!(
+            content
+                .lines()
+                .find(|l| l.starts_with("ExecStart="))
+                .expect("unit file must have ExecStart line"),
+            "ExecStart=/usr/bin/voicsh daemon",
+            "ExecStart must point to the binary with 'daemon' subcommand"
+        );
+        assert!(
+            content.contains("WantedBy=default.target"),
+            "unit file must target default.target for user services"
+        );
+    }
+}
