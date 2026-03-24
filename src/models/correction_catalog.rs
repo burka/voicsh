@@ -41,10 +41,9 @@ pub const CORRECTION_MODELS: &[CorrectionModelInfo] = &[
         hf_filename: "model.gguf",
         config_filename: "config.json",
         description: "Fast, lower quality. ~50-150 ms per correction on CPU.",
-        // TODO: populate SHA-256 values by fetching from HuggingFace after first download
-        sha256_model: "",
-        sha256_config: "",
-        sha256_tokenizer: "",
+        sha256_model: "30b202732ece72a7c4e8bc5875c800ef322d4fa2ae3cde1051c444a339303ef1",
+        sha256_config: "530e25060e3a8d5f7b0fcf53bfea9f3601165161f3b1914676e98d97cf07bcf1",
+        sha256_tokenizer: "d2acde0d8d71dd30a711834b07781b9c89feaac33fd332f60507699282740066",
     },
     CorrectionModelInfo {
         name: "flan-t5-base",
@@ -54,10 +53,9 @@ pub const CORRECTION_MODELS: &[CorrectionModelInfo] = &[
         hf_filename: "model-flan-t5-base.gguf",
         config_filename: "config-flan-t5-base.json",
         description: "Balanced speed and quality. ~150-400 ms per correction on CPU.",
-        // TODO: populate SHA-256 values by fetching from HuggingFace after first download
-        sha256_model: "",
-        sha256_config: "",
-        sha256_tokenizer: "",
+        sha256_model: "493a8e9f31338409e4ebd1a399235eff0e6e51176efc2ce1e7003b5c9ce850c3",
+        sha256_config: "7c1853dbfa0e4aac093eb109a358b6ab25fe86b7c15185a91322f0ed26f0f940",
+        sha256_tokenizer: "d2acde0d8d71dd30a711834b07781b9c89feaac33fd332f60507699282740066",
     },
     CorrectionModelInfo {
         name: "flan-t5-large",
@@ -67,10 +65,9 @@ pub const CORRECTION_MODELS: &[CorrectionModelInfo] = &[
         hf_filename: "model-flan-t5-large.gguf",
         config_filename: "config-flan-t5-large.json",
         description: "Best quality, slower. ~400-1000 ms per correction on CPU.",
-        // TODO: populate SHA-256 values by fetching from HuggingFace after first download
-        sha256_model: "",
-        sha256_config: "",
-        sha256_tokenizer: "",
+        sha256_model: "76e6b7826e29bc6316ddd7d7f73e04b0b0cfa544bd9d8d01c7d26a524321d8f0",
+        sha256_config: "bfa5beeb5a4630a97f043f071b9b5d858c842604cff5db874680f33b56090c8c",
+        sha256_tokenizer: "d2acde0d8d71dd30a711834b07781b9c89feaac33fd332f60507699282740066",
     },
 ];
 
@@ -95,6 +92,18 @@ mod tests {
         assert_eq!(model.size_mb, 64);
         assert_eq!(model.hf_repo, CORRECTION_MODEL_REPO);
         assert_eq!(model.hf_filename, "model.gguf");
+        assert_eq!(
+            model.sha256_model,
+            "30b202732ece72a7c4e8bc5875c800ef322d4fa2ae3cde1051c444a339303ef1"
+        );
+        assert_eq!(
+            model.sha256_config,
+            "530e25060e3a8d5f7b0fcf53bfea9f3601165161f3b1914676e98d97cf07bcf1"
+        );
+        assert_eq!(
+            model.sha256_tokenizer,
+            "d2acde0d8d71dd30a711834b07781b9c89feaac33fd332f60507699282740066"
+        );
     }
 
     #[test]
@@ -103,6 +112,18 @@ mod tests {
         assert_eq!(model.name, "flan-t5-base");
         assert_eq!(model.size_mb, 263);
         assert_eq!(model.hf_filename, "model-flan-t5-base.gguf");
+        assert_eq!(
+            model.sha256_model,
+            "493a8e9f31338409e4ebd1a399235eff0e6e51176efc2ce1e7003b5c9ce850c3"
+        );
+        assert_eq!(
+            model.sha256_config,
+            "7c1853dbfa0e4aac093eb109a358b6ab25fe86b7c15185a91322f0ed26f0f940"
+        );
+        assert_eq!(
+            model.sha256_tokenizer,
+            "d2acde0d8d71dd30a711834b07781b9c89feaac33fd332f60507699282740066"
+        );
     }
 
     #[test]
@@ -110,6 +131,18 @@ mod tests {
         let model = get_correction_model("flan-t5-large").expect("flan-t5-large should exist");
         assert_eq!(model.name, "flan-t5-large");
         assert_eq!(model.size_mb, 852);
+        assert_eq!(
+            model.sha256_model,
+            "76e6b7826e29bc6316ddd7d7f73e04b0b0cfa544bd9d8d01c7d26a524321d8f0"
+        );
+        assert_eq!(
+            model.sha256_config,
+            "bfa5beeb5a4630a97f043f071b9b5d858c842604cff5db874680f33b56090c8c"
+        );
+        assert_eq!(
+            model.sha256_tokenizer,
+            "d2acde0d8d71dd30a711834b07781b9c89feaac33fd332f60507699282740066"
+        );
     }
 
     #[test]
@@ -134,6 +167,45 @@ mod tests {
                 window[0].size_mb,
                 window[1].name,
                 window[1].size_mb,
+            );
+        }
+    }
+
+    #[test]
+    fn test_all_models_have_sha256_hashes() {
+        for model in CORRECTION_MODELS {
+            assert!(
+                !model.sha256_model.is_empty(),
+                "{} is missing sha256_model",
+                model.name
+            );
+            assert_eq!(
+                model.sha256_model.len(),
+                64,
+                "{} sha256_model is not a 64-character hex string",
+                model.name
+            );
+            assert!(
+                !model.sha256_config.is_empty(),
+                "{} is missing sha256_config",
+                model.name
+            );
+            assert_eq!(
+                model.sha256_config.len(),
+                64,
+                "{} sha256_config is not a 64-character hex string",
+                model.name
+            );
+            assert!(
+                !model.sha256_tokenizer.is_empty(),
+                "{} is missing sha256_tokenizer",
+                model.name
+            );
+            assert_eq!(
+                model.sha256_tokenizer.len(),
+                64,
+                "{} sha256_tokenizer is not a 64-character hex string",
+                model.name
             );
         }
     }
