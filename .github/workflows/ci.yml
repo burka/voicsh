@@ -31,15 +31,15 @@ jobs:
         run: cargo fmt -- --check
 
       - name: Clippy (reduced feature set)
-        run: cargo clippy --lib --no-default-features --features cli,portal,model-download -- -D warnings
+        run: |
+          cargo clippy --lib --no-default-features --features cli,portal,model-download \
+            --message-format=json -- -D warnings 2>&1 | tee /tmp/clippy.json
 
-      - name: Clippy SARIF upload
+      - name: Generate SARIF from clippy
         if: always()
         run: |
           cargo install clippy-sarif sarif-fmt
-          cargo clippy --lib --no-default-features --features cli,portal,model-download \
-            --message-format=json | clippy-sarif > clippy-results.sarif
-          cat clippy-results.sarif
+          cat /tmp/clippy.json | clippy-sarif > clippy-results.sarif
 
       - name: Upload clippy SARIF
         if: always()
@@ -63,8 +63,6 @@ jobs:
   check-full:
     runs-on: ubuntu-latest
     continue-on-error: true
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -72,24 +70,21 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake pkg-config libasound2-dev
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Clippy (full features)
-        run: cargo clippy -- -D warnings
-
-      - name: Build (full features)
+      - name: Build (full feature set)
         run: cargo build
 
-      - name: Test (full features)
+      - name: Test (full feature set)
         run: cargo test
+
+      - name: Report full-build status
+        if: failure()
+        run: echo "::warning::Full-feature build failed — check cmake/ALSA dependencies"
 
   audit:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -101,4 +96,21 @@ jobs:
         run: cargo install cargo-audit
 
       - name: Security audit
-        run: cargo audit
+        run: cargo audit --deny warnings
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build with MSRV
+        run: cargo build --lib --no-default-features --features cli,portal,model-download

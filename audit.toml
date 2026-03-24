@@ -1,0 +1,5 @@
+[advisories]
+ignore = [
+    "RUSTSEC-2025-0119",  # number_prefix — unmaintained, via indicatif/hf-hub, no CVE
+    "RUSTSEC-2024-0436",  # paste — unmaintained, via tokenizers/candle, no CVE
+]
