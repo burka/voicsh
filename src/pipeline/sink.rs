@@ -1,7 +1,7 @@
 use crate::config::{InjectionBackend, InjectionMethod};
 use crate::inject::injector::{CommandExecutor, SystemCommandExecutor, TextInjector};
 use crate::ipc::protocol::DaemonEvent;
-use crate::output::{clear_line, render_event};
+use crate::output::render_event;
 use crate::pipeline::error::StationError;
 use crate::pipeline::latency::{LatencyTracker, SessionContext, TranscriptionTiming};
 use crate::pipeline::station::Station;
@@ -177,18 +177,7 @@ impl Station for SinkStation {
                 }
                 Ok(Some(()))
             }
-            Err(e) => {
-                if !self.quiet {
-                    if self.verbosity >= 1 {
-                        clear_line();
-                        eprintln!("[FAIL {}] \"{}\"", e, text.text);
-                    } else {
-                        clear_line();
-                        eprintln!("\"{}\"", text.text);
-                    }
-                }
-                Ok(None)
-            }
+            Err(e) => Err(StationError::Recoverable(format!("Injection failed: {e}"))),
         }
     }
 
@@ -561,7 +550,7 @@ mod tests {
     }
 
     #[test]
-    fn sink_station_continues_on_sink_failure() {
+    fn sink_station_propagates_sink_failure_as_recoverable() {
         let executor = MockCommandExecutor::new();
         executor.set_fail_next();
         let injector = TextInjector::new(executor.clone());
@@ -573,8 +562,15 @@ mod tests {
         let text = TranscribedText::new("Test".to_string());
 
         let result = station.process(text);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), None);
+        match result {
+            Err(StationError::Recoverable(msg)) => {
+                assert!(
+                    msg.contains("Injection failed"),
+                    "Expected 'Injection failed' in error message, got: {msg}"
+                );
+            }
+            other => panic!("Expected Recoverable error, got: {other:?}"),
+        }
     }
 
     #[test]

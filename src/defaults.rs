@@ -68,6 +68,14 @@ pub const PRE_SPEECH_MS: u32 = 500;
 /// Ensures word endings are not clipped when the gap threshold is very short.
 pub const POST_SPEECH_MS: u32 = 150;
 
+/// Delay in milliseconds between writing to the clipboard and firing the paste key.
+///
+/// Clipboard daemons (e.g. wl-clipboard) need time to advertise the selection on
+/// the Wayland compositor before the paste key event is delivered to the target
+/// window. Without this delay the paste fires before the selection is available
+/// and nothing is inserted.
+pub const CLIPBOARD_SETTLE_MS: u64 = 100;
+
 /// Report the GPU backend compiled into this build.
 ///
 /// Returns a human-readable name based on the compile-time feature flags.

@@ -199,7 +199,9 @@ impl<E: CommandExecutor> TextInjector<E> {
             })?;
 
         // Delay to ensure clipboard is updated before paste
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(
+            crate::defaults::CLIPBOARD_SETTLE_MS,
+        ));
 
         match self.backend {
             InjectionBackend::Portal => {
