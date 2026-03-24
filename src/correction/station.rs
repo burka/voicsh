@@ -7,9 +7,6 @@ use crate::ipc::protocol::TextOrigin;
 use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::TranscribedText;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-static LANGUAGE_SKIP_LOGGED: AtomicBool = AtomicBool::new(false);
 
 const LANGUAGE_CONFIDENCE_THRESHOLD: f32 = 0.90;
 const MIN_LOW_CONFIDENCE_RATIO: f32 = 0.1;
@@ -21,12 +18,17 @@ const MIN_LOW_CONFIDENCE_RATIO: f32 = 0.1;
 pub struct CorrectionStation {
     corrector: Box<dyn Corrector>,
     config: ErrorCorrectionConfig,
+    language_skip_logged: bool,
 }
 
 impl CorrectionStation {
     /// Create a new CorrectionStation with the given corrector and config.
     pub fn new(corrector: Box<dyn Corrector>, config: ErrorCorrectionConfig) -> Self {
-        Self { corrector, config }
+        Self {
+            corrector,
+            config,
+            language_skip_logged: false,
+        }
     }
 }
 
@@ -40,7 +42,8 @@ impl Station for CorrectionStation {
         }
 
         if !prompt::should_correct_language(&input.language, &self.config.symspell_languages) {
-            if !LANGUAGE_SKIP_LOGGED.swap(true, Ordering::Relaxed) {
+            if !self.language_skip_logged {
+                self.language_skip_logged = true;
                 eprintln!("voicsh: correction skipped (language '{}')", input.language);
             }
             return Ok(Some(input));

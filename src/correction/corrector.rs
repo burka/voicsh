@@ -11,9 +11,7 @@ pub trait Corrector: Send + 'static {
     ///
     /// The prompt contains the original text with low-confidence tokens
     /// annotated with their probability scores.
-    fn correct(&mut self, prompt: &str) -> Result<String> {
-        self.correct_with_language(prompt, "")
-    }
+    fn correct(&mut self, prompt: &str) -> Result<String>;
 
     /// Correct text with explicit language hint.
     ///
@@ -35,10 +33,8 @@ pub trait Corrector: Send + 'static {
 pub struct PassthroughCorrector;
 
 impl Corrector for PassthroughCorrector {
-    fn correct(&mut self, _prompt: &str) -> Result<String> {
-        // CorrectionStation skips correction entirely when it would use
-        // passthrough — this is a safe fallback that returns empty string.
-        Ok(String::new())
+    fn correct(&mut self, prompt: &str) -> Result<String> {
+        Ok(prompt.to_string())
     }
 
     fn name(&self) -> &str {
@@ -51,10 +47,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn passthrough_returns_empty_string() {
+    fn passthrough_returns_original_text() {
         let mut corrector = PassthroughCorrector;
         let result = corrector.correct("some prompt").unwrap();
-        assert_eq!(result, "", "Passthrough should return empty string");
+        assert_eq!(result, "some prompt");
     }
 
     #[test]
