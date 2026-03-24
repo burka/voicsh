@@ -28,7 +28,7 @@ exclude = [
 
 [dependencies]
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "io-util", "net", "signal"] }
 async-trait = "0.1"
 
 # Serialization
