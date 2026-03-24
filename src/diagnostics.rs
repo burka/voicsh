@@ -345,11 +345,14 @@ mod tests {
     #[cfg(feature = "model-download")]
     #[test]
     fn test_check_model_installed_returns_valid_result() {
-        // Returns Ok when models are installed, NotFound otherwise.
-        // On a fresh machine with no models the result will be NotFound.
+        // Justified exception: outcome is machine-dependent (models may or may not
+        // be installed). We validate the return type is not Warning (which would
+        // indicate a bug in the detection logic), but cannot assert a specific
+        // Ok vs NotFound value without controlling the filesystem.
         let result = check_model_installed();
         match result {
-            CheckResult::Ok | CheckResult::NotFound => {}
+            CheckResult::Ok => { /* model is installed — valid */ }
+            CheckResult::NotFound => { /* no model — also valid on a fresh machine */ }
             CheckResult::Warning(msg) => {
                 panic!("check_model_installed should not return Warning, got: {msg}")
             }
@@ -358,7 +361,9 @@ mod tests {
 
     #[test]
     fn test_check_dependencies_runs_without_panic() {
-        // Just verify it doesn't panic
+        // Justified exception: check_dependencies() prints directly to stdout and
+        // returns (). There is no return value to assert on, and capturing stdout
+        // would add complexity for minimal value. The test validates no panic occurs.
         check_dependencies();
     }
 

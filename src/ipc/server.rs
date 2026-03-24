@@ -784,9 +784,27 @@ mod tests {
             let server = IpcServer::new(server_socket_path).unwrap();
             server.start(MockCommandHandler).await
         });
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-        let mut stream = UnixStream::connect(&socket_path).await.unwrap();
+        // Wait for server to be ready (retry loop instead of fixed sleep)
+        let mut stream = {
+            let mut last_err = None;
+            let mut result = None;
+            for _ in 0..10 {
+                match UnixStream::connect(&socket_path).await {
+                    Ok(s) => {
+                        result = Some(s);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(e);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    }
+                }
+            }
+            result.unwrap_or_else(|| {
+                panic!("Server did not become ready within 100ms: {:?}", last_err)
+            })
+        };
 
         // Send a payload that exceeds MAX_COMMAND_BYTES (64 KiB) without a newline
         // to trigger the size cap.  The server should close the connection without
@@ -817,7 +835,18 @@ mod tests {
             let server = IpcServer::new(server_socket_path).unwrap();
             server.start(MockCommandHandler).await
         });
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Wait for server to be ready (retry loop instead of fixed sleep)
+        for _ in 0..10 {
+            if socket_path.exists() {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            socket_path.exists(),
+            "Socket file should appear within 100ms"
+        );
 
         // Open MAX_CONNECTIONS + 1 streams; the last one should be dropped by the
         // server.  We hold open streams by not sending a command so the permits are
