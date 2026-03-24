@@ -227,8 +227,16 @@ mod tests {
             server.start(MockHandler).await
         });
 
-        // Give server time to start
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // Wait for server to be ready by retrying the connect up to 10 times with 10ms delays
+        for attempt in 0..10 {
+            if UnixStream::connect(&socket_path).await.is_ok() {
+                break;
+            }
+            if attempt == 9 {
+                panic!("Server did not become ready within 100ms");
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
 
         // Send command via client
         let response = send_command(&socket_path, Command::Status).await.unwrap();

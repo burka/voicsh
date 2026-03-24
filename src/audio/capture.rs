@@ -578,16 +578,19 @@ mod tests {
         let mut source = CpalAudioSource::new(None).expect("Failed to create audio source");
 
         // Test start
-        let start_result = source.start();
-        assert!(start_result.is_ok(), "Failed to start audio capture");
+        source.start().expect("Failed to start audio capture");
 
-        // Test read (may be empty if no audio)
-        let read_result = source.read_samples();
-        assert!(read_result.is_ok(), "Failed to read samples");
+        // Test read (may be empty if no audio input, but the call must succeed)
+        let samples = source.read_samples().expect("Failed to read samples");
+        // samples is a Vec<f32>; silence is valid, so we only assert type contract holds
+        assert!(
+            samples.iter().all(|&s| s >= -1.0 && s <= 1.0),
+            "All samples must be in normalized [-1.0, 1.0] range, got: {:?}",
+            &samples[..samples.len().min(8)]
+        );
 
         // Test stop
-        let stop_result = source.stop();
-        assert!(stop_result.is_ok(), "Failed to stop audio capture");
+        source.stop().expect("Failed to stop audio capture");
     }
 
     #[test]

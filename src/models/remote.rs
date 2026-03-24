@@ -105,10 +105,22 @@ mod tests {
 
     #[test]
     fn test_english_only_detection() {
-        assert!("tiny.en".contains(".en"));
-        assert!("base.en".contains(".en"));
-        assert!(!"large-v3".contains(".en"));
-        assert!(!"large-v3-turbo".contains(".en"));
+        use crate::models::catalog::MODELS;
+
+        let tiny_en = MODELS
+            .iter()
+            .find(|m| m.name == "tiny.en")
+            .expect("tiny.en must exist in catalog");
+        assert!(tiny_en.english_only, "tiny.en should be english_only=true");
+
+        let large_v3 = MODELS
+            .iter()
+            .find(|m| m.name == "large-v3")
+            .expect("large-v3 must exist in catalog");
+        assert!(
+            !large_v3.english_only,
+            "large-v3 should be english_only=false"
+        );
     }
 
     #[test]

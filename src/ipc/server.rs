@@ -513,8 +513,16 @@ mod tests {
             })
         };
 
-        // Give server time to start
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // Wait for socket file to appear (retry up to 10 times with 10ms delays)
+        let mut connected = false;
+        for _ in 0..10 {
+            if socket_path.exists() {
+                connected = true;
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        }
+        assert!(connected, "Socket file should appear within 100ms");
 
         // Verify socket file exists
         assert!(socket_path.exists());
@@ -535,11 +543,26 @@ mod tests {
             server.start(MockCommandHandler).await
         });
 
-        // Give server time to start
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-
-        // Connect as client
-        let mut stream = UnixStream::connect(&socket_path).await.unwrap();
+        // Wait for server to be ready by retrying the connect up to 10 times with 10ms delays
+        let mut stream = {
+            let mut last_err = None;
+            let mut result = None;
+            for _ in 0..10 {
+                match UnixStream::connect(&socket_path).await {
+                    Ok(s) => {
+                        result = Some(s);
+                        break;
+                    }
+                    Err(e) => {
+                        last_err = Some(e);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                    }
+                }
+            }
+            result.unwrap_or_else(|| {
+                panic!("Server did not become ready within 100ms: {:?}", last_err)
+            })
+        };
 
         // Send Status command
         let command = Command::Status;

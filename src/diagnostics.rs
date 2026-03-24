@@ -370,11 +370,13 @@ mod tests {
 
     #[test]
     fn gpu_vulkan_runs_without_panic() {
+        // GPU detection returns () unconditionally — return type has no observable value in a headless env
         check_gpu_vulkan("CPU");
     }
 
     #[test]
     fn gpu_rocm_runs_without_panic() {
+        // GPU detection returns () unconditionally — return type has no observable value in a headless env
         check_gpu_rocm("CPU");
     }
 }

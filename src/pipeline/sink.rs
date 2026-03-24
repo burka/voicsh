@@ -455,12 +455,20 @@ mod tests {
         sink.handle("Test text").unwrap();
 
         let commands = executor.commands();
-        assert!(commands.len() >= 2);
-        assert!(commands.iter().any(|c| c.contains("wl-copy")));
         assert!(
+            commands.len() >= 2,
+            "Expected at least 2 commands (copy + paste), got: {:?}",
             commands
-                .iter()
-                .any(|c| c.contains("wtype") || c.contains("ydotool"))
+        );
+        assert!(
+            commands[0].contains("wl-copy"),
+            "First command must be the copy tool (wl-copy), got: {:?}",
+            commands[0]
+        );
+        assert!(
+            commands[1].contains("wtype") || commands[1].contains("ydotool"),
+            "Second command must be the paste tool (wtype or ydotool), got: {:?}",
+            commands[1]
         );
     }
 

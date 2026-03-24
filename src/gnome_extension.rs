@@ -160,6 +160,14 @@ mod tests {
     #[test]
     fn test_embedded_extension_js_not_empty() {
         assert!(!EXTENSION_JS.is_empty());
+        assert!(
+            EXTENSION_JS.contains("enable"),
+            "extension.js must define an enable entry point"
+        );
+        assert!(
+            EXTENSION_JS.contains("Extension"),
+            "extension.js must reference the Extension class"
+        );
     }
 
     #[test]
@@ -171,6 +179,10 @@ mod tests {
             .and_then(|v| v.as_str())
             .expect("Missing uuid field");
         assert_eq!(uuid, "voicsh@voic.sh");
+        assert!(
+            METADATA_JSON.contains("shell-version"),
+            "metadata.json must declare shell-version compatibility"
+        );
     }
 
     #[test]

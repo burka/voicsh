@@ -1082,8 +1082,16 @@ mod tests {
             } => {
                 assert!(!recording, "Should not be recording initially");
                 assert!(model_loaded, "Model should be loaded");
-                assert!(model_name.is_some(), "Model name should be present");
-                assert!(language.is_some(), "Language should be present");
+                assert_eq!(
+                    model_name,
+                    Some("base".to_string()),
+                    "Model name should be 'base' from default config"
+                );
+                assert_eq!(
+                    language,
+                    Some("auto".to_string()),
+                    "Language should be 'auto' from default config"
+                );
                 assert!(!daemon_version.is_empty(), "Version should not be empty");
                 assert!(!backend.is_empty(), "Backend should not be empty");
             }
@@ -1107,7 +1115,10 @@ mod tests {
                     "Stop should return error when not recording"
                 );
             }
-            _ => {} // May succeed if audio source was created
+            _ => panic!(
+                "Expected Error response for Stop when not recording, got: {:?}",
+                response
+            ),
         }
 
         // Test Cancel command (should fail since not recording)
@@ -1119,7 +1130,10 @@ mod tests {
                     "Cancel should return error when not recording"
                 );
             }
-            _ => {} // May succeed if recording was started
+            _ => panic!(
+                "Expected Error response for Cancel when not recording, got: {:?}",
+                response
+            ),
         }
 
         // Test Toggle command (should try to stop since might be recording)
@@ -1263,7 +1277,15 @@ mod tests {
             pipeline_config.quiet,
             "Quiet should be true in test handler"
         );
-        assert!(pipeline_config.event_tx.is_some(), "Event TX should be set");
+        let event_tx = pipeline_config
+            .event_tx
+            .as_ref()
+            .expect("Event TX should be set");
+        // Verify the channel is functional by checking receiver capacity
+        assert!(
+            event_tx.len() == 0,
+            "Event channel should be empty initially"
+        );
         assert_eq!(
             *pipeline_config.allowed_languages.read().unwrap(),
             config.stt.allowed_languages,
@@ -1523,8 +1545,25 @@ mod tests {
         let handler = create_test_handler();
 
         // The trait method subscribe() should return Some
-        let receiver = CommandHandler::subscribe(&handler);
-        assert!(receiver.is_some(), "subscribe() should return Some");
+        let mut receiver =
+            CommandHandler::subscribe(&handler).expect("subscribe() should return Some");
+
+        // Verify the channel is functional by emitting an event and receiving it
+        handler
+            .state
+            .emit(DaemonEvent::RecordingStateChanged { recording: false });
+
+        let event = receiver
+            .try_recv()
+            .expect("Should receive the RecordingStateChanged event immediately");
+        assert!(
+            matches!(
+                event,
+                DaemonEvent::RecordingStateChanged { recording: false }
+            ),
+            "Received unexpected event: {:?}",
+            event
+        );
     }
 
     #[tokio::test]
