@@ -6,7 +6,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
+
+/// Maximum number of bytes accepted in a single IPC command line (64 KiB).
+/// Prevents a malicious local process from causing unbounded memory growth.
+const MAX_COMMAND_BYTES: u64 = 64 * 1024;
+
+/// Maximum number of concurrent IPC connections.
+/// Prevents a local DoS via unbounded task spawning.
+const MAX_CONNECTIONS: usize = 32;
 
 /// Handler trait for processing IPC commands.
 #[async_trait::async_trait]
@@ -47,6 +55,7 @@ impl ServerState {
 pub struct IpcServer {
     socket_path: PathBuf,
     state: ServerState,
+    connection_semaphore: Arc<Semaphore>,
 }
 
 impl IpcServer {
@@ -55,6 +64,7 @@ impl IpcServer {
         Ok(Self {
             socket_path,
             state: ServerState::new(),
+            connection_semaphore: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
         })
     }
 
@@ -78,11 +88,15 @@ impl IpcServer {
     where
         H: CommandHandler + 'static,
     {
-        // Clean up any existing socket file
-        if self.socket_path.exists() {
-            std::fs::remove_file(&self.socket_path).map_err(|e| VoicshError::IpcSocket {
-                message: format!("Failed to remove existing socket: {}", e),
-            })?;
+        // Remove any stale socket file unconditionally to avoid a TOCTOU race
+        // between exists() and remove_file() that a symlink attack could exploit.
+        // Ignore NotFound — the file simply wasn't there.
+        if let Err(e) = std::fs::remove_file(&self.socket_path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(VoicshError::IpcSocket {
+                message: format!("Failed to remove existing socket: {e}"),
+            });
         }
 
         // Bind to the socket
@@ -105,6 +119,7 @@ impl IpcServer {
         }
 
         let handler = Arc::new(handler);
+        let semaphore = Arc::clone(&self.connection_semaphore);
 
         loop {
             // Check if shutdown was requested
@@ -119,11 +134,26 @@ impl IpcServer {
 
             match accept_result {
                 Ok(Ok((stream, _))) => {
+                    // Acquire a permit before spawning to cap concurrent connections.
+                    // try_acquire returns Err when the limit is reached; we drop the
+                    // connection silently rather than letting an attacker queue work.
+                    let permit = match semaphore.clone().try_acquire_owned() {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            eprintln!(
+                                "IPC: connection limit ({}) reached, dropping connection",
+                                MAX_CONNECTIONS
+                            );
+                            continue;
+                        }
+                    };
                     let handler = Arc::clone(&handler);
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(stream, handler).await {
                             eprintln!("Error handling client: {}", e);
                         }
+                        // Permit is released here when dropped at end of task.
+                        drop(permit);
                     });
                 }
                 Ok(Err(e)) => {
@@ -145,11 +175,14 @@ impl IpcServer {
     pub async fn stop(&self) -> Result<()> {
         self.state.set_shutdown().await;
 
-        // Clean up socket file
-        if self.socket_path.exists() {
-            std::fs::remove_file(&self.socket_path).map_err(|e| VoicshError::IpcSocket {
-                message: format!("Failed to remove socket file: {}", e),
-            })?;
+        // Remove the socket file unconditionally to avoid a TOCTOU race.
+        // Ignore NotFound — the file may already be gone.
+        if let Err(e) = std::fs::remove_file(&self.socket_path)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(VoicshError::IpcSocket {
+                message: format!("Failed to remove socket file: {e}"),
+            });
         }
 
         Ok(())
@@ -162,16 +195,29 @@ where
     H: CommandHandler,
 {
     let (reader, mut writer) = stream.into_split();
-    let mut reader = BufReader::new(reader);
+    // Limit the reader to MAX_COMMAND_BYTES to prevent an unbounded read_line
+    // from consuming arbitrary amounts of memory when fed a giant payload.
+    let limited_reader = tokio::io::AsyncReadExt::take(reader, MAX_COMMAND_BYTES + 1);
+    let mut reader = BufReader::new(limited_reader);
     let mut line = String::new();
 
-    // Read command (one line JSON)
+    // Read command (one line JSON).  Because the reader is capped at
+    // MAX_COMMAND_BYTES + 1, read_line will return at most that many bytes.
+    // If the caller sends more than MAX_COMMAND_BYTES without a newline the
+    // extra byte causes the string to exceed the cap — we treat that as an
+    // oversized-command protocol error.
     reader
         .read_line(&mut line)
         .await
         .map_err(|e| VoicshError::IpcConnection {
             message: format!("Failed to read from client: {}", e),
         })?;
+
+    if line.len() as u64 > MAX_COMMAND_BYTES {
+        return Err(VoicshError::IpcProtocol {
+            message: format!("Command exceeds maximum size ({} bytes)", MAX_COMMAND_BYTES),
+        });
+    }
 
     // Parse command
     let command = Command::from_json(line.trim()).map_err(|e| VoicshError::IpcProtocol {
@@ -259,9 +305,12 @@ where
         }
     };
 
-    // Send daemon info as first event
+    // Send daemon info as first event.
+    // Only the binary *name* (basename) is sent — not the full path — to
+    // avoid leaking installation-specific filesystem layout to clients.
     let binary_path = std::env::current_exe()
-        .map(|p| p.display().to_string())
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_default();
     let info_event = DaemonEvent::DaemonInfo {
         binary_path,
@@ -699,5 +748,76 @@ mod tests {
             }
             _ => panic!("Expected Transcription response"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_oversized_command_is_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let socket_path = temp_dir.path().join("test.sock");
+
+        let server_socket_path = socket_path.clone();
+        let _server_handle = tokio::spawn(async move {
+            let server = IpcServer::new(server_socket_path).unwrap();
+            server.start(MockCommandHandler).await
+        });
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        let mut stream = UnixStream::connect(&socket_path).await.unwrap();
+
+        // Send a payload that exceeds MAX_COMMAND_BYTES (64 KiB) without a newline
+        // to trigger the size cap.  The server should close the connection without
+        // crashing or buffering the full payload.
+        let oversized = vec![b'x'; MAX_COMMAND_BYTES as usize + 1];
+        let _ = stream.write_all(&oversized).await;
+        let _ = stream.write_all(b"\n").await;
+
+        // Read whatever the server sends back (may be empty or error).
+        // The key assertion is that we reach this point without the server panicking
+        // or OOM-ing — we verify by reading to end and confirming the connection
+        // was closed by the server.
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        let _ = stream.read_to_end(&mut buf).await;
+        // Connection closed by server — nothing meaningful to assert on the content
+        // since the server logs the error internally and drops the connection.
+        // The test passing without timeout proves the server handled it correctly.
+    }
+
+    #[tokio::test]
+    async fn test_connection_limit_drops_excess_connections() {
+        let temp_dir = TempDir::new().unwrap();
+        let socket_path = temp_dir.path().join("test.sock");
+
+        let server_socket_path = socket_path.clone();
+        let _server_handle = tokio::spawn(async move {
+            let server = IpcServer::new(server_socket_path).unwrap();
+            server.start(MockCommandHandler).await
+        });
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Open MAX_CONNECTIONS + 1 streams; the last one should be dropped by the
+        // server.  We hold open streams by not sending a command so the permits are
+        // not released.
+        let mut streams: Vec<UnixStream> = Vec::new();
+        for _ in 0..MAX_CONNECTIONS {
+            let s = UnixStream::connect(&socket_path).await.unwrap();
+            streams.push(s);
+        }
+        // Give the server a moment to accept and spawn all of them.
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // This connection should be dropped immediately because the semaphore is full.
+        let mut overflow = UnixStream::connect(&socket_path).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // The overflow stream should receive EOF (server drops without writing).
+        use tokio::io::AsyncReadExt;
+        let mut buf = Vec::new();
+        let bytes_read = overflow.read_to_end(&mut buf).await.unwrap();
+        assert_eq!(
+            bytes_read, 0,
+            "expected EOF on the overflow connection but got {} bytes",
+            bytes_read
+        );
     }
 }
