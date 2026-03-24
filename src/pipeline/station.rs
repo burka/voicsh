@@ -91,13 +91,13 @@ impl<S: Station> StationRunner<S> {
                 Ok(None) => {
                     // No output produced (filtered), continue
                 }
-                Err(StationError::Recoverable(msg)) => {
+                Err(e @ StationError::Recoverable(_)) => {
                     // Report but continue processing
-                    error_reporter.report(station_name, &StationError::Recoverable(msg));
+                    error_reporter.report(station_name, &e);
                 }
-                Err(StationError::Fatal(msg)) => {
+                Err(e @ StationError::Fatal(_)) => {
                     // Report and shutdown
-                    error_reporter.report(station_name, &StationError::Fatal(msg.clone()));
+                    error_reporter.report(station_name, &e);
                     break;
                 }
             }
@@ -186,7 +186,7 @@ mod tests {
 
         fn process(&mut self, input: Self::Input) -> Result<Option<Self::Output>, StationError> {
             if input == self.fail_on {
-                Err(StationError::Recoverable(format!("Failed on {}", input)))
+                Err(StationError::recoverable(format!("Failed on {}", input)))
             } else {
                 Ok(Some(input))
             }
@@ -375,7 +375,7 @@ mod tests {
                 input: Self::Input,
             ) -> Result<Option<Self::Output>, StationError> {
                 if input % 2 == 0 {
-                    Err(StationError::Recoverable(format!("Even: {}", input)))
+                    Err(StationError::recoverable(format!("Even: {}", input)))
                 } else {
                     Ok(Some(input))
                 }

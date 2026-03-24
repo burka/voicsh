@@ -177,7 +177,7 @@ impl Station for TranscriberStation {
         let result = self
             .transcriber
             .transcribe(&chunk.samples)
-            .map_err(|e| StationError::Recoverable(format!("Transcription failed: {}", e)))?;
+            .map_err(|e| StationError::recoverable(format!("Transcription failed: {}", e)))?;
 
         // Backpressure detection: warn once if transcription is slower than real-time
         if !self.warned_backpressure {
@@ -424,7 +424,8 @@ mod tests {
 
         assert!(result.is_err());
         match result {
-            Err(StationError::Recoverable(msg)) => {
+            Err(StationError::Recoverable(e)) => {
+                let msg = e.to_string();
                 assert!(msg.contains("Transcription failed"));
                 assert!(msg.contains("mock transcription failure"));
             }

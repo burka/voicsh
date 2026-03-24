@@ -3,24 +3,60 @@
 use std::fmt;
 
 /// Errors that can occur during station processing.
-#[derive(Debug, Clone)]
+///
+/// Carries a boxed `std::error::Error` to preserve the full error chain
+/// rather than collapsing context into a `String`.
 pub enum StationError {
     /// Recoverable error that allows the station to continue processing.
-    Recoverable(String),
+    Recoverable(Box<dyn std::error::Error + Send + Sync>),
     /// Fatal error that requires the station to shut down.
-    Fatal(String),
+    Fatal(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl fmt::Debug for StationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StationError::Recoverable(e) => write!(f, "StationError::Recoverable({:?})", e),
+            StationError::Fatal(e) => write!(f, "StationError::Fatal({:?})", e),
+        }
+    }
 }
 
 impl fmt::Display for StationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StationError::Recoverable(msg) => write!(f, "Recoverable error: {}", msg),
-            StationError::Fatal(msg) => write!(f, "Fatal error: {}", msg),
+            StationError::Recoverable(e) => write!(f, "Recoverable error: {}", e),
+            StationError::Fatal(e) => write!(f, "Fatal error: {}", e),
         }
     }
 }
 
-impl std::error::Error for StationError {}
+impl std::error::Error for StationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StationError::Recoverable(e) => Some(e.as_ref()),
+            StationError::Fatal(e) => Some(e.as_ref()),
+        }
+    }
+}
+
+impl StationError {
+    /// Creates a `Recoverable` error from any string message.
+    pub fn recoverable(msg: impl Into<String>) -> Self {
+        StationError::Recoverable(msg.into().into())
+    }
+
+    /// Creates a `Fatal` error from any string message.
+    pub fn fatal(msg: impl Into<String>) -> Self {
+        StationError::Fatal(msg.into().into())
+    }
+}
+
+impl From<crate::error::VoicshError> for StationError {
+    fn from(e: crate::error::VoicshError) -> Self {
+        StationError::Recoverable(Box::new(e))
+    }
+}
 
 /// Trait for reporting station errors.
 pub trait ErrorReporter: Send + Sync {
@@ -50,13 +86,13 @@ mod tests {
 
     #[test]
     fn test_station_error_display() {
-        let recoverable = StationError::Recoverable("temporary failure".to_string());
+        let recoverable = StationError::recoverable("temporary failure");
         assert_eq!(
             recoverable.to_string(),
             "Recoverable error: temporary failure"
         );
 
-        let fatal = StationError::Fatal("critical failure".to_string());
+        let fatal = StationError::fatal("critical failure");
         assert_eq!(fatal.to_string(), "Fatal error: critical failure");
     }
 
@@ -64,12 +100,12 @@ mod tests {
     fn test_log_reporter() {
         let reporter = LogReporter;
 
-        // Test Recoverable variant - ensure it doesn't panic
-        let recoverable = StationError::Recoverable("test error".to_string());
+        // Test Recoverable variant - ensures it doesn't panic (no capturable stderr in tests)
+        let recoverable = StationError::recoverable("test error");
         reporter.report("TestStation", &recoverable);
 
-        // Test Fatal variant - ensure it doesn't panic
-        let fatal = StationError::Fatal("critical error".to_string());
+        // Test Fatal variant - ensures it doesn't panic (no capturable stderr in tests)
+        let fatal = StationError::fatal("critical error");
         reporter.report("TestStation", &fatal);
     }
 
@@ -96,11 +132,11 @@ mod tests {
         };
 
         // Test Recoverable error
-        let recoverable = StationError::Recoverable("temp failure".to_string());
+        let recoverable = StationError::recoverable("temp failure");
         reporter.report("AudioStation", &recoverable);
 
         // Test Fatal error
-        let fatal = StationError::Fatal("shutdown required".to_string());
+        let fatal = StationError::fatal("shutdown required");
         reporter.report("TranscriberStation", &fatal);
 
         // Verify both calls were recorded correctly
@@ -116,25 +152,36 @@ mod tests {
 
     #[test]
     fn test_station_error_is_std_error() {
-        let error = StationError::Recoverable("test".to_string());
+        let error = StationError::recoverable("test");
         // Verify it can be used as std::error::Error trait object
         let _: &dyn std::error::Error = &error;
 
-        let fatal = StationError::Fatal("test".to_string());
+        let fatal = StationError::fatal("test");
         let _: &dyn std::error::Error = &fatal;
     }
 
     #[test]
-    fn test_station_error_clone() {
-        // Test Clone for Recoverable variant
-        let recoverable = StationError::Recoverable("original".to_string());
-        let cloned = recoverable.clone();
-        assert_eq!(recoverable.to_string(), cloned.to_string());
+    fn test_station_error_source_chain() {
+        use crate::error::VoicshError;
 
-        // Test Clone for Fatal variant
-        let fatal = StationError::Fatal("critical".to_string());
-        let cloned = fatal.clone();
-        assert_eq!(fatal.to_string(), cloned.to_string());
+        let inner = VoicshError::Other("inner cause".into());
+        let station_err = StationError::from(inner);
+
+        // Verify the error source is accessible
+        let source = std::error::Error::source(&station_err).unwrap();
+        assert!(source.to_string().contains("inner cause"));
+    }
+
+    #[test]
+    fn test_station_error_display_delegates_to_inner() {
+        let recoverable = StationError::recoverable("detailed message");
+        assert_eq!(
+            recoverable.to_string(),
+            "Recoverable error: detailed message"
+        );
+
+        let fatal = StationError::fatal("shutdown reason");
+        assert_eq!(fatal.to_string(), "Fatal error: shutdown reason");
     }
 
     #[test]
