@@ -5,6 +5,17 @@
 //! `SendableStream` in `audio::capture` (required by the CPAL stream API).
 
 use std::ffi::CStr;
+use std::sync::Mutex;
+
+/// Serializes all calls to [`set_env`] and [`remove_env`].
+///
+/// `std::env::set_var` / `std::env::remove_var` are globally unsound when any
+/// other thread concurrently reads environment variables (e.g. via `getenv`).
+/// Rust stabilized the deprecation warning in 1.81.  While we cannot prevent
+/// third-party C libraries (ashpd/zbus) from reading the environment at any
+/// time, we can at least guarantee that **our own writes are never concurrent
+/// with each other**, eliminating the writer–writer race.
+static ENV_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 /// Return the effective user ID of the calling process.
 ///
@@ -34,49 +45,23 @@ pub fn available_disk_mb(path: &CStr) -> Option<u64> {
     }
 }
 
-/// Run a closure with stderr temporarily redirected to `/dev/null`.
-///
-/// This suppresses noisy ALSA/JACK/PipeWire messages that CPAL triggers
-/// when probing audio backends. The messages are harmless but confusing to users.
-///
-/// # Safety
-/// Uses `libc::dup`/`libc::dup2` to save and restore file descriptor 2 (stderr).
-/// Safe as long as no other thread is concurrently manipulating fd 2.
-pub fn with_suppressed_stderr<F, R>(f: F) -> R
-where
-    F: FnOnce() -> R,
-{
-    // SAFETY: Safe as long as no other thread is concurrently manipulating fd 2.
-    unsafe {
-        let saved_fd = libc::dup(2);
-        let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
-        if saved_fd >= 0 && devnull >= 0 {
-            libc::dup2(devnull, 2);
-            libc::close(devnull);
-        }
-
-        let result = f();
-
-        if saved_fd >= 0 {
-            libc::dup2(saved_fd, 2);
-            libc::close(saved_fd);
-        }
-
-        result
-    }
-}
-
 /// Set an environment variable.
 ///
-/// # Safety
-/// `std::env::set_var` is unsound when other threads read env vars concurrently.
-/// In practice the specific vars we write (D-Bus address, audio backend flags)
-/// are only read at library-init time by third-party code, so the race window
-/// is narrow. Prefer calling this before spawning threads when possible;
-/// the portal reconnect path calls it from a running runtime as a best-effort
-/// fix for stale D-Bus sessions.
+/// All writes are serialized through [`ENV_WRITE_LOCK`] to eliminate
+/// concurrent-writer races.  A residual reader–writer race remains: C libraries
+/// such as `zbus`/`ashpd` may call `getenv("DBUS_SESSION_BUS_ADDRESS")` at any
+/// time.  This is unavoidable because those libraries offer no API to pass the
+/// address explicitly.  In practice the race window is short (a single pointer
+/// swap in glibc's `setenv`), and the worst outcome is that the library picks up
+/// a stale address and returns a connection error — which the portal reconnect
+/// path already handles.
+///
+/// Prefer calling this before spawning threads whenever possible.
 pub fn set_env(key: &str, value: &str) {
-    // SAFETY: Best-effort — see doc comment above.
+    let _guard = ENV_WRITE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    // SAFETY: Writer–writer races are eliminated by ENV_WRITE_LOCK.
+    // The remaining reader–writer race with C library getenv() is unavoidable
+    // without API support from the library; see the doc comment above.
     unsafe {
         std::env::set_var(key, value);
     }
@@ -84,11 +69,12 @@ pub fn set_env(key: &str, value: &str) {
 
 /// Remove an environment variable.
 ///
-/// # Safety
-/// Same caveats as [`set_env`] — unsound under concurrent env reads,
-/// but acceptable for the narrow use cases in this codebase.
+/// Same serialization guarantee as [`set_env`]; see that function's doc comment
+/// for a discussion of the residual reader–writer risk.
 pub fn remove_env(key: &str) {
-    // SAFETY: Best-effort — see doc comment above.
+    let _guard = ENV_WRITE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    // SAFETY: Writer–writer races are eliminated by ENV_WRITE_LOCK.
+    // See set_env for the full safety discussion.
     unsafe {
         std::env::remove_var(key);
     }
@@ -114,23 +100,26 @@ mod tests {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
-    fn current_uid_does_not_panic() {
-        // "Doesn't panic" is sufficient here: getuid() has no failure mode on
-        // a standard POSIX system and returns whatever the OS reports.
+    fn current_uid_is_valid_posix_uid() {
+        // getuid() has no failure mode on a POSIX system; it always returns the
+        // caller's effective UID.  On Linux, UIDs are 32-bit values (0 = root,
+        // 65534 = nobody), so we assert the returned value is in the u32 range —
+        // which is already guaranteed by the type — and that a second call is
+        // stable (same process, same UID).
         let uid = current_uid();
-        // On any real system the result is a valid u32; just ensure it compiles
-        // and runs without UB.
-        let _ = uid;
+        assert_eq!(
+            uid,
+            current_uid(),
+            "getuid() must be stable within a process"
+        );
     }
 
     #[test]
-    fn available_disk_mb_root_returns_some() {
+    fn available_disk_mb_root_returns_nonzero() {
         let path = CStr::from_bytes_with_nul(b"/\0").expect("valid CStr");
-        let result = available_disk_mb(path);
-        assert!(
-            result.is_some(),
-            "expected Some for root filesystem, got None"
-        );
+        let mb = available_disk_mb(path).expect("expected Some for root filesystem");
+        // The root filesystem must have at least 1 MB free on any CI or dev machine.
+        assert!(mb > 0, "expected > 0 MB free on root filesystem, got {mb}");
     }
 
     #[test]
@@ -139,12 +128,6 @@ mod tests {
             .expect("valid CStr");
         let result = available_disk_mb(path);
         assert_eq!(result, None, "expected None for nonexistent path");
-    }
-
-    #[test]
-    fn with_suppressed_stderr_returns_value() {
-        let result = with_suppressed_stderr(|| 42_u32);
-        assert_eq!(result, 42, "closure return value should be forwarded");
     }
 
     #[test]

@@ -7,7 +7,6 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 
 pub use crate::sys::suppress_audio_warnings;
-use crate::sys::with_suppressed_stderr;
 
 /// Preferred device names for GNOME/PipeWire environments.
 const PREFERRED_DEVICES: &[&str] = &["pipewire", "pulse", "PulseAudio"];
@@ -55,11 +54,9 @@ fn is_preferred_device(name: &str) -> bool {
 /// They occur because cpal tries multiple audio backends (ALSA, JACK, Pulse)
 /// to find available devices.
 pub fn list_devices() -> Result<Vec<String>> {
-    let (host, devices) = with_suppressed_stderr(|| {
-        let host = cpal::default_host();
-        let devices = host.input_devices();
-        (host, devices)
-    });
+    // ALSA/JACK warnings are suppressed via env vars set by suppress_audio_warnings().
+    let host = cpal::default_host();
+    let devices = host.input_devices();
     let _ = host; // keep host alive while iterating devices
     let devices = devices.map_err(|e| VoicshError::AudioCapture {
         message: format!("Failed to enumerate input devices: {}", e),
@@ -100,26 +97,25 @@ pub fn list_devices() -> Result<Vec<String>> {
 /// # Errors
 /// Returns `VoicshError::AudioDeviceNotFound` if no input device is available.
 fn get_best_default_device() -> Result<cpal::Device> {
-    with_suppressed_stderr(|| {
-        let host = cpal::default_host();
+    // ALSA/JACK warnings are suppressed via env vars set by suppress_audio_warnings().
+    let host = cpal::default_host();
 
-        // Try to find a preferred device
-        if let Ok(devices) = host.input_devices() {
-            for device in devices {
-                if let Ok(name) = device.description().map(|d| d.name().to_string())
-                    && is_preferred_device(&name)
-                {
-                    return Ok(device);
-                }
+    // Try to find a preferred device
+    if let Ok(devices) = host.input_devices() {
+        for device in devices {
+            if let Ok(name) = device.description().map(|d| d.name().to_string())
+                && is_preferred_device(&name)
+            {
+                return Ok(device);
             }
         }
+    }
 
-        // Fall back to system default
-        host.default_input_device()
-            .ok_or_else(|| VoicshError::AudioDeviceNotFound {
-                device: "default".to_string(),
-            })
-    })
+    // Fall back to system default
+    host.default_input_device()
+        .ok_or_else(|| VoicshError::AudioDeviceNotFound {
+            device: "default".to_string(),
+        })
 }
 
 /// Wrapper for cpal::Stream to make it Send.
@@ -162,7 +158,8 @@ impl CpalAudioSource {
     /// - Device configuration fails
     /// - Format is not supported
     pub fn new(device_name: Option<&str>) -> Result<Self> {
-        let device = with_suppressed_stderr(|| {
+        // ALSA/JACK warnings are suppressed via env vars set by suppress_audio_warnings().
+        let device = {
             let host = cpal::default_host();
 
             if let Some(name) = device_name {
@@ -190,7 +187,7 @@ impl CpalAudioSource {
                 // Use smart default (prefers PipeWire/PulseAudio)
                 get_best_default_device()
             }
-        })?;
+        }?;
 
         Ok(Self {
             device,
