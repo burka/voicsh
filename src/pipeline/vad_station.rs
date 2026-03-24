@@ -17,40 +17,6 @@ const NO_AUDIO_THRESHOLD: f32 = 0.0001;
 /// Returns (current_len, capacity) for a pipeline buffer channel.
 pub type BufferGauge = Box<dyn Fn() -> (usize, usize) + Send + Sync>;
 
-/// Format a visual level bar for display.
-/// Returns a string like `[██████████████████░░░░░░░░░░│░░] 0.150`
-pub fn format_level_bar(level: f32, threshold: f32) -> String {
-    const BAR_WIDTH: usize = 30;
-
-    let log_level = if level > 0.001 {
-        ((level.log10() + 3.0) / 2.7 * BAR_WIDTH as f32).clamp(0.0, BAR_WIDTH as f32)
-    } else {
-        0.0
-    };
-    let filled = log_level as usize;
-
-    let log_threshold = if threshold > 0.001 {
-        ((threshold.log10() + 3.0) / 2.7 * BAR_WIDTH as f32).clamp(0.0, BAR_WIDTH as f32)
-    } else {
-        0.0
-    };
-    let threshold_pos = log_threshold as usize;
-
-    let bar: String = (0..BAR_WIDTH)
-        .map(|i| {
-            if i < filled {
-                if level > threshold { '█' } else { '▓' }
-            } else if i == threshold_pos {
-                '│'
-            } else {
-                '░'
-            }
-        })
-        .collect();
-
-    format!("[{}] {:.3}", bar, level)
-}
-
 /// VAD station that processes audio frames and annotates them with speech detection.
 pub struct VadStation {
     vad: Vad<Arc<dyn Clock>>,
@@ -506,31 +472,6 @@ mod tests {
             station.process(frame).unwrap();
         }
         assert!(station.no_audio_warning_shown);
-    }
-
-    #[test]
-    fn test_format_level_bar_zero() {
-        let bar = format_level_bar(0.0, 0.02);
-        assert!(bar.contains("["), "Bar should start with [");
-        assert!(bar.contains("]"), "Bar should contain ]");
-        assert!(bar.contains("0.000"), "Zero level should show 0.000");
-    }
-
-    #[test]
-    fn test_format_level_bar_high_level() {
-        let bar = format_level_bar(0.3, 0.05);
-        assert!(bar.contains('█'), "High level should show filled blocks");
-        assert!(bar.contains("0.300"), "Should show level value");
-    }
-
-    #[test]
-    fn test_format_level_bar_below_threshold() {
-        let bar = format_level_bar(0.01, 0.05);
-        // Below threshold, filled blocks use ▓
-        assert!(
-            !bar.contains('█'),
-            "Below threshold should not use full blocks"
-        );
     }
 
     #[test]

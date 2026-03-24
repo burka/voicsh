@@ -200,10 +200,23 @@ impl<C: Clock> Vad<C> {
                         .unwrap_or(0);
 
                     if silence_elapsed >= self.config.silence_duration_ms {
-                        self.state = VadState::Stopped;
+                        // Discard speech that was too short to be intentional (noise gate).
+                        // Speaking duration = time from speech_start to silence_start.
+                        let speaking_ms = match (self.speech_start, self.silence_start) {
+                            (Some(speech_start), Some(silence_start)) => {
+                                silence_start.duration_since(speech_start).as_millis() as u32
+                            }
+                            _ => 0,
+                        };
                         self.silence_start = None;
                         self.speech_start = None;
-                        (VadEvent::SpeechEnd, silence_elapsed)
+                        if speaking_ms < self.config.min_speech_ms {
+                            self.state = VadState::Idle;
+                            (VadEvent::Silence, 0)
+                        } else {
+                            self.state = VadState::Stopped;
+                            (VadEvent::SpeechEnd, silence_elapsed)
+                        }
                     } else {
                         (VadEvent::Silence, silence_elapsed)
                     }
@@ -430,9 +443,10 @@ mod tests {
         let speech = make_speech(1000, 3000);
         let silence = make_silence(1000);
 
-        // Start speaking
+        // Start speaking and advance clock to exceed min_speech_ms
         vad.process(&speech, 16000);
         assert_eq!(vad.state(), VadState::Speaking);
+        clock.advance(Duration::from_millis(100)); // 100ms speech > 50ms min
 
         // Process silence
         vad.process(&silence, 16000);
@@ -480,8 +494,9 @@ mod tests {
         let speech = make_speech(1000, 3000);
         let silence = make_silence(1000);
 
-        // Get to Stopped state
+        // Get to Stopped state (advance clock during speech to satisfy min_speech_ms)
         vad.process(&speech, 16000);
+        clock.advance(Duration::from_millis(100)); // 100ms speech > 50ms min
         vad.process(&silence, 16000);
         clock.advance(Duration::from_millis(150));
         vad.process(&silence, 16000);
@@ -506,9 +521,10 @@ mod tests {
         let speech = make_speech(1000, 3000);
         let silence = make_silence(1000);
 
-        // First utterance: speak → stop
+        // First utterance: speak → stop (advance clock during speech to satisfy min_speech_ms)
         vad.process(&speech, 16000);
         assert_eq!(vad.state(), VadState::Speaking);
+        clock.advance(Duration::from_millis(100)); // 100ms speech > 50ms min
         vad.process(&silence, 16000);
         clock.advance(Duration::from_millis(150));
         let event = vad.process(&silence, 16000);
@@ -545,6 +561,9 @@ mod tests {
             let event = vad.process(&speech, 16000);
             assert_eq!(event, VadEvent::SpeechStart, "Utterance {} should start", i);
 
+            // Advance clock during speech to satisfy min_speech_ms (50ms)
+            clock.advance(Duration::from_millis(100));
+
             // Continue speech
             let event = vad.process(&speech, 16000);
             assert_eq!(event, VadEvent::Speech, "Utterance {} should continue", i);
@@ -558,6 +577,46 @@ mod tests {
             // One more silence frame to transition Stopped → Idle
             vad.process(&silence, 16000);
         }
+    }
+
+    #[test]
+    fn test_vad_discards_speech_shorter_than_min_speech_ms() {
+        // Speech that does not meet min_speech_ms should be discarded (treated as noise).
+        let config = VadConfig {
+            speech_threshold: 0.02,
+            silence_duration_ms: 100,
+            min_speech_ms: 200, // Require 200ms of speech
+        };
+        let clock = MockClock::new();
+        let mut vad = Vad::with_clock(config, clock.clone());
+
+        let speech = make_speech(1000, 3000);
+        let silence = make_silence(1000);
+
+        // Speak for only 50ms (below 200ms min)
+        vad.process(&speech, 16000);
+        assert_eq!(vad.state(), VadState::Speaking);
+        clock.advance(Duration::from_millis(50)); // Only 50ms of speech
+
+        // Silence starts
+        vad.process(&silence, 16000);
+        assert_eq!(vad.state(), VadState::MaybeSilence);
+
+        // Advance past silence_duration_ms
+        clock.advance(Duration::from_millis(150));
+
+        // Should be discarded as too-short speech → returns to Idle, not Stopped
+        let event = vad.process(&silence, 16000);
+        assert_eq!(
+            event,
+            VadEvent::Silence,
+            "Speech shorter than min_speech_ms should be discarded"
+        );
+        assert_eq!(
+            vad.state(),
+            VadState::Idle,
+            "After discarding short speech, VAD should return to Idle"
+        );
     }
 
     #[test]

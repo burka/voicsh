@@ -94,9 +94,35 @@ pub fn check_portal() -> CheckResult {
     }
 }
 
+/// Check whether at least one Whisper model is installed.
+#[cfg(feature = "model-download")]
+pub fn check_model_installed() -> CheckResult {
+    let installed = crate::models::download::list_installed_models();
+    if installed.is_empty() {
+        CheckResult::NotFound
+    } else {
+        CheckResult::Ok
+    }
+}
+
 /// Run all dependency checks and print results.
 pub fn check_dependencies() {
     println!("Checking system dependencies...\n");
+
+    // Check Whisper model
+    #[cfg(feature = "model-download")]
+    {
+        let installed = crate::models::download::list_installed_models();
+        print!("Whisper model:                    ");
+        if installed.is_empty() {
+            println!("✗ NOT FOUND");
+            println!("  No model installed. Run: voicsh init");
+            println!("  Or: voicsh models download tiny.en");
+        } else {
+            println!("✓ OK ({})", installed.join(", "));
+        }
+        println!();
+    }
 
     // Check xdg-desktop-portal RemoteDesktop (GNOME/KDE key injection)
     print!("xdg-desktop-portal RemoteDesktop: ");
@@ -314,6 +340,20 @@ mod tests {
     fn test_check_command_nonexistent() {
         let result = check_command("nonexistent-command-xyz-12345");
         assert_eq!(result, CheckResult::NotFound);
+    }
+
+    #[cfg(feature = "model-download")]
+    #[test]
+    fn test_check_model_installed_returns_valid_result() {
+        // Returns Ok when models are installed, NotFound otherwise.
+        // On a fresh machine with no models the result will be NotFound.
+        let result = check_model_installed();
+        match result {
+            CheckResult::Ok | CheckResult::NotFound => {}
+            CheckResult::Warning(msg) => {
+                panic!("check_model_installed should not return Warning, got: {msg}")
+            }
+        }
     }
 
     #[test]

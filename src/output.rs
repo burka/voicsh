@@ -2,7 +2,6 @@
 //! Used by both `voicsh follow` and daemon verbose mode.
 
 use crate::ipc::protocol::{DaemonEvent, TextOrigin};
-use crate::pipeline::vad_station::format_level_bar;
 use crate::stt::transcriber::TokenProbability;
 use std::io::{self, Write};
 
@@ -12,6 +11,40 @@ const YELLOW: &str = "\x1b[33m";
 const RED: &str = "\x1b[31m";
 const RESET: &str = "\x1b[0m";
 const STRIKETHROUGH: &str = "\x1b[9m";
+
+/// Format a visual level bar for display.
+/// Returns a string like `[██████████████████░░░░░░░░░░│░░] 0.150`
+pub fn format_level_bar(level: f32, threshold: f32) -> String {
+    const BAR_WIDTH: usize = 30;
+
+    let log_level = if level > 0.001 {
+        ((level.log10() + 3.0) / 2.7 * BAR_WIDTH as f32).clamp(0.0, BAR_WIDTH as f32)
+    } else {
+        0.0
+    };
+    let filled = log_level as usize;
+
+    let log_threshold = if threshold > 0.001 {
+        ((threshold.log10() + 3.0) / 2.7 * BAR_WIDTH as f32).clamp(0.0, BAR_WIDTH as f32)
+    } else {
+        0.0
+    };
+    let threshold_pos = log_threshold as usize;
+
+    let bar: String = (0..BAR_WIDTH)
+        .map(|i| {
+            if i < filled {
+                if level > threshold { '█' } else { '▓' }
+            } else if i == threshold_pos {
+                '│'
+            } else {
+                '░'
+            }
+        })
+        .collect();
+
+    format!("[{}] {:.3}", bar, level)
+}
 
 /// Below this confidence, hallucination filter drops are suppressed from output.
 /// Low-confidence hallucination hits are noise (the model is uncertain and the
@@ -340,6 +373,33 @@ mod tests {
     use super::*;
     use crate::ipc::protocol::TextOrigin;
     use crate::stt::transcriber::TokenProbability;
+
+    // ── format_level_bar tests ────────────────────────────────────────
+
+    #[test]
+    fn test_format_level_bar_zero() {
+        let bar = format_level_bar(0.0, 0.02);
+        assert!(bar.contains('['), "Bar should start with [");
+        assert!(bar.contains(']'), "Bar should contain ]");
+        assert!(bar.contains("0.000"), "Zero level should show 0.000");
+    }
+
+    #[test]
+    fn test_format_level_bar_high_level() {
+        let bar = format_level_bar(0.3, 0.05);
+        assert!(bar.contains('█'), "High level should show filled blocks");
+        assert!(bar.contains("0.300"), "Should show level value");
+    }
+
+    #[test]
+    fn test_format_level_bar_below_threshold() {
+        let bar = format_level_bar(0.01, 0.05);
+        // Below threshold, filled blocks use ▓ not █
+        assert!(
+            !bar.contains('█'),
+            "Below threshold should not use full blocks"
+        );
+    }
 
     // ── word diff algorithm tests ──────────────────────────────────────
 

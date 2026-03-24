@@ -4,7 +4,9 @@ use crate::error::{Result, VoicshError};
 /// Trait for audio source devices.
 ///
 /// This trait allows swapping implementations (real audio device vs mock).
-pub trait AudioSource: Send + Sync {
+/// `read_samples` takes `&mut self`, so concurrent shared access is not possible.
+/// `Sync` is therefore not required — only `Send` to move ownership across threads.
+pub trait AudioSource: Send {
     /// Start capturing audio from the source.
     ///
     /// # Returns
