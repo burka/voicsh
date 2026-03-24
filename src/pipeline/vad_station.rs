@@ -6,6 +6,7 @@ use crate::output::render_event;
 use crate::pipeline::error::StationError;
 use crate::pipeline::station::Station;
 use crate::pipeline::types::{AudioFrame, VadFrame};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 /// Number of frames to wait before warning about no audio (~3 seconds at 60Hz polling).
@@ -22,7 +23,7 @@ pub struct VadStation {
     vad: Vad<Arc<dyn Clock>>,
     show_levels: bool,
     auto_level: bool,
-    level_history: Vec<f32>,
+    level_history: VecDeque<f32>,
     level_history_max: usize,
     sample_rate: u32,
     /// Count of frames processed.
@@ -51,7 +52,7 @@ impl VadStation {
             vad: Vad::with_clock(config, clock),
             show_levels: false,
             auto_level: false,
-            level_history: Vec::new(),
+            level_history: VecDeque::new(),
             level_history_max: 100,
             sample_rate: 16000,
             frames_processed: 0,
@@ -99,7 +100,7 @@ impl VadStation {
             return;
         }
 
-        let mut sorted = self.level_history.clone();
+        let mut sorted: Vec<f32> = self.level_history.iter().copied().collect();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let percentile_idx = sorted.len() / 4;
         let noise_floor = sorted[percentile_idx];
@@ -115,6 +116,8 @@ impl VadStation {
             self.zero_audio_frames += 1;
         } else {
             self.zero_audio_frames = 0;
+            // Reset so the warning can re-fire if silence returns after audio was present.
+            self.no_audio_warning_shown = false;
         }
 
         // Show warning after sustained period of no audio
@@ -156,9 +159,9 @@ impl Station for VadStation {
 
         // Update level history for auto-leveling
         if self.auto_level {
-            self.level_history.push(result.level);
+            self.level_history.push_back(result.level);
             if self.level_history.len() > self.level_history_max {
-                self.level_history.remove(0);
+                self.level_history.pop_front();
             }
             self.adjust_threshold();
         }
@@ -448,30 +451,39 @@ mod tests {
     }
 
     #[test]
-    fn test_no_audio_warning_only_shown_once() {
+    fn test_no_audio_warning_resets_after_audio_returns() {
+        // After audio is detected, the warning flag resets so it can re-fire
+        // if silence returns again (e.g., mic disconnected mid-session).
         let config = VadConfig::default();
         let mut station = VadStation::new(config).with_show_levels(true);
 
-        // Trigger warning
+        // Trigger warning with sustained silence
         for i in 0..200 {
             let silence = make_silence(1000);
             let frame = AudioFrame::new(silence, Instant::now(), i);
             station.process(frame).unwrap();
         }
-        assert!(station.no_audio_warning_shown);
+        assert!(station.no_audio_warning_shown, "Warning should have fired");
 
-        // Reset counter with audio
+        // Audio detected — warning flag resets so it can re-fire later
         let speech = make_speech(1000, 3000);
         let frame = AudioFrame::new(speech, Instant::now(), 200);
         station.process(frame).unwrap();
+        assert!(
+            !station.no_audio_warning_shown,
+            "Warning flag should reset when audio is present"
+        );
 
-        // Send more silence - warning flag should stay true (won't show again)
-        for i in 201..400 {
+        // Send sustained silence again — warning should re-fire
+        for i in 201..401 {
             let silence = make_silence(1000);
             let frame = AudioFrame::new(silence, Instant::now(), i);
             station.process(frame).unwrap();
         }
-        assert!(station.no_audio_warning_shown);
+        assert!(
+            station.no_audio_warning_shown,
+            "Warning should re-fire after audio returns and silence resumes"
+        );
     }
 
     #[test]
