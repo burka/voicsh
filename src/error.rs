@@ -57,6 +57,32 @@ pub enum VoicshError {
     #[error("IPC connection failed: {message}")]
     IpcConnection { message: String },
 
+    // Portal / D-Bus errors
+    #[error("Portal error: {message}")]
+    PortalError { message: String },
+
+    // Model download / network errors
+    #[error("Model download failed: {message}")]
+    ModelDownload { message: String },
+
+    // Checksum / integrity errors
+    #[error(
+        "Checksum mismatch — expected {expected}, got {actual}; the downloaded file has been removed"
+    )]
+    ChecksumMismatch { expected: String, actual: String },
+
+    // Config serialization errors
+    #[error("Failed to serialize configuration: {message}")]
+    ConfigSerialize { message: String },
+
+    // Signal handler errors
+    #[error("Signal handler error: {message}")]
+    SignalHandler { message: String },
+
+    // ML inference errors (Candle / tensor operations)
+    #[error("Inference error: {message}")]
+    Inference { message: String },
+
     // General I/O errors
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -245,6 +271,67 @@ mod tests {
     }
 
     #[test]
+    fn test_portal_error_display() {
+        let error = VoicshError::PortalError {
+            message: "RemoteDesktop unavailable".to_string(),
+        };
+        assert_eq!(error.to_string(), "Portal error: RemoteDesktop unavailable");
+    }
+
+    #[test]
+    fn test_model_download_display() {
+        let error = VoicshError::ModelDownload {
+            message: "connection refused".to_string(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "Model download failed: connection refused"
+        );
+    }
+
+    #[test]
+    fn test_checksum_mismatch_display() {
+        let error = VoicshError::ChecksumMismatch {
+            expected: "abc123".to_string(),
+            actual: "def456".to_string(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "Checksum mismatch — expected abc123, got def456; the downloaded file has been removed"
+        );
+    }
+
+    #[test]
+    fn test_config_serialize_display() {
+        let error = VoicshError::ConfigSerialize {
+            message: "invalid field type".to_string(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "Failed to serialize configuration: invalid field type"
+        );
+    }
+
+    #[test]
+    fn test_signal_handler_display() {
+        let error = VoicshError::SignalHandler {
+            message: "SIGTERM registration failed".to_string(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "Signal handler error: SIGTERM registration failed"
+        );
+    }
+
+    #[test]
+    fn test_inference_display() {
+        let error = VoicshError::Inference {
+            message: "tensor shape mismatch".to_string(),
+        };
+        assert_eq!(error.to_string(), "Inference error: tensor shape mismatch");
+    }
+
+    #[test]
     fn test_result_type_alias() {
         fn returns_result() -> Result<i32> {
             Ok(42)
@@ -254,7 +341,7 @@ mod tests {
         fn returns_error() -> Result<i32> {
             Err(VoicshError::Other("test error".to_string()))
         }
-        assert!(returns_error().is_err());
+        assert_eq!(returns_error().unwrap_err().to_string(), "test error");
     }
 
     #[test]

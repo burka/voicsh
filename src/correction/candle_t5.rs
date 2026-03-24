@@ -89,43 +89,57 @@ impl CandleT5Corrector {
     /// Downloads model, config, and tokenizer on first call.
     pub fn load(info: &CorrectionModelInfo) -> Result<Self> {
         let device = Device::Cpu;
-        let api = Api::new().map_err(|e| VoicshError::Other(format!("HF Hub API init: {e}")))?;
+        let api = Api::new().map_err(|e| VoicshError::Inference {
+            message: format!("HF Hub API init: {e}"),
+        })?;
         let repo = api.model(info.hf_repo.to_string());
 
         // Download / resolve paths
         let model_path = repo
             .get(info.hf_filename)
-            .map_err(|e| VoicshError::Other(format!("Download model {}: {e}", info.hf_filename)))?;
+            .map_err(|e| VoicshError::Inference {
+                message: format!("Download model {}: {e}", info.hf_filename),
+            })?;
         verify_sha256(&model_path, info.sha256_model)?;
 
-        let config_path = repo.get(info.config_filename).map_err(|e| {
-            VoicshError::Other(format!("Download config {}: {e}", info.config_filename))
-        })?;
+        let config_path = repo
+            .get(info.config_filename)
+            .map_err(|e| VoicshError::Inference {
+                message: format!("Download config {}: {e}", info.config_filename),
+            })?;
         verify_sha256(&config_path, info.sha256_config)?;
 
         let tokenizer_path = repo
             .get(crate::models::correction_catalog::TOKENIZER_FILENAME)
-            .map_err(|e| VoicshError::Other(format!("Download tokenizer: {e}")))?;
+            .map_err(|e| VoicshError::Inference {
+                message: format!("Download tokenizer: {e}"),
+            })?;
         verify_sha256(&tokenizer_path, info.sha256_tokenizer)?;
 
         // Load config
-        let config_bytes = std::fs::read(&config_path).map_err(|e| {
-            VoicshError::Other(format!("Read config {}: {e}", config_path.display()))
+        let config_bytes = std::fs::read(&config_path).map_err(|e| VoicshError::Inference {
+            message: format!("Read config {}: {e}", config_path.display()),
         })?;
-        let config: T5Config = serde_json::from_slice(&config_bytes)
-            .map_err(|e| VoicshError::Other(format!("Parse T5 config: {e}")))?;
+        let config: T5Config =
+            serde_json::from_slice(&config_bytes).map_err(|e| VoicshError::Inference {
+                message: format!("Parse T5 config: {e}"),
+            })?;
 
         // Load quantized model
-        let vb = VarBuilder::from_gguf(&model_path, &device).map_err(|e| {
-            VoicshError::Other(format!("Load GGUF model {}: {e}", model_path.display()))
-        })?;
-        let model = T5ForConditionalGeneration::load(vb, &config)
-            .map_err(|e| VoicshError::Other(format!("Init T5 model: {e}")))?;
+        let vb =
+            VarBuilder::from_gguf(&model_path, &device).map_err(|e| VoicshError::Inference {
+                message: format!("Load GGUF model {}: {e}", model_path.display()),
+            })?;
+        let model =
+            T5ForConditionalGeneration::load(vb, &config).map_err(|e| VoicshError::Inference {
+                message: format!("Init T5 model: {e}"),
+            })?;
 
         // Load tokenizer
-        let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
-            VoicshError::Other(format!("Load tokenizer {}: {e}", tokenizer_path.display()))
-        })?;
+        let tokenizer =
+            Tokenizer::from_file(&tokenizer_path).map_err(|e| VoicshError::Inference {
+                message: format!("Load tokenizer {}: {e}", tokenizer_path.display()),
+            })?;
 
         Ok(Self {
             model,
@@ -140,19 +154,27 @@ impl CandleT5Corrector {
         let encoding = self
             .tokenizer
             .encode(prompt, true)
-            .map_err(|e| VoicshError::Other(format!("Tokenize: {e}")))?;
+            .map_err(|e| VoicshError::Inference {
+                message: format!("Tokenize: {e}"),
+            })?;
 
         let input_ids: Vec<u32> = encoding.get_ids().to_vec();
         let input_tensor = Tensor::new(input_ids.as_slice(), &self.device)
-            .map_err(|e| VoicshError::Other(format!("Create input tensor: {e}")))?
+            .map_err(|e| VoicshError::Inference {
+                message: format!("Create input tensor: {e}"),
+            })?
             .unsqueeze(0)
-            .map_err(|e| VoicshError::Other(format!("Unsqueeze input: {e}")))?;
+            .map_err(|e| VoicshError::Inference {
+                message: format!("Unsqueeze input: {e}"),
+            })?;
 
         // Encode
-        let encoder_output = self
-            .model
-            .encode(&input_tensor)
-            .map_err(|e| VoicshError::Other(format!("Encoder forward: {e}")))?;
+        let encoder_output =
+            self.model
+                .encode(&input_tensor)
+                .map_err(|e| VoicshError::Inference {
+                    message: format!("Encoder forward: {e}"),
+                })?;
 
         // Greedy decode — follows candle's quantized-t5 example.
         // decode() may return [batch, vocab] or [batch, seq, vocab] depending
@@ -162,52 +184,65 @@ impl CandleT5Corrector {
         for step in 0..MAX_DECODE_TOKENS {
             let decoder_input = if step == 0 {
                 Tensor::new(output_ids.as_slice(), &self.device)
-                    .map_err(|e| VoicshError::Other(format!("Create decoder input: {e}")))?
+                    .map_err(|e| VoicshError::Inference {
+                        message: format!("Create decoder input: {e}"),
+                    })?
                     .unsqueeze(0)
-                    .map_err(|e| VoicshError::Other(format!("Unsqueeze decoder: {e}")))?
+                    .map_err(|e| VoicshError::Inference {
+                        message: format!("Unsqueeze decoder: {e}"),
+                    })?
             } else {
                 let last = output_ids[output_ids.len() - 1];
                 Tensor::new(&[last], &self.device)
-                    .map_err(|e| VoicshError::Other(format!("Create decoder input: {e}")))?
+                    .map_err(|e| VoicshError::Inference {
+                        message: format!("Create decoder input: {e}"),
+                    })?
                     .unsqueeze(0)
-                    .map_err(|e| VoicshError::Other(format!("Unsqueeze decoder: {e}")))?
+                    .map_err(|e| VoicshError::Inference {
+                        message: format!("Unsqueeze decoder: {e}"),
+                    })?
             };
 
             let logits = self
                 .model
                 .decode(&decoder_input, &encoder_output)
-                .map_err(|e| VoicshError::Other(format!("Decoder forward: {e}")))?;
+                .map_err(|e| VoicshError::Inference {
+                    message: format!("Decoder forward: {e}"),
+                })?;
 
             // logits may be [1, V] or [1, S, V]. Squeeze batch, then take
             // argmax over the last dimension (vocab) at the last seq position.
-            let logits = logits
-                .squeeze(0)
-                .map_err(|e| VoicshError::Other(format!("Squeeze batch: {e}")))?;
+            let logits = logits.squeeze(0).map_err(|e| VoicshError::Inference {
+                message: format!("Squeeze batch: {e}"),
+            })?;
 
             let vocab_logits = match logits.dims().len() {
                 1 => logits.clone(), // [V] — already a single position
                 2 => {
                     // [S, V] — take last sequence position
-                    let s = logits
-                        .dim(0)
-                        .map_err(|e| VoicshError::Other(format!("Get seq dim: {e}")))?;
-                    logits
-                        .get(s - 1)
-                        .map_err(|e| VoicshError::Other(format!("Get last position: {e}")))?
+                    let s = logits.dim(0).map_err(|e| VoicshError::Inference {
+                        message: format!("Get seq dim: {e}"),
+                    })?;
+                    logits.get(s - 1).map_err(|e| VoicshError::Inference {
+                        message: format!("Get last position: {e}"),
+                    })?
                 }
                 n => {
-                    return Err(VoicshError::Other(format!(
-                        "Unexpected logits rank {n}: {:?}",
-                        logits.shape()
-                    )));
+                    return Err(VoicshError::Inference {
+                        message: format!("Unexpected logits rank {n}: {:?}", logits.shape()),
+                    });
                 }
             };
 
             let next_token = vocab_logits
                 .argmax(0)
-                .map_err(|e| VoicshError::Other(format!("Argmax: {e}")))?
+                .map_err(|e| VoicshError::Inference {
+                    message: format!("Argmax: {e}"),
+                })?
                 .to_scalar::<u32>()
-                .map_err(|e| VoicshError::Other(format!("Token scalar: {e}")))?;
+                .map_err(|e| VoicshError::Inference {
+                    message: format!("Token scalar: {e}"),
+                })?;
 
             // EOS token (1 for T5)
             if next_token == 1 {
@@ -218,10 +253,12 @@ impl CandleT5Corrector {
         }
 
         // Skip the leading pad token for decoding
-        let output = self
-            .tokenizer
-            .decode(&output_ids[1..], true)
-            .map_err(|e| VoicshError::Other(format!("Detokenize: {e}")))?;
+        let output =
+            self.tokenizer
+                .decode(&output_ids[1..], true)
+                .map_err(|e| VoicshError::Inference {
+                    message: format!("Detokenize: {e}"),
+                })?;
 
         Ok(output)
     }

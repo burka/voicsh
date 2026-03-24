@@ -403,7 +403,9 @@ async fn run_continuous(
     // Wait for Ctrl+C
     tokio::signal::ctrl_c()
         .await
-        .map_err(|e| VoicshError::Other(format!("Failed to wait for Ctrl+C: {}", e)))?;
+        .map_err(|e| VoicshError::SignalHandler {
+            message: format!("Failed to wait for Ctrl+C: {e}"),
+        })?;
 
     if !quiet {
         eprintln!("\nShutting down...");
@@ -440,7 +442,9 @@ async fn run_single_session(
     // Wait for Ctrl+C
     tokio::signal::ctrl_c()
         .await
-        .map_err(|e| VoicshError::Other(format!("Failed to wait for Ctrl+C: {}", e)))?;
+        .map_err(|e| VoicshError::SignalHandler {
+            message: format!("Failed to wait for Ctrl+C: {e}"),
+        })?;
 
     if !quiet {
         eprintln!("\nProcessing...");

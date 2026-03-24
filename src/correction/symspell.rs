@@ -29,11 +29,9 @@ impl SymSpellCorrector {
     /// (whitespace-separated).
     pub fn from_file(path: &Path, language: &str) -> Result<Self> {
         let content = std::fs::read_to_string(path).map_err(|e| {
-            crate::error::VoicshError::Other(format!(
-                "Failed to read dictionary '{}': {}",
-                path.display(),
-                e
-            ))
+            crate::error::VoicshError::ModelDownload {
+                message: format!("Failed to read dictionary '{}': {}", path.display(), e),
+            }
         })?;
 
         let mut symspell: SymSpell<UnicodeStringStrategy> = SymSpell::default();

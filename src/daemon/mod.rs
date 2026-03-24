@@ -276,8 +276,9 @@ pub async fn run_daemon(
 #[cfg(unix)]
 async fn wait_for_sigterm() -> Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
-    let mut sigterm = signal(SignalKind::terminate())
-        .map_err(|e| VoicshError::Other(format!("Failed to register SIGTERM handler: {}", e)))?;
+    let mut sigterm = signal(SignalKind::terminate()).map_err(|e| VoicshError::SignalHandler {
+        message: format!("Failed to register SIGTERM handler: {e}"),
+    })?;
     sigterm.recv().await;
     Ok(())
 }

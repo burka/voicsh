@@ -180,12 +180,16 @@ impl PortalConnector for AshpdConnector {
     async fn connect(&self) -> Result<Arc<dyn KeySender>> {
         let proxy = RemoteDesktop::new()
             .await
-            .map_err(|e| VoicshError::Other(format!("Portal RemoteDesktop unavailable: {e}")))?;
+            .map_err(|e| VoicshError::PortalError {
+                message: format!("Portal RemoteDesktop unavailable: {e}"),
+            })?;
 
         let session = proxy
             .create_session()
             .await
-            .map_err(|e| VoicshError::Other(format!("Portal session creation failed: {e}")))?;
+            .map_err(|e| VoicshError::PortalError {
+                message: format!("Portal session creation failed: {e}"),
+            })?;
 
         // Load saved restore token to skip the permission dialog
         let saved_token = load_restore_token();
@@ -198,16 +202,24 @@ impl PortalConnector for AshpdConnector {
                 PersistMode::ExplicitlyRevoked,
             )
             .await
-            .map_err(|e| VoicshError::Other(format!("Portal device selection failed: {e}")))?
+            .map_err(|e| VoicshError::PortalError {
+                message: format!("Portal device selection failed: {e}"),
+            })?
             .response()
-            .map_err(|e| VoicshError::Other(format!("Portal device selection rejected: {e}")))?;
+            .map_err(|e| VoicshError::PortalError {
+                message: format!("Portal device selection rejected: {e}"),
+            })?;
 
         let response = proxy
             .start(&session, None)
             .await
-            .map_err(|e| VoicshError::Other(format!("Portal session start failed: {e}")))?
+            .map_err(|e| VoicshError::PortalError {
+                message: format!("Portal session start failed: {e}"),
+            })?
             .response()
-            .map_err(|e| VoicshError::Other(format!("Portal session start rejected: {e}")))?;
+            .map_err(|e| VoicshError::PortalError {
+                message: format!("Portal session start rejected: {e}"),
+            })?;
 
         // Save restore token so subsequent sessions skip the dialog
         if let Some(token) = response.restore_token() {
@@ -216,10 +228,12 @@ impl PortalConnector for AshpdConnector {
 
         let devices = response.devices();
         if !devices.contains(DeviceType::Keyboard) {
-            return Err(VoicshError::Other(format!(
-                "Portal granted devices {:?} but keyboard not included",
-                devices
-            )));
+            return Err(VoicshError::PortalError {
+                message: format!(
+                    "Portal granted devices {:?} but keyboard not included",
+                    devices
+                ),
+            });
         }
 
         Ok(Arc::new(PortalKeySender { proxy, session }))
@@ -483,7 +497,9 @@ mod tests {
 
         fn failure(message: &str) -> Self {
             let mut q = std::collections::VecDeque::new();
-            q.push_back(Err(VoicshError::Other(message.to_string())));
+            q.push_back(Err(VoicshError::PortalError {
+                message: message.to_string(),
+            }));
             Self {
                 results: std::sync::Mutex::new(q),
             }
@@ -826,8 +842,10 @@ mod tests {
         let result = PortalSession::with_connector(Box::new(connector)).await;
         assert!(result.is_err());
         match result {
-            Err(VoicshError::Other(msg)) => assert!(msg.contains("unavailable"), "Got: {msg}"),
-            _ => panic!("Expected Other error with unavailable message"),
+            Err(VoicshError::PortalError { message }) => {
+                assert!(message.contains("unavailable"), "Got: {message}")
+            }
+            _ => panic!("Expected PortalError with unavailable message"),
         }
     }
 
@@ -837,10 +855,13 @@ mod tests {
         let result = PortalSession::with_connector(Box::new(connector)).await;
         assert!(result.is_err());
         match result {
-            Err(VoicshError::Other(msg)) => {
-                assert!(msg.contains("session creation failed"), "Got: {msg}")
+            Err(VoicshError::PortalError { message }) => {
+                assert!(
+                    message.contains("session creation failed"),
+                    "Got: {message}"
+                )
             }
-            _ => panic!("Expected Other error with session creation failed message"),
+            _ => panic!("Expected PortalError with session creation failed message"),
         }
     }
 
@@ -850,10 +871,13 @@ mod tests {
         let result = PortalSession::with_connector(Box::new(connector)).await;
         assert!(result.is_err());
         match result {
-            Err(VoicshError::Other(msg)) => {
-                assert!(msg.contains("device selection rejected"), "Got: {msg}")
+            Err(VoicshError::PortalError { message }) => {
+                assert!(
+                    message.contains("device selection rejected"),
+                    "Got: {message}"
+                )
             }
-            _ => panic!("Expected Other error with device selection rejected message"),
+            _ => panic!("Expected PortalError with device selection rejected message"),
         }
     }
 
@@ -863,8 +887,10 @@ mod tests {
         let result = PortalSession::with_connector(Box::new(connector)).await;
         assert!(result.is_err());
         match result {
-            Err(VoicshError::Other(msg)) => assert!(msg.contains("start rejected"), "Got: {msg}"),
-            _ => panic!("Expected Other error with start rejected message"),
+            Err(VoicshError::PortalError { message }) => {
+                assert!(message.contains("start rejected"), "Got: {message}")
+            }
+            _ => panic!("Expected PortalError with start rejected message"),
         }
     }
 
@@ -874,10 +900,10 @@ mod tests {
         let result = PortalSession::with_connector(Box::new(connector)).await;
         assert!(result.is_err());
         match result {
-            Err(VoicshError::Other(msg)) => {
-                assert!(msg.contains("keyboard not included"), "Got: {msg}")
+            Err(VoicshError::PortalError { message }) => {
+                assert!(message.contains("keyboard not included"), "Got: {message}")
             }
-            _ => panic!("Expected Other error with keyboard not included message"),
+            _ => panic!("Expected PortalError with keyboard not included message"),
         }
     }
 
@@ -1015,7 +1041,9 @@ mod tests {
 
         let connector = TestConnector::sequence(vec![
             Ok(stale_sender),
-            Err(VoicshError::Other("reconnect failed".to_string())),
+            Err(VoicshError::PortalError {
+                message: "reconnect failed".to_string(),
+            }),
         ]);
         let session = PortalSession::with_connector(Box::new(connector))
             .await
@@ -1068,7 +1096,9 @@ mod tests {
         let stale_sender: Arc<dyn KeySender> = Arc::new(FailThenSucceedKeySender::new(1));
         let connector = TestConnector::sequence(vec![
             Ok(stale_sender),
-            Err(VoicshError::Other("reconnect failed".to_string())),
+            Err(VoicshError::PortalError {
+                message: "reconnect failed".to_string(),
+            }),
         ]);
         let session = Arc::new(
             PortalSession::with_connector(Box::new(connector))
@@ -1100,7 +1130,9 @@ mod tests {
         let stale_sender: Arc<dyn KeySender> = Arc::new(FailThenSucceedKeySender::new(1));
         let connector = TestConnector::sequence(vec![
             Ok(stale_sender),
-            Err(VoicshError::Other("reconnect failed".to_string())),
+            Err(VoicshError::PortalError {
+                message: "reconnect failed".to_string(),
+            }),
         ]);
         let session = Arc::new(
             PortalSession::with_connector(Box::new(connector))
@@ -1227,7 +1259,9 @@ mod tests {
         let stale_sender: Arc<dyn KeySender> = Arc::new(FailThenSucceedKeySender::new(1));
         let connector = TestConnector::sequence(vec![
             Ok(stale_sender),
-            Err(VoicshError::Other("reconnect failed".to_string())),
+            Err(VoicshError::PortalError {
+                message: "reconnect failed".to_string(),
+            }),
         ]);
         let session = Arc::new(
             PortalSession::with_connector(Box::new(connector))

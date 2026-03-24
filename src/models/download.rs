@@ -88,8 +88,9 @@ async fn download_to_path(
 ) -> Result<()> {
     // Create models directory if it doesn't exist
     if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| VoicshError::Other(format!("Failed to create models directory: {e}")))?;
+        fs::create_dir_all(parent).map_err(|e| VoicshError::ModelDownload {
+            message: format!("Failed to create models directory: {e}"),
+        })?;
     }
 
     if progress {
@@ -100,13 +101,14 @@ async fn download_to_path(
         .get(url)
         .send()
         .await
-        .map_err(|e| VoicshError::Other(format!("Failed to start download: {e}")))?;
+        .map_err(|e| VoicshError::ModelDownload {
+            message: format!("Failed to start download: {e}"),
+        })?;
 
     if !response.status().is_success() {
-        return Err(VoicshError::Other(format!(
-            "Download failed with status: {}",
-            response.status()
-        )));
+        return Err(VoicshError::ModelDownload {
+            message: format!("Download failed with status: {}", response.status()),
+        });
     }
 
     let total_size = response.content_length().unwrap_or(0);
@@ -131,15 +133,19 @@ async fn download_to_path(
     let mut sha1_hasher = Sha1::new();
     let mut sha256_hasher = Sha256::new();
     let mut stream = response.bytes_stream();
-    let mut file = fs::File::create(output_path)
-        .map_err(|e| VoicshError::Other(format!("Failed to create output file: {e}")))?;
+    let mut file = fs::File::create(output_path).map_err(|e| VoicshError::ModelDownload {
+        message: format!("Failed to create output file: {e}"),
+    })?;
 
     while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| VoicshError::Other(format!("Failed to read download chunk: {e}")))?;
+        let chunk = chunk.map_err(|e| VoicshError::ModelDownload {
+            message: format!("Failed to read download chunk: {e}"),
+        })?;
 
         file.write_all(&chunk)
-            .map_err(|e| VoicshError::Other(format!("Failed to write to file: {e}")))?;
+            .map_err(|e| VoicshError::ModelDownload {
+                message: format!("Failed to write to file: {e}"),
+            })?;
 
         sha1_hasher.update(&chunk);
         sha256_hasher.update(&chunk);
@@ -160,9 +166,10 @@ async fn download_to_path(
             if let Err(e) = fs::remove_file(output_path) {
                 eprintln!("voicsh: failed to remove corrupted download: {e}");
             }
-            return Err(VoicshError::Other(format!(
-                "SHA-1 checksum mismatch. Expected: {sha1}, got: {calculated}"
-            )));
+            return Err(VoicshError::ChecksumMismatch {
+                expected: sha1.to_string(),
+                actual: calculated,
+            });
         }
         if progress {
             eprintln!("Checksum verified");
@@ -176,9 +183,10 @@ async fn download_to_path(
             if let Err(e) = fs::remove_file(output_path) {
                 eprintln!("voicsh: failed to remove corrupted download: {e}");
             }
-            return Err(VoicshError::Other(format!(
-                "SHA-256 checksum mismatch. Expected: {sha256}, got: {calculated}"
-            )));
+            return Err(VoicshError::ChecksumMismatch {
+                expected: sha256.to_string(),
+                actual: calculated,
+            });
         }
         if progress {
             eprintln!("Checksum verified");
@@ -224,13 +232,12 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
             .map(|m| m.name)
             .collect::<Vec<_>>()
             .join(", ");
-        VoicshError::Other(format!(
+        VoicshError::ModelDownload { message: format!(
             "Model '{name}' is not in the catalog. Downloads are restricted to \
              known models to ensure integrity.\n\
              Available models: {available}\n\
              Run 'voicsh models list' for details."
-        ))
-    })?;
+        })})?;
 
     download_to_path(
         name,
@@ -259,17 +266,18 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
 /// - The file cannot be written
 #[cfg(feature = "model-download")]
 pub async fn download_dictionary(lang: &str, progress: bool) -> Result<PathBuf> {
-    let info = crate::dictionary::get_dictionary(lang).ok_or_else(|| {
-        VoicshError::Other(format!(
-            "No dictionary available for language '{}'. Available: {}",
-            lang,
-            crate::dictionary::list_dictionaries()
-                .iter()
-                .map(|d| d.language)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))
-    })?;
+    let info =
+        crate::dictionary::get_dictionary(lang).ok_or_else(|| VoicshError::ModelDownload {
+            message: format!(
+                "No dictionary available for language '{}'. Available: {}",
+                lang,
+                crate::dictionary::list_dictionaries()
+                    .iter()
+                    .map(|d| d.language)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        })?;
 
     let path = dictionary_path(lang);
     if path.exists() {
@@ -293,12 +301,14 @@ pub async fn download_dictionary(lang: &str, progress: bool) -> Result<PathBuf> 
 /// Download a SymSpell frequency dictionary (stub when model-download feature is disabled).
 #[cfg(not(feature = "model-download"))]
 pub async fn download_dictionary(lang: &str, _progress: bool) -> Result<PathBuf> {
-    Err(VoicshError::Other(format!(
-        "Dictionary download requires the 'model-download' feature.\n\
-         Manually place the {} dictionary at: {}",
-        lang,
-        dictionary_path(lang).display()
-    )))
+    Err(VoicshError::ModelDownload {
+        message: format!(
+            "Dictionary download requires the 'model-download' feature. \
+             Manually place the {} dictionary at: {}",
+            lang,
+            dictionary_path(lang).display()
+        ),
+    })
 }
 
 /// Find any installed model from the catalog.

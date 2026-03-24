@@ -29,23 +29,28 @@ pub struct RemoteModel {
 pub async fn fetch_remote_models() -> Result<Vec<RemoteModel>> {
     let response =
         HTTP_CLIENT.get(HF_TREE_URL).send().await.map_err(|e| {
-            VoicshError::Other(format!("Failed to fetch HuggingFace model list: {e}"))
+            VoicshError::ModelDownload {
+                message: format!("Failed to fetch HuggingFace model list: {e}"),
+            }
         })?;
 
     if !response.status().is_success() {
-        return Err(VoicshError::Other(format!(
-            "HuggingFace API returned status {}",
-            response.status()
-        )));
+        return Err(VoicshError::ModelDownload {
+            message: format!("HuggingFace API returned status {}", response.status()),
+        });
     }
 
     let text = response
         .text()
         .await
-        .map_err(|e| VoicshError::Other(format!("Failed to read HuggingFace response: {e}")))?;
+        .map_err(|e| VoicshError::ModelDownload {
+            message: format!("Failed to read HuggingFace response: {e}"),
+        })?;
 
-    let entries: Vec<serde_json::Value> = serde_json::from_str(&text)
-        .map_err(|e| VoicshError::Other(format!("Failed to parse HuggingFace response: {e}")))?;
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_str(&text).map_err(|e| VoicshError::ModelDownload {
+            message: format!("Failed to parse HuggingFace response: {e}"),
+        })?;
 
     let mut models = Vec::new();
     for entry in &entries {

@@ -339,23 +339,22 @@ impl Config {
     /// Creates parent directories if they do not exist.
     pub fn save(&self, path: &Path) -> crate::error::Result<()> {
         let toml_str = toml::to_string_pretty(self).map_err(|e| {
-            crate::error::VoicshError::Other(format!("Failed to serialize config to TOML: {e}"))
+            crate::error::VoicshError::ConfigSerialize {
+                message: format!("TOML serialization failed: {e}"),
+            }
         })?;
 
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| {
-                crate::error::VoicshError::Other(format!(
+            fs::create_dir_all(parent).map_err(|e| crate::error::VoicshError::ConfigSerialize {
+                message: format!(
                     "Failed to create config directory '{}': {e}",
                     parent.display()
-                ))
+                ),
             })?;
         }
 
-        fs::write(path, toml_str).map_err(|e| {
-            crate::error::VoicshError::Other(format!(
-                "Failed to write config to '{}': {e}",
-                path.display()
-            ))
+        fs::write(path, toml_str).map_err(|e| crate::error::VoicshError::ConfigSerialize {
+            message: format!("Failed to write config to '{}': {e}", path.display()),
         })?;
 
         Ok(())
@@ -379,7 +378,9 @@ impl Config {
     /// Get a config value by dotted path (e.g. "stt.model").
     pub fn get_value_by_path(&self, key: &str) -> crate::error::Result<String> {
         let value = toml::Value::try_from(self).map_err(|e| {
-            crate::error::VoicshError::Other(format!("Failed to serialize config: {e}"))
+            crate::error::VoicshError::ConfigSerialize {
+                message: format!("TOML value conversion failed: {e}"),
+            }
         })?;
         let leaf = navigate_toml_path(&value, key)?;
         Ok(format_toml_value(leaf))
@@ -397,7 +398,9 @@ impl Config {
         };
 
         let mut root = toml::Value::try_from(&config).map_err(|e| {
-            crate::error::VoicshError::Other(format!("Failed to serialize config: {e}"))
+            crate::error::VoicshError::ConfigSerialize {
+                message: format!("TOML value conversion failed: {e}"),
+            }
         })?;
 
         let new_value = parse_toml_value(value_str);
@@ -405,7 +408,9 @@ impl Config {
 
         // Validate by deserializing back
         let toml_str = toml::to_string_pretty(&root).map_err(|e| {
-            crate::error::VoicshError::Other(format!("Failed to serialize config: {e}"))
+            crate::error::VoicshError::ConfigSerialize {
+                message: format!("TOML serialization failed: {e}"),
+            }
         })?;
         let _validated: Config = toml::from_str(&toml_str)?;
 
@@ -415,15 +420,17 @@ impl Config {
 
     /// Serialize this configuration to pretty TOML for display.
     pub fn to_display_toml(&self) -> crate::error::Result<String> {
-        toml::to_string_pretty(self).map_err(|e| {
-            crate::error::VoicshError::Other(format!("Failed to serialize config to TOML: {e}"))
+        toml::to_string_pretty(self).map_err(|e| crate::error::VoicshError::ConfigSerialize {
+            message: format!("TOML serialization failed: {e}"),
         })
     }
 
     /// Display a single config section by top-level key (e.g., "stt", "audio").
     pub fn display_section(&self, key: &str) -> crate::error::Result<String> {
         let value = toml::Value::try_from(self).map_err(|e| {
-            crate::error::VoicshError::Other(format!("Failed to serialize config: {e}"))
+            crate::error::VoicshError::ConfigSerialize {
+                message: format!("TOML value conversion failed: {e}"),
+            }
         })?;
         let section = navigate_toml_path(&value, key)?;
         Ok(format_toml_value(section))
@@ -479,11 +486,14 @@ impl Config {
         use crate::pipeline::post_processor::SUPPORTED_LANGUAGES;
         for lang in languages {
             if !SUPPORTED_LANGUAGES.contains(lang) {
-                return Err(crate::error::VoicshError::Other(format!(
-                    "Unknown language '{}'. Supported: {}",
-                    lang,
-                    SUPPORTED_LANGUAGES.join(", ")
-                )));
+                return Err(crate::error::VoicshError::ConfigInvalidValue {
+                    key: "languages".to_string(),
+                    message: format!(
+                        "Unknown language '{}'. Supported: {}",
+                        lang,
+                        SUPPORTED_LANGUAGES.join(", ")
+                    ),
+                });
             }
         }
         Ok(())
