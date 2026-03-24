@@ -15,6 +15,11 @@ pub struct ModelInfo {
     pub size_mb: u32,
     /// SHA-1 checksum for integrity verification
     pub sha1: &'static str,
+    /// SHA-256 checksum for integrity verification.
+    ///
+    /// Empty string means no SHA-256 is available yet.
+    /// TODO: populate SHA-256 hashes for all catalog entries.
+    pub sha256: &'static str,
     /// Whether this model supports English only
     pub english_only: bool,
     /// Whether this is a quantized model
@@ -43,6 +48,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "tiny.en",
         size_mb: 75,
         sha1: "c78c86eb1a8faa21b369bcd33207cc90d64ae9df",
+        sha256: "",
         english_only: true,
         quantized: false,
     },
@@ -50,6 +56,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "tiny",
         size_mb: 75,
         sha1: "bd577a113a864445d4c299885e0cb97d4ba92b5f",
+        sha256: "",
         english_only: false,
         quantized: false,
     },
@@ -57,6 +64,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "base.en",
         size_mb: 142,
         sha1: "137c40403d78fd54d454da0f9bd998f78703390c",
+        sha256: "",
         english_only: true,
         quantized: false,
     },
@@ -64,6 +72,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "base",
         size_mb: 142,
         sha1: "465707469ff3a37a2b9b8d8f89f2f99de7299dac",
+        sha256: "",
         english_only: false,
         quantized: false,
     },
@@ -71,6 +80,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "small.en",
         size_mb: 466,
         sha1: "db8a495a91d927739e50b3fc1cc4c6b8f6c2d022",
+        sha256: "",
         english_only: true,
         quantized: false,
     },
@@ -78,6 +88,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "small",
         size_mb: 466,
         sha1: "55356645c2b361a969dfd0ef2c5a50d530afd8d5",
+        sha256: "",
         english_only: false,
         quantized: false,
     },
@@ -85,6 +96,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "medium.en",
         size_mb: 1533,
         sha1: "8c30f0e44ce9560643ebd10bbe50cd20eafd3723",
+        sha256: "",
         english_only: true,
         quantized: false,
     },
@@ -92,6 +104,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "medium",
         size_mb: 1533,
         sha1: "fd9727b6e1217c2f614f9b698455c4ffd82463b4",
+        sha256: "",
         english_only: false,
         quantized: false,
     },
@@ -99,6 +112,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "large-v3-turbo",
         size_mb: 1620,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: false,
     },
@@ -106,6 +120,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "large-v1",
         size_mb: 3094,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: false,
     },
@@ -113,6 +128,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "large-v2",
         size_mb: 3094,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: false,
     },
@@ -120,6 +136,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "large-v3",
         size_mb: 3095,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: false,
     },
@@ -128,6 +145,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "tiny-q5_1",
         size_mb: 32,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -135,6 +153,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "tiny.en-q5_1",
         size_mb: 32,
         sha1: "",
+        sha256: "",
         english_only: true,
         quantized: true,
     },
@@ -142,6 +161,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "base-q5_1",
         size_mb: 59,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -149,6 +169,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "base.en-q5_1",
         size_mb: 59,
         sha1: "",
+        sha256: "",
         english_only: true,
         quantized: true,
     },
@@ -156,6 +177,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "small-q5_1",
         size_mb: 190,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -163,6 +185,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "small.en-q5_1",
         size_mb: 190,
         sha1: "",
+        sha256: "",
         english_only: true,
         quantized: true,
     },
@@ -171,6 +194,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "medium-q5_0",
         size_mb: 539,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -178,6 +202,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "medium.en-q5_0",
         size_mb: 539,
         sha1: "",
+        sha256: "",
         english_only: true,
         quantized: true,
     },
@@ -185,6 +210,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "large-v2-q5_0",
         size_mb: 1080,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -192,6 +218,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "large-v3-q5_0",
         size_mb: 1080,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -200,6 +227,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "tiny-q8_0",
         size_mb: 43,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -207,6 +235,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "tiny.en-q8_0",
         size_mb: 43,
         sha1: "",
+        sha256: "",
         english_only: true,
         quantized: true,
     },
@@ -214,6 +243,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "base-q8_0",
         size_mb: 81,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -221,6 +251,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "base.en-q8_0",
         size_mb: 81,
         sha1: "",
+        sha256: "",
         english_only: true,
         quantized: true,
     },
@@ -228,6 +259,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "small-q8_0",
         size_mb: 264,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -235,6 +267,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "small.en-q8_0",
         size_mb: 264,
         sha1: "",
+        sha256: "",
         english_only: true,
         quantized: true,
     },
@@ -242,6 +275,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "medium-q8_0",
         size_mb: 823,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -249,6 +283,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "medium.en-q8_0",
         size_mb: 823,
         sha1: "",
+        sha256: "",
         english_only: true,
         quantized: true,
     },
@@ -256,6 +291,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "large-v2-q8_0",
         size_mb: 1660,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -263,6 +299,7 @@ pub const MODELS: &[ModelInfo] = &[
         name: "large-v3-turbo-q8_0",
         size_mb: 874,
         sha1: "",
+        sha256: "",
         english_only: false,
         quantized: true,
     },
@@ -379,6 +416,27 @@ mod tests {
         assert_eq!(model.name, "tiny.en");
         assert_eq!(model.size_mb, 75);
         assert!(model.english_only);
+    }
+
+    #[test]
+    fn test_all_models_have_sha256_field() {
+        // Every catalog entry must have the sha256 field present (even if empty).
+        // This test guards against struct updates that accidentally drop the field.
+        for model in list_models() {
+            // sha256 is a &'static str — accessing it is sufficient to prove the
+            // field exists and is initialised.  The value may be empty while
+            // we're still collecting hashes; that is expected for now.
+            let _ = model.sha256;
+            // sha1 is the primary hash; non-empty sha1 entries must be the
+            // standard (non-quantized) models with known checksums.
+            if !model.sha1.is_empty() {
+                assert!(
+                    !model.quantized,
+                    "Model {} has sha1 but is marked quantized — unexpected",
+                    model.name
+                );
+            }
+        }
     }
 
     #[test]

@@ -12,6 +12,10 @@ use sha2::Sha256;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+/// Shared HTTP client — reuses TLS sessions across all requests.
+pub(crate) static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 /// Get the directory where models are stored.
 ///
@@ -83,8 +87,7 @@ async fn download_to_path(
         eprintln!("Downloading {name} ({size_mb} MB)...");
     }
 
-    let client = reqwest::Client::new();
-    let response = client
+    let response = HTTP_CLIENT
         .get(url)
         .send()
         .await
@@ -182,15 +185,15 @@ async fn download_to_path(
 
 /// Download a Whisper model.
 ///
-/// Tries the static catalog first, then falls back to HuggingFace remote
-/// discovery for models not in the catalog.
+/// Only downloads models that are in the static catalog. Models not in the
+/// catalog are rejected to prevent unverified downloads.
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - The model is not found in catalog or on HuggingFace
+/// - The model is not found in the static catalog
 /// - The download fails
-/// - The SHA-1 checksum doesn't match (if provided in catalog)
+/// - The SHA-1 or SHA-256 checksum doesn't match (if provided in catalog)
 /// - The file cannot be written
 pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
     let path = model_path(name);
@@ -206,52 +209,31 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
         return Ok(path);
     }
 
-    // Try static catalog first
-    if let Some(info) = get_model(name) {
-        download_to_path(
-            name,
-            &info.url(),
-            info.sha1,
-            "",
-            info.size_mb,
-            &path,
-            progress,
-        )
-        .await?;
-        return Ok(path);
-    }
-
-    // Fall back to remote discovery
-    remote_fallback(name, &path, progress).await
-}
-
-#[cfg(feature = "model-download")]
-async fn remote_fallback(name: &str, path: &Path, progress: bool) -> Result<PathBuf> {
-    let remote = crate::models::remote::fetch_remote_models()
-        .await
-        .map_err(|e| {
-            VoicshError::Other(format!(
-                "Model '{name}' not in catalog and remote fetch failed: {e}"
-            ))
-        })?;
-
-    let rm = remote.iter().find(|m| m.name == name).ok_or_else(|| {
+    let info = get_model(name).ok_or_else(|| {
+        let available = crate::models::catalog::list_models()
+            .iter()
+            .map(|m| m.name)
+            .collect::<Vec<_>>()
+            .join(", ");
         VoicshError::Other(format!(
-            "Model '{name}' not found in catalog or on HuggingFace.\n\
-             Run 'voicsh models list' to see available models."
+            "Model '{name}' is not in the catalog. Downloads are restricted to \
+             known models to ensure integrity.\n\
+             Available models: {available}\n\
+             Run 'voicsh models list' for details."
         ))
     })?;
 
-    download_to_path(name, &rm.url, "", "", rm.size_mb, path, progress).await?;
-    Ok(path.to_path_buf())
-}
-
-#[cfg(not(feature = "model-download"))]
-async fn remote_fallback(name: &str, _path: &Path, _progress: bool) -> Result<PathBuf> {
-    Err(VoicshError::Other(format!(
-        "Model '{name}' not found in catalog.\n\
-         Run 'voicsh models list' to see available models."
-    )))
+    download_to_path(
+        name,
+        &info.url(),
+        info.sha1,
+        info.sha256,
+        info.size_mb,
+        &path,
+        progress,
+    )
+    .await?;
+    Ok(path)
 }
 
 /// Download a SymSpell frequency dictionary.
@@ -374,6 +356,26 @@ pub fn format_remote_model(name: &str, size_mb: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "model-download")]
+    #[tokio::test]
+    async fn test_download_model_rejects_unknown_model() {
+        let result = download_model("not-a-real-model-xyz", false).await;
+        assert!(result.is_err(), "Expected error for unknown model");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("not-a-real-model-xyz"),
+            "Error should name the unknown model, got: {msg}"
+        );
+        assert!(
+            msg.contains("not in the catalog"),
+            "Error should explain it's a catalog restriction, got: {msg}"
+        );
+        assert!(
+            msg.contains("voicsh models list"),
+            "Error should direct user to 'voicsh models list', got: {msg}"
+        );
+    }
 
     #[test]
     fn test_models_dir_is_valid_path() {

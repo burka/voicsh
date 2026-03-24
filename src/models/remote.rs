@@ -4,6 +4,7 @@
 //! `ggerganov/whisper.cpp` repository on HuggingFace.
 
 use crate::error::{Result, VoicshError};
+use crate::models::download::HTTP_CLIENT;
 
 const HF_TREE_URL: &str = "https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/main";
 
@@ -26,9 +27,8 @@ pub struct RemoteModel {
 ///
 /// Returns an error on network failure or unexpected response format.
 pub async fn fetch_remote_models() -> Result<Vec<RemoteModel>> {
-    let client = reqwest::Client::new();
     let response =
-        client.get(HF_TREE_URL).send().await.map_err(|e| {
+        HTTP_CLIENT.get(HF_TREE_URL).send().await.map_err(|e| {
             VoicshError::Other(format!("Failed to fetch HuggingFace model list: {e}"))
         })?;
 
