@@ -568,10 +568,10 @@ mod tests {
 
         // Test read (may be empty if no audio input, but the call must succeed)
         let samples = source.read_samples().expect("Failed to read samples");
-        // samples is a Vec<f32>; silence is valid, so we only assert type contract holds
+        // samples is Vec<i16>; silence is valid, so we only assert type contract holds
         assert!(
-            samples.iter().all(|&s| s >= -1.0 && s <= 1.0),
-            "All samples must be in normalized [-1.0, 1.0] range, got: {:?}",
+            samples.iter().all(|&s| s >= i16::MIN && s <= i16::MAX),
+            "All samples must be valid i16 values, got: {:?}",
             &samples[..samples.len().min(8)]
         );
 

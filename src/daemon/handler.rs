@@ -1099,29 +1099,43 @@ mod tests {
         }
 
         // Test Start command (may fail in test env due to no audio device)
-        let response = handler.handle(Command::Start).await;
-        match response {
-            Response::Ok { .. } => {} // start_recording may fail in test env (no audio device)
+        let start_response = handler.handle(Command::Start).await;
+        let start_succeeded = matches!(start_response, Response::Ok { .. });
+        match start_response {
+            Response::Ok { .. } => {}    // start_recording succeeded
             Response::Error { .. } => {} // audio device unavailable
-            _ => panic!("Expected Ok or Error"),
+            _ => panic!("Expected Ok or Error from Start"),
         }
 
-        // Test Stop command (should fail since we didn't actually start - audio source creation would fail in test)
+        // Test Stop command — outcome depends on whether Start succeeded.
+        // If Start succeeded, Stop correctly returns Ok or Transcription.
+        // If Start failed (no audio device), Stop returns Error "Not recording".
         let response = handler.handle(Command::Stop).await;
-        match response {
-            Response::Error { message } => {
-                assert_eq!(
-                    message, "Not recording",
-                    "Stop should return error when not recording"
-                );
-            }
-            _ => panic!(
-                "Expected Error response for Stop when not recording, got: {:?}",
+        if start_succeeded {
+            assert!(
+                matches!(
+                    response,
+                    Response::Ok { .. } | Response::Transcription { .. }
+                ),
+                "Stop should return Ok or Transcription after a successful Start, got: {:?}",
                 response
-            ),
+            );
+        } else {
+            match response {
+                Response::Error { message } => {
+                    assert_eq!(
+                        message, "Not recording",
+                        "Stop should return 'Not recording' error when Start failed"
+                    );
+                }
+                _ => panic!(
+                    "Expected Error response for Stop when Start failed, got: {:?}",
+                    response
+                ),
+            }
         }
 
-        // Test Cancel command (should fail since not recording)
+        // Test Cancel command (should return Error since we are no longer recording after Stop)
         let response = handler.handle(Command::Cancel).await;
         match response {
             Response::Error { message } => {

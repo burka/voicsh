@@ -1,3 +1,4 @@
+#![cfg(feature = "symspell")]
 // tests/symspell_e2e_audio_test.rs
 //! End-to-end tests for SymSpell whitelist with audio pipeline
 //!
@@ -11,8 +12,10 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use voicsh::stt::transcriber::MockTranscriber;
-use voicsh::{Corrector, HybridCorrector, SymSpellCorrector, Transcriber};
+use voicsh::correction::corrector::Corrector;
+use voicsh::correction::hybrid::HybridCorrector;
+use voicsh::correction::symspell::SymSpellCorrector;
+use voicsh::stt::transcriber::{MockTranscriber, Transcriber};
 
 fn dictionary_path(lang: &str) -> PathBuf {
     PathBuf::from(format!("data/dictionaries/{}-80k.txt", lang))

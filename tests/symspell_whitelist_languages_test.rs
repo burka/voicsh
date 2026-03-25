@@ -1,3 +1,4 @@
+#![cfg(feature = "symspell")]
 // tests/symspell_whitelist_languages_test.rs
 //! Unit and integration tests for SymSpell whitelist language dispatch
 //!
@@ -9,9 +10,11 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use voicsh::config::CorrectionBackend;
+use voicsh::config::{CorrectionBackend, ErrorCorrectionConfig};
+use voicsh::correction::corrector::Corrector;
+use voicsh::correction::hybrid::HybridCorrector;
+use voicsh::correction::symspell::SymSpellCorrector;
 use voicsh::error::Result;
-use voicsh::{Corrector, HybridCorrector, SymSpellCorrector, config::ErrorCorrectionConfig};
 
 fn dictionary_path(lang: &str) -> PathBuf {
     PathBuf::from(format!("data/dictionaries/{}-80k.txt", lang))

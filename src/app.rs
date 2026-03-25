@@ -425,6 +425,7 @@ async fn run_single_session(
     make_sink: impl FnOnce(&Config) -> InjectorSink<SystemCommandExecutor>,
 ) -> Result<()> {
     let quiet = run_config.quiet;
+    let verbosity = run_config.verbosity;
     let device_name = config.audio.device.as_deref();
     let audio_source: Box<dyn AudioSource> = Box::new(CpalAudioSource::new(device_name)?);
     let pipeline_config = build_pipeline_config(config, &run_config);

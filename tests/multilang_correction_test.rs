@@ -1,3 +1,4 @@
+#![cfg(all(feature = "symspell", feature = "model-download"))]
 //! Integration tests for multi-language SymSpell correction.
 
 use std::collections::HashMap;

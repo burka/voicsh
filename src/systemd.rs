@@ -134,26 +134,28 @@ fn service_dir() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes all tests that mutate environment variables.
+    ///
+    /// Environment variables are process-global. Without serialization, concurrent tests
+    /// that set/remove XDG_CONFIG_HOME or HOME will race and produce non-deterministic results.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Test that service_dir uses XDG_CONFIG_HOME when set.
-    ///
-    /// Uses a temporary env override. Tests are run with std::env which is process-global,
-    /// so each test sets and then restores the relevant variables.
     #[test]
     fn service_dir_uses_xdg_config_home() {
+        let _guard = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+
         let prev_xdg = std::env::var("XDG_CONFIG_HOME").ok();
-        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
-        unsafe { std::env::set_var("XDG_CONFIG_HOME", "/custom/config") };
+        crate::sys::set_env("XDG_CONFIG_HOME", "/custom/config");
 
         let result = service_dir();
 
-        // Restore env state before asserting to ensure cleanup on panic
-        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
-        unsafe {
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
+        // Restore env state before asserting to ensure cleanup on panic.
+        match prev_xdg {
+            Some(v) => crate::sys::set_env("XDG_CONFIG_HOME", &v),
+            None => crate::sys::remove_env("XDG_CONFIG_HOME"),
         }
 
         let path = result.expect("service_dir should succeed when XDG_CONFIG_HOME is set");
@@ -167,27 +169,23 @@ mod tests {
     /// Test that service_dir falls back to HOME/.config when XDG_CONFIG_HOME is absent.
     #[test]
     fn service_dir_falls_back_to_home() {
+        let _guard = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+
         let prev_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         let prev_home = std::env::var("HOME").ok();
 
-        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
-        unsafe {
-            std::env::remove_var("XDG_CONFIG_HOME");
-            std::env::set_var("HOME", "/home/testuser");
-        }
+        crate::sys::remove_env("XDG_CONFIG_HOME");
+        crate::sys::set_env("HOME", "/home/testuser");
 
         let result = service_dir();
 
-        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
-        unsafe {
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-            match prev_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
+        match prev_xdg {
+            Some(v) => crate::sys::set_env("XDG_CONFIG_HOME", &v),
+            None => crate::sys::remove_env("XDG_CONFIG_HOME"),
+        }
+        match prev_home {
+            Some(v) => crate::sys::set_env("HOME", &v),
+            None => crate::sys::remove_env("HOME"),
         }
 
         let path = result.expect("service_dir should succeed when HOME is set");
@@ -201,27 +199,23 @@ mod tests {
     /// Test that service_dir returns an error when neither XDG_CONFIG_HOME nor HOME is set.
     #[test]
     fn service_dir_errors_without_home_or_xdg() {
+        let _guard = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
+
         let prev_xdg = std::env::var("XDG_CONFIG_HOME").ok();
         let prev_home = std::env::var("HOME").ok();
 
-        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
-        unsafe {
-            std::env::remove_var("XDG_CONFIG_HOME");
-            std::env::remove_var("HOME");
-        }
+        crate::sys::remove_env("XDG_CONFIG_HOME");
+        crate::sys::remove_env("HOME");
 
         let result = service_dir();
 
-        // SAFETY: single-threaded test; no other thread reads these vars concurrently.
-        unsafe {
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-            match prev_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
+        match prev_xdg {
+            Some(v) => crate::sys::set_env("XDG_CONFIG_HOME", &v),
+            None => crate::sys::remove_env("XDG_CONFIG_HOME"),
+        }
+        match prev_home {
+            Some(v) => crate::sys::set_env("HOME", &v),
+            None => crate::sys::remove_env("HOME"),
         }
 
         let err = result.expect_err("service_dir should fail without HOME or XDG_CONFIG_HOME");
