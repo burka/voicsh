@@ -82,11 +82,14 @@ impl Default for VoiceCommandConfig {
 #[serde(rename_all = "lowercase")]
 pub enum CorrectionBackend {
     /// Dictionary-based correction using SymSpell (fast, ~20 MB memory)
+    #[serde(alias = "Symspell")]
     Symspell,
     /// Neural correction using Flan-T5 (English only, requires model download)
+    #[serde(alias = "T5")]
     T5,
     /// Hybrid: T5 for English, SymSpell for other languages
     #[default]
+    #[serde(alias = "Hybrid")]
     Hybrid,
 }
 
@@ -163,7 +166,9 @@ pub struct HallucinationFilterConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum InjectionMethod {
+    #[serde(alias = "Clipboard")]
     Clipboard,
+    #[serde(alias = "Direct")]
     Direct,
 }
 
@@ -181,9 +186,13 @@ impl std::fmt::Display for InjectionMethod {
 #[serde(rename_all = "lowercase")]
 pub enum InjectionBackend {
     #[default]
+    #[serde(alias = "Auto")]
     Auto,
+    #[serde(alias = "Portal")]
     Portal,
+    #[serde(alias = "Wtype")]
     Wtype,
+    #[serde(alias = "Ydotool")]
     Ydotool,
 }
 
