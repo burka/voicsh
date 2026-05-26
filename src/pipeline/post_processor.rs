@@ -245,7 +245,7 @@ impl VoiceCommandProcessor {
                 (phrase, chars, action)
             })
             .collect();
-        commands.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        commands.sort_by_key(|b| std::cmp::Reverse(b.0.len()));
 
         Self {
             commands,
