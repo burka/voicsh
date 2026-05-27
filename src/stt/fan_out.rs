@@ -90,6 +90,18 @@ impl Transcriber for FanOutTranscriber {
     fn is_ready(&self) -> bool {
         self.transcribers.iter().any(|t| t.is_ready())
     }
+
+    fn try_unload_if_idle(&self) -> bool {
+        // Forward to every child so all eligible models unload in the same tick.
+        // Do NOT short-circuit: a true from one child must not suppress calls to others.
+        let mut any_unloaded = false;
+        for transcriber in &self.transcribers {
+            if transcriber.try_unload_if_idle() {
+                any_unloaded = true;
+            }
+        }
+        any_unloaded
+    }
 }
 
 #[cfg(test)]

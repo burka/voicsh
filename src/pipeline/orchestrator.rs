@@ -1378,6 +1378,7 @@ mod tests {
             language: language.to_string(),
             threads: Some(4),
             use_gpu: true,
+            idle_unload_after: Some(std::time::Duration::from_secs(300)),
         };
 
         let transcriber: Arc<dyn Transcriber> =

@@ -53,6 +53,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     language: "auto".to_string(),
                     threads: None,
                     use_gpu: true,
+                    idle_unload_after: None,
                 };
 
                 let transcriber =

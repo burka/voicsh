@@ -72,6 +72,7 @@ fn test_cpu_transcribes_known_speech() {
         language: language_for_model(&model_path).to_string(),
         threads: Some(4),
         use_gpu: false,
+        idle_unload_after: None,
     };
 
     let transcriber = match WhisperTranscriber::new(config) {
@@ -140,6 +141,7 @@ fn test_gpu_transcribes_known_speech() {
         language: language_for_model(&model_path).to_string(),
         threads: Some(4),
         use_gpu: true,
+        idle_unload_after: None,
     };
 
     let transcriber = match WhisperTranscriber::new(config) {
@@ -219,6 +221,7 @@ fn test_cpu_transcribes_silence() {
         language: language_for_model(&model_path).to_string(),
         threads: Some(4),
         use_gpu: false,
+        idle_unload_after: None,
     };
 
     let transcriber = match WhisperTranscriber::new(config) {
@@ -260,6 +263,7 @@ fn test_gpu_transcribes_silence() {
         language: language_for_model(&model_path).to_string(),
         threads: Some(4),
         use_gpu: true,
+        idle_unload_after: None,
     };
 
     let transcriber = match WhisperTranscriber::new(config) {

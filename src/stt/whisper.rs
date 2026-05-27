@@ -15,9 +15,14 @@ use crate::defaults;
 use crate::error::{Result, VoicshError};
 use crate::stt::transcriber::{TokenProbability, Transcriber, TranscriptionResult};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[cfg(feature = "whisper")]
-use std::sync::{Mutex, Once};
+use crate::audio::vad::{Clock, SystemClock};
+#[cfg(feature = "whisper")]
+use crate::stt::idle_tracker::IdleTracker;
+#[cfg(feature = "whisper")]
+use std::sync::{Arc, Mutex, Once};
 #[cfg(feature = "whisper")]
 use whisper_rs::{
     FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, install_logging_hooks,
@@ -37,6 +42,8 @@ pub struct WhisperConfig {
     pub threads: Option<usize>,
     /// Whether to use GPU acceleration (default: true)
     pub use_gpu: bool,
+    /// How long the model can sit idle in VRAM before unloading. `None` = never unload.
+    pub idle_unload_after: Option<Duration>,
 }
 
 impl Default for WhisperConfig {
@@ -46,6 +53,7 @@ impl Default for WhisperConfig {
             language: defaults::DEFAULT_LANGUAGE.to_string(),
             threads: None,
             use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(300)),
         }
     }
 }
@@ -60,9 +68,10 @@ impl Default for WhisperConfig {
 /// This type is only available when the `whisper` feature is enabled.
 #[cfg(feature = "whisper")]
 pub struct WhisperTranscriber {
-    context: Mutex<WhisperContext>,
+    context: Mutex<Option<WhisperContext>>,
     config: WhisperConfig,
     model_name: String,
+    idle: IdleTracker,
 }
 
 #[cfg(feature = "whisper")]
@@ -97,18 +106,47 @@ impl WhisperTranscriber {
             .unwrap_or(false)
     }
 
-    /// Create a new Whisper transcriber.
+    /// Load (or reload) a `WhisperContext` from the given config.
     ///
-    /// # Arguments
-    /// * `config` - Configuration for the transcriber
-    ///
-    /// # Returns
-    /// A new `WhisperTranscriber` instance
+    /// Contains the raw model-loading logic so that both `new()` and future
+    /// lazy-reload paths share a single implementation.
+    fn load_context(config: &WhisperConfig) -> Result<WhisperContext> {
+        let mut context_params = WhisperContextParameters::default();
+        // Enable flash attention: uses fused attention kernels that avoid the standalone
+        // softmax CUDA kernel, which crashes on Blackwell GPUs (sm_120) with ggml <= 1.7.6
+        context_params.flash_attn(true);
+        context_params.use_gpu(config.use_gpu);
+        WhisperContext::new_with_params(
+            config.model_path.to_str().ok_or_else(|| {
+                VoicshError::TranscriptionInferenceFailed {
+                    message: "Invalid UTF-8 in model path".to_string(),
+                }
+            })?,
+            context_params,
+        )
+        .map_err(|e| VoicshError::TranscriptionInferenceFailed {
+            message: format!("Failed to load Whisper model: {}", e),
+        })
+    }
+
+    /// Create a new Whisper transcriber using the system clock.
     ///
     /// # Errors
-    /// Returns `VoicshError::TranscriptionModelNotFound` if the model file doesn't exist
-    /// Returns `VoicshError::TranscriptionInferenceFailed` if model loading fails
+    /// Returns `VoicshError::TranscriptionModelNotFound` if the model file doesn't exist.
+    /// Returns `VoicshError::TranscriptionInferenceFailed` if model loading fails.
     pub fn new(config: WhisperConfig) -> Result<Self> {
+        Self::new_with_clock(config, Arc::new(SystemClock))
+    }
+
+    /// Create a new Whisper transcriber with an injected clock.
+    ///
+    /// Identical to [`new`] but uses the supplied `clock` for idle tracking instead
+    /// of the real system clock. Intended for use in tests.
+    ///
+    /// # Errors
+    /// Returns `VoicshError::TranscriptionModelNotFound` if the model file doesn't exist.
+    /// Returns `VoicshError::TranscriptionInferenceFailed` if model loading fails.
+    pub(crate) fn new_with_clock(config: WhisperConfig, clock: Arc<dyn Clock>) -> Result<Self> {
         // Install logging hooks to suppress whisper.cpp output (only once)
         LOGGING_HOOKS_INSTALLED.call_once(|| {
             install_logging_hooks();
@@ -148,29 +186,22 @@ impl WhisperTranscriber {
             .unwrap_or("unknown")
             .to_string();
 
-        // Load the Whisper model
-        let mut context_params = WhisperContextParameters::default();
-        // Enable flash attention: uses fused attention kernels that avoid the standalone
-        // softmax CUDA kernel, which crashes on Blackwell GPUs (sm_120) with ggml <= 1.7.6
-        context_params.flash_attn(true);
-        context_params.use_gpu(config.use_gpu);
-        let context = WhisperContext::new_with_params(
-            config.model_path.to_str().ok_or_else(|| {
-                VoicshError::TranscriptionInferenceFailed {
-                    message: "Invalid UTF-8 in model path".to_string(),
-                }
-            })?,
-            context_params,
-        )
-        .map_err(|e| VoicshError::TranscriptionInferenceFailed {
-            message: format!("Failed to load Whisper model: {}", e),
-        })?;
+        let context = Self::load_context(&config)?;
+        let idle = IdleTracker::new(config.idle_unload_after, clock);
 
         Ok(Self {
-            context: Mutex::new(context),
+            context: Mutex::new(Some(context)),
             config,
             model_name,
+            idle,
         })
+    }
+
+    /// Returns `true` if the Whisper model is currently loaded in memory.
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used)] // Mutex poisoning means the owning thread already panicked; propagate.
+    pub(crate) fn is_loaded(&self) -> bool {
+        self.context.lock().unwrap().is_some()
     }
 
     /// Get the configuration
@@ -235,12 +266,23 @@ impl Transcriber for WhisperTranscriber {
         let audio_f32 = Self::convert_audio(audio);
 
         // Lock the context for thread-safe access
-        let context =
+        let mut guard =
             self.context
                 .lock()
                 .map_err(|e| VoicshError::TranscriptionInferenceFailed {
                     message: format!("Failed to acquire context lock: {}", e),
                 })?;
+
+        // Lazy reload: if the model was unloaded by try_unload_if_idle, reload it now.
+        if guard.is_none() {
+            eprintln!("voicsh: reloading whisper model '{}'", self.model_name);
+            *guard = Some(Self::load_context(&self.config)?);
+        }
+
+        // guard is Some at this point: either it was already Some, or we just inserted it above.
+        let context = guard
+            .as_ref()
+            .unwrap_or_else(|| unreachable!("just inserted"));
 
         // Create a new state for this transcription
         let mut state =
@@ -329,12 +371,18 @@ impl Transcriber for WhisperTranscriber {
 
         let token_probabilities = token_probs;
 
-        Ok(TranscriptionResult {
+        let result = TranscriptionResult {
             text: transcription.trim().to_string(),
             language,
             confidence,
             token_probabilities,
-        })
+        };
+
+        // Release the context lock before updating idle state.
+        drop(guard);
+        self.idle.mark_used();
+
+        Ok(result)
     }
 
     fn model_name(&self) -> &str {
@@ -344,6 +392,30 @@ impl Transcriber for WhisperTranscriber {
     fn is_ready(&self) -> bool {
         // The transcriber is ready if we successfully created it
         true
+    }
+
+    #[allow(clippy::unwrap_used)] // Mutex poisoning means the owning thread already panicked; propagate.
+    fn try_unload_if_idle(&self) -> bool {
+        // Fast-path: avoid acquiring the lock when clearly not idle.
+        if !self.idle.is_idle() {
+            return false;
+        }
+        let mut guard = self.context.lock().unwrap();
+        // Re-check after acquiring the lock: a concurrent transcribe() may have called
+        // mark_used() between the fast-path check above and here (TOCTOU window).
+        if !self.idle.is_idle() {
+            return false;
+        }
+        if guard.take().is_some() {
+            eprintln!(
+                "voicsh: unloaded whisper model '{}' after {:?} idle",
+                self.model_name,
+                self.idle.threshold().unwrap_or_default()
+            );
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -382,6 +454,7 @@ mod tests {
         assert_eq!(config.language, crate::defaults::AUTO_LANGUAGE);
         assert_eq!(config.threads, None);
         assert_eq!(config.use_gpu, true);
+        assert_eq!(config.idle_unload_after, Some(Duration::from_secs(300)));
     }
 
     #[test]
@@ -391,6 +464,7 @@ mod tests {
             language: "es".to_string(),
             threads: Some(4),
             use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(300)),
         };
         assert_eq!(config.model_path, PathBuf::from("/custom/model.bin"));
         assert_eq!(config.language, "es");
@@ -405,6 +479,7 @@ mod tests {
             language: "en".to_string(),
             threads: None,
             use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(300)),
         };
 
         let result = WhisperTranscriber::new(config);
@@ -433,6 +508,7 @@ mod tests {
             language: "en".to_string(),
             threads: None,
             use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(300)),
         };
 
         let result = WhisperTranscriber::new(config);
@@ -469,6 +545,26 @@ mod tests {
         assert!(debug_str.contains("WhisperConfig"));
         assert!(debug_str.contains("model_path"));
         assert!(debug_str.contains("language"));
+    }
+
+    #[test]
+    fn test_whisper_config_default_idle_unload_after() {
+        let config = WhisperConfig::default();
+        assert_eq!(config.idle_unload_after, Some(Duration::from_secs(300)));
+    }
+
+    #[test]
+    fn test_whisper_config_custom_idle_unload_after_none() {
+        let config = WhisperConfig {
+            model_path: PathBuf::from("models/ggml-base.bin"),
+            language: "en".to_string(),
+            threads: None,
+            use_gpu: true,
+            idle_unload_after: None,
+        };
+        let cloned = config.clone();
+        assert_eq!(config.idle_unload_after, None);
+        assert_eq!(cloned.idle_unload_after, None);
     }
 
     #[test]
@@ -581,6 +677,7 @@ mod tests {
             language,
             threads: Some(4),
             use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(300)),
         };
 
         let transcriber = WhisperTranscriber::new(config).unwrap();
@@ -600,6 +697,7 @@ mod tests {
             language,
             threads: Some(4),
             use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(300)),
         };
 
         let transcriber = WhisperTranscriber::new(config).unwrap();
@@ -631,6 +729,7 @@ mod tests {
             language,
             threads: Some(4),
             use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(300)),
         };
 
         let transcriber = WhisperTranscriber::new(config).unwrap();
@@ -685,5 +784,264 @@ mod tests {
         // Verify trait bounds compile
         fn _assert_transcriber_trait_bounds<T: Transcriber>() {}
         _assert_transcriber_trait_bounds::<WhisperTranscriber>();
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn whisper_transcriber_is_loaded_after_new() {
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
+        let language = language_for_model(&model_path).to_string();
+        let config = WhisperConfig {
+            model_path,
+            language,
+            threads: Some(4),
+            use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(300)),
+        };
+        let transcriber = WhisperTranscriber::new(config).unwrap();
+        assert_eq!(transcriber.is_loaded(), true);
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn whisper_transcriber_is_loaded_after_transcribe() {
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
+        let language = language_for_model(&model_path).to_string();
+        let config = WhisperConfig {
+            model_path,
+            language,
+            threads: Some(4),
+            use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(300)),
+        };
+        let transcriber = WhisperTranscriber::new(config).unwrap();
+        let silence = vec![0i16; 16000];
+        let result = transcriber.transcribe(&silence);
+        assert!(result.is_ok(), "transcribe failed: {:?}", result.err());
+        assert_eq!(transcriber.is_loaded(), true);
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn whisper_try_unload_before_threshold_keeps_context() {
+        use crate::audio::vad::MockClock;
+
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
+        let language = language_for_model(&model_path).to_string();
+        let config = WhisperConfig {
+            model_path,
+            language,
+            threads: Some(4),
+            use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(5)),
+        };
+        let clock = Arc::new(MockClock::new());
+        let transcriber = WhisperTranscriber::new_with_clock(config, clock.clone()).unwrap();
+
+        clock.advance(Duration::from_secs(4));
+
+        assert_eq!(transcriber.try_unload_if_idle(), false);
+        assert_eq!(transcriber.is_loaded(), true);
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn whisper_try_unload_after_threshold_drops_context() {
+        use crate::audio::vad::MockClock;
+
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
+        let language = language_for_model(&model_path).to_string();
+        let config = WhisperConfig {
+            model_path,
+            language,
+            threads: Some(4),
+            use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(5)),
+        };
+        let clock = Arc::new(MockClock::new());
+        let transcriber = WhisperTranscriber::new_with_clock(config, clock.clone()).unwrap();
+
+        clock.advance(Duration::from_secs(6));
+
+        assert_eq!(transcriber.try_unload_if_idle(), true);
+        assert_eq!(transcriber.is_loaded(), false);
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn whisper_try_unload_is_idempotent() {
+        use crate::audio::vad::MockClock;
+
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
+        let language = language_for_model(&model_path).to_string();
+        let config = WhisperConfig {
+            model_path,
+            language,
+            threads: Some(4),
+            use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(5)),
+        };
+        let clock = Arc::new(MockClock::new());
+        let transcriber = WhisperTranscriber::new_with_clock(config, clock.clone()).unwrap();
+
+        clock.advance(Duration::from_secs(6));
+
+        // First call unloads and returns true
+        assert_eq!(transcriber.try_unload_if_idle(), true);
+        assert_eq!(transcriber.is_loaded(), false);
+
+        // Second call: context is already None, returns false (idempotent)
+        assert_eq!(transcriber.try_unload_if_idle(), false);
+        assert_eq!(transcriber.is_loaded(), false);
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn whisper_try_unload_with_none_threshold_never_unloads() {
+        use crate::audio::vad::MockClock;
+
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
+        let language = language_for_model(&model_path).to_string();
+        let config = WhisperConfig {
+            model_path,
+            language,
+            threads: Some(4),
+            use_gpu: true,
+            idle_unload_after: None,
+        };
+        let clock = Arc::new(MockClock::new());
+        let transcriber = WhisperTranscriber::new_with_clock(config, clock.clone()).unwrap();
+
+        clock.advance(Duration::from_secs(3600));
+
+        assert_eq!(transcriber.try_unload_if_idle(), false);
+        assert_eq!(transcriber.is_loaded(), true);
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn whisper_transcribe_after_unload_reloads_lazily() {
+        use crate::audio::vad::MockClock;
+
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
+        let language = language_for_model(&model_path).to_string();
+        let config = WhisperConfig {
+            model_path,
+            language,
+            threads: Some(4),
+            use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(5)),
+        };
+        let clock = Arc::new(MockClock::new());
+        let transcriber = WhisperTranscriber::new_with_clock(config, clock.clone()).unwrap();
+
+        // Advance past the idle threshold and unload
+        clock.advance(Duration::from_secs(6));
+        assert_eq!(transcriber.try_unload_if_idle(), true);
+        assert_eq!(transcriber.is_loaded(), false);
+
+        // transcribe() on unloaded model — silence, 1 second at 16 kHz
+        let silence = vec![0i16; 16000];
+        let result = transcriber.transcribe(&silence);
+        assert!(
+            result.is_ok(),
+            "expected ok after lazy reload, got {:?}",
+            result.err()
+        );
+
+        let output = result.unwrap();
+        assert!(
+            output.text.len() < 50,
+            "unexpected non-empty transcription of silence: '{}'",
+            output.text
+        );
+
+        // Model must be loaded again after transcription
+        assert_eq!(transcriber.is_loaded(), true);
+    }
+
+    #[cfg(feature = "whisper")]
+    #[test]
+    fn whisper_transcribe_after_unload_known_speech() {
+        use crate::audio::vad::MockClock;
+
+        let Some(model_path) = require_any_model() else {
+            return;
+        };
+
+        let wav_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/quick_brown_fox.wav");
+        assert!(wav_path.exists(), "WAV fixture not found at {:?}", wav_path);
+
+        let language = language_for_model(&model_path).to_string();
+        let config = WhisperConfig {
+            model_path,
+            language,
+            threads: Some(4),
+            use_gpu: true,
+            idle_unload_after: Some(Duration::from_secs(5)),
+        };
+        let clock = Arc::new(MockClock::new());
+        let transcriber = WhisperTranscriber::new_with_clock(config, clock.clone()).unwrap();
+
+        // Advance past the idle threshold and unload
+        clock.advance(Duration::from_secs(6));
+        assert_eq!(transcriber.try_unload_if_idle(), true);
+        assert_eq!(transcriber.is_loaded(), false);
+
+        // Load the fixture audio
+        let wav_data = std::fs::read(&wav_path).unwrap();
+        let source = crate::audio::wav::WavAudioSource::from_reader(Box::new(
+            std::io::Cursor::new(wav_data),
+        ))
+        .unwrap();
+        let audio = source.into_samples();
+
+        // transcribe() must reload the model and produce correct output
+        let result = transcriber.transcribe(&audio);
+        assert!(
+            result.is_ok(),
+            "expected ok after lazy reload, got {:?}",
+            result.err()
+        );
+
+        let output = result.unwrap();
+        let text = output.text.to_lowercase();
+
+        println!(
+            "Post-unload transcription: '{}' (lang={}, conf={:.2})",
+            output.text, output.language, output.confidence
+        );
+
+        for word in &["quick", "brown", "fox", "lazy", "dog"] {
+            assert!(
+                text.contains(word),
+                "Expected '{}' in post-unload transcription: '{}'",
+                word,
+                text
+            );
+        }
+        assert!(
+            output.confidence > 0.5,
+            "Confidence too low after reload: {}",
+            output.confidence
+        );
+
+        // Model must be loaded again after transcription
+        assert_eq!(transcriber.is_loaded(), true);
     }
 }

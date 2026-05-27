@@ -21,7 +21,7 @@ pub struct DaemonState {
     /// Configuration
     pub config: Arc<Mutex<Config>>,
     /// Loaded transcriber (model stays in memory, can be swapped with write lock)
-    pub transcriber: tokio::sync::RwLock<Arc<dyn Transcriber>>,
+    pub transcriber: Arc<tokio::sync::RwLock<Arc<dyn Transcriber>>>,
     /// Current pipeline handle (Some = recording, None = idle)
     pub pipeline: Arc<Mutex<Option<PipelineHandle>>>,
     /// Portal session for input injection (if available)
@@ -102,7 +102,7 @@ impl DaemonState {
 
         Self {
             config: Arc::new(Mutex::new(config)),
-            transcriber: tokio::sync::RwLock::new(transcriber),
+            transcriber: Arc::new(tokio::sync::RwLock::new(transcriber)),
             pipeline: Arc::new(Mutex::new(None)),
             #[cfg(feature = "portal")]
             portal,
@@ -218,6 +218,25 @@ pub async fn run_daemon(
             }
         }
     });
+
+    // Periodic idle-unload: ticks every 30 s and calls try_unload_if_idle() on the
+    // active transcriber. The unload/reload logic is covered by unit tests in
+    // src/stt/whisper.rs (idle-unload TDD plan, rounds 1-6).
+    {
+        let transcriber_handle = Arc::clone(&state.transcriber);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            interval.tick().await; // discard immediate first fire
+            loop {
+                interval.tick().await;
+                let transcriber = transcriber_handle.read().await.clone();
+                match tokio::task::spawn_blocking(move || transcriber.try_unload_if_idle()).await {
+                    Ok(_unloaded) => {} // unload outcome already logged by the impl
+                    Err(join_err) => eprintln!("voicsh: idle-unload check task failed: {join_err}"),
+                }
+            }
+        });
+    }
 
     // Determine socket path
     let socket_path = socket_path.unwrap_or_else(IpcServer::default_socket_path);
@@ -359,6 +378,7 @@ pub(crate) async fn create_transcriber(
             language: "en".to_string(),
             threads: None,
             use_gpu: true,
+            idle_unload_after: Some(std::time::Duration::from_secs(300)),
         })?;
 
         let multilingual_transcriber = WhisperTranscriber::new(WhisperConfig {
@@ -366,6 +386,7 @@ pub(crate) async fn create_transcriber(
             language: language.clone(),
             threads: None,
             use_gpu: true,
+            idle_unload_after: Some(std::time::Duration::from_secs(300)),
         })?;
 
         Ok(Arc::new(FanOutTranscriber::new(vec![
@@ -379,6 +400,7 @@ pub(crate) async fn create_transcriber(
             language: language.clone(),
             threads: None,
             use_gpu: true,
+            idle_unload_after: Some(std::time::Duration::from_secs(300)),
         })?;
 
         Ok(Arc::new(transcriber))

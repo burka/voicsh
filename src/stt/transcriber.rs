@@ -53,6 +53,14 @@ pub trait Transcriber: Send + Sync {
 
     /// Check if the transcriber is ready
     fn is_ready(&self) -> bool;
+
+    /// Drop the model from memory if it has been idle longer than the configured threshold.
+    ///
+    /// Returns `true` if the model was unloaded, `false` if it was still in use or
+    /// the implementation doesn't manage idle lifecycle. Default impl always returns `false`.
+    fn try_unload_if_idle(&self) -> bool {
+        false
+    }
 }
 
 /// Implement `Transcriber` for `Arc<T>` to allow sharing across sessions.
@@ -67,6 +75,10 @@ impl<T: Transcriber + ?Sized> Transcriber for Arc<T> {
 
     fn is_ready(&self) -> bool {
         (**self).is_ready()
+    }
+
+    fn try_unload_if_idle(&self) -> bool {
+        (**self).try_unload_if_idle()
     }
 }
 
@@ -366,5 +378,11 @@ mod tests {
     fn test_transcription_result_empty_token_probabilities() {
         let result = TranscriptionResult::from_text("test".to_string());
         assert!(result.token_probabilities.is_empty());
+    }
+
+    #[test]
+    fn mock_transcriber_try_unload_if_idle_returns_false_by_default() {
+        let mock = MockTranscriber::new("test-model");
+        assert_eq!(mock.try_unload_if_idle(), false);
     }
 }

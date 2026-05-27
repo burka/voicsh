@@ -556,6 +556,7 @@ async fn load_single_model(
         language: language.to_string(),
         threads: None,
         use_gpu: true,
+        idle_unload_after: Some(std::time::Duration::from_secs(300)),
     };
 
     WhisperTranscriber::new(whisper_config)

@@ -388,6 +388,7 @@ pub fn benchmark_model(
         language: language.to_string(),
         threads: Some(threads),
         use_gpu: true,
+        idle_unload_after: None,
     };
 
     let transcriber = WhisperTranscriber::new(config)?;
