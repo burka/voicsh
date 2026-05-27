@@ -7,9 +7,11 @@
 //! `ydotool` (which requires a daemon and uinput permissions).
 
 use crate::error::{Result, VoicshError};
-use ashpd::desktop::PersistMode;
-use ashpd::desktop::Session;
-use ashpd::desktop::remote_desktop::{DeviceType, KeyState, RemoteDesktop};
+use ashpd::desktop::remote_desktop::{
+    DeviceType, KeyState, NotifyKeyboardKeycodeOptions, NotifyKeyboardKeysymOptions, RemoteDesktop,
+    SelectDevicesOptions, StartOptions,
+};
+use ashpd::desktop::{CreateSessionOptions, PersistMode, Request, Session};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,15 +47,20 @@ pub(crate) trait PortalConnector: Send + Sync {
 
 /// Real D-Bus KeySender wrapping ashpd RemoteDesktop proxy + session.
 struct PortalKeySender {
-    proxy: RemoteDesktop<'static>,
-    session: Session<'static, RemoteDesktop<'static>>,
+    proxy: RemoteDesktop,
+    session: Session<RemoteDesktop>,
 }
 
 #[async_trait::async_trait]
 impl KeySender for PortalKeySender {
     async fn press_key(&self, code: i32) -> Result<()> {
         self.proxy
-            .notify_keyboard_keycode(&self.session, code, KeyState::Pressed)
+            .notify_keyboard_keycode(
+                &self.session,
+                code,
+                KeyState::Pressed,
+                NotifyKeyboardKeycodeOptions::default(),
+            )
             .await
             .map_err(|e| VoicshError::InjectionFailed {
                 message: format!("Portal key press failed: {e}"),
@@ -62,7 +69,12 @@ impl KeySender for PortalKeySender {
 
     async fn release_key(&self, code: i32) -> Result<()> {
         self.proxy
-            .notify_keyboard_keycode(&self.session, code, KeyState::Released)
+            .notify_keyboard_keycode(
+                &self.session,
+                code,
+                KeyState::Released,
+                NotifyKeyboardKeycodeOptions::default(),
+            )
             .await
             .map_err(|e| VoicshError::InjectionFailed {
                 message: format!("Portal key release failed: {e}"),
@@ -71,7 +83,12 @@ impl KeySender for PortalKeySender {
 
     async fn press_keysym(&self, keysym: i32) -> Result<()> {
         self.proxy
-            .notify_keyboard_keysym(&self.session, keysym, KeyState::Pressed)
+            .notify_keyboard_keysym(
+                &self.session,
+                keysym,
+                KeyState::Pressed,
+                NotifyKeyboardKeysymOptions::default(),
+            )
             .await
             .map_err(|e| VoicshError::InjectionFailed {
                 message: format!("Portal keysym press failed: {e}"),
@@ -80,7 +97,12 @@ impl KeySender for PortalKeySender {
 
     async fn release_keysym(&self, keysym: i32) -> Result<()> {
         self.proxy
-            .notify_keyboard_keysym(&self.session, keysym, KeyState::Released)
+            .notify_keyboard_keysym(
+                &self.session,
+                keysym,
+                KeyState::Released,
+                NotifyKeyboardKeysymOptions::default(),
+            )
             .await
             .map_err(|e| VoicshError::InjectionFailed {
                 message: format!("Portal keysym release failed: {e}"),
@@ -185,7 +207,7 @@ impl PortalConnector for AshpdConnector {
             })?;
 
         let session = proxy
-            .create_session()
+            .create_session(CreateSessionOptions::default())
             .await
             .map_err(|e| VoicshError::PortalError {
                 message: format!("Portal session creation failed: {e}"),
@@ -194,24 +216,25 @@ impl PortalConnector for AshpdConnector {
         // Load saved restore token to skip the permission dialog
         let saved_token = load_restore_token();
 
-        proxy
-            .select_devices(
-                &session,
-                DeviceType::Keyboard.into(),
-                saved_token.as_deref(),
-                PersistMode::ExplicitlyRevoked,
-            )
+        let select_opts = SelectDevicesOptions::default()
+            .set_devices(ashpd::enumflags2::BitFlags::from(DeviceType::Keyboard))
+            .set_restore_token(saved_token.as_deref())
+            .set_persist_mode(PersistMode::ExplicitlyRevoked);
+
+        let select_request: Request<()> = proxy
+            .select_devices(&session, select_opts)
             .await
             .map_err(|e| VoicshError::PortalError {
                 message: format!("Portal device selection failed: {e}"),
-            })?
+            })?;
+        select_request
             .response()
             .map_err(|e| VoicshError::PortalError {
                 message: format!("Portal device selection rejected: {e}"),
             })?;
 
         let response = proxy
-            .start(&session, None)
+            .start(&session, None, StartOptions::default())
             .await
             .map_err(|e| VoicshError::PortalError {
                 message: format!("Portal session start failed: {e}"),

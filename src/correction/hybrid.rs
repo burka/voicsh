@@ -11,6 +11,7 @@
 //! T5 is English-only and produces garbage on non-English text, so it's only used for English.
 
 use crate::correction::corrector::Corrector;
+#[cfg(feature = "symspell")]
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -192,11 +193,9 @@ impl Corrector for HybridCorrector {
         }
 
         let whitelisted = self.symspell_whitelist.iter().any(|l| l == language);
-        if whitelisted {
-            if let Some(corrector) = self.symspell.get_mut(language) {
-                self.last_backend = Some(corrector.name().to_string());
-                return corrector.correct(prompt);
-            }
+        if whitelisted && let Some(corrector) = self.symspell.get_mut(language) {
+            self.last_backend = Some(corrector.name().to_string());
+            return corrector.correct(prompt);
         }
 
         self.last_backend = None;
@@ -227,11 +226,11 @@ impl Corrector for HybridCorrector {
         prompt: &str,
         language: &str,
     ) -> crate::error::Result<String> {
-        if language == "en" {
-            if let Some(ref mut t5) = self.t5 {
-                self.last_backend = Some("T5".to_string());
-                return t5.correct(prompt);
-            }
+        if language == "en"
+            && let Some(ref mut t5) = self.t5
+        {
+            self.last_backend = Some("T5".to_string());
+            return t5.correct(prompt);
         }
         self.last_backend = None;
         Ok(prompt.to_string())

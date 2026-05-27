@@ -34,7 +34,7 @@ async-trait = "0.1"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
+toml = "1"
 
 # Error handling
 thiserror = "2"
@@ -44,7 +44,7 @@ anyhow = "1"
 crossbeam-channel = "0.5"
 
 # XDG Desktop Portal (RemoteDesktop for GNOME key injection)
-ashpd = { version = "0.12", default-features = false, features = ["tokio"], optional = true }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "remote_desktop", "screencast"], optional = true }
 
 # CLI
 clap = { version = "4", features = ["derive"], optional = true }
@@ -74,17 +74,17 @@ futures-util = { version = "0.3", optional = true }
 humantime = { version = "2.3", optional = true }
 
 # Speech-to-text (requires cmake to build)
-whisper-rs = { version = "0.15", optional = true }
+whisper-rs = { version = "0.16", optional = true }
 
 # Error correction (T5 via Candle)
-candle-core = { version = "0.9", optional = true }
-candle-nn = { version = "0.9", optional = true }
-candle-transformers = { version = "0.9", optional = true }
-tokenizers = { version = "0.22", default-features = false, features = ["onig"], optional = true }
-hf-hub = { version = "0.4", optional = true }
+candle-core = { version = "0.10", optional = true }
+candle-nn = { version = "0.10", optional = true }
+candle-transformers = { version = "0.10", optional = true }
+tokenizers = { version = "0.23", default-features = false, features = ["onig"], optional = true }
+hf-hub = { version = "0.5", optional = true }
 
 # Error correction (SymSpell)
-symspell = { version = "0.4", optional = true }
+symspell = { version = "0.5", optional = true }
 xkeysym = { version = "0.2", optional = true }
 
 [features]
@@ -104,7 +104,7 @@ hipblas = ["full", "whisper-rs/hipblas"]
 openblas = ["full", "whisper-rs/openblas"]
 
 [dependencies.sysinfo]
-version = "0.38"
+version = "0.39"
 optional = true
 
 [dependencies.flate2]
@@ -113,7 +113,7 @@ optional = true
 
 [dev-dependencies]
 tempfile = "3"
-sysinfo = "0.38"
+sysinfo = "0.39"
 criterion = "0.8"
 
 [[bench]]
