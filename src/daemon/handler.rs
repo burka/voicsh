@@ -15,7 +15,21 @@ use crate::pipeline::post_processor::build_post_processors;
 use crate::pipeline::sink::{CollectorSink, InjectorSink};
 use std::fs::File;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
+
+const MAX_TRANSCRIBE_FILE_BYTES: u64 = 128 * 1024 * 1024;
+const FILE_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(120);
+
+struct OperationGuard {
+    busy: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        self.busy.store(false, Ordering::Release);
+    }
+}
 
 /// Command handler for daemon IPC commands.
 pub struct DaemonCommandHandler {
@@ -39,6 +53,20 @@ impl DaemonCommandHandler {
         self.state.subscribe()
     }
 
+    fn try_begin_operation(&self) -> Option<OperationGuard> {
+        match self.state.operation_busy.compare_exchange(
+            false,
+            true,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => Some(OperationGuard {
+                busy: self.state.operation_busy.clone(),
+            }),
+            Err(_) => None,
+        }
+    }
+
     /// Update a config field and emit a ConfigChanged event.
     ///
     /// Locks the config mutex, applies the mutation, drops the lock,
@@ -59,6 +87,15 @@ impl DaemonCommandHandler {
 
     /// Start recording.
     async fn start_recording(&self) -> Response {
+        let _operation = match self.try_begin_operation() {
+            Some(guard) => guard,
+            None => {
+                return Response::Error {
+                    message: "Daemon is busy".to_string(),
+                };
+            }
+        };
+
         // Lock pipeline for entire operation to prevent race conditions
         let mut pipeline_guard = self.state.pipeline.lock().await;
 
@@ -322,9 +359,50 @@ impl DaemonCommandHandler {
 
     /// Transcribe a finite WAV file using the daemon's already-loaded model.
     async fn handle_transcribe_file(&self, path: String) -> Response {
+        let _operation = match self.try_begin_operation() {
+            Some(guard) => guard,
+            None => {
+                return Response::Error {
+                    message: "Daemon is busy".to_string(),
+                };
+            }
+        };
+
+        if self.state.is_recording().await {
+            return Response::Error {
+                message: "Cannot transcribe file while recording".to_string(),
+            };
+        }
+
         if path.trim().is_empty() {
             return Response::Error {
                 message: "File path is empty".to_string(),
+            };
+        }
+
+        let metadata = match std::fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("Failed to inspect '{}': {}", path, e),
+                };
+            }
+        };
+
+        if !metadata.is_file() {
+            return Response::Error {
+                message: format!("Not a regular file: '{}'", path),
+            };
+        }
+
+        if metadata.len() > MAX_TRANSCRIBE_FILE_BYTES {
+            return Response::Error {
+                message: format!(
+                    "File '{}' is too large ({} bytes, max {} bytes)",
+                    path,
+                    metadata.len(),
+                    MAX_TRANSCRIBE_FILE_BYTES
+                ),
             };
         }
 
@@ -375,7 +453,7 @@ impl DaemonCommandHandler {
             }
         };
 
-        let result = handle.wait_for_result(Duration::from_secs(120));
+        let result = handle.wait_for_result(FILE_TRANSCRIPTION_TIMEOUT);
         let _ = handle.stop();
 
         match result {
@@ -995,6 +1073,13 @@ mod tests {
     fn create_test_handler_with_config(config: Config) -> DaemonCommandHandler {
         let transcriber: Arc<dyn crate::stt::transcriber::Transcriber> =
             Arc::new(MockTranscriber::new("mock-test-model"));
+        create_test_handler_with_config_and_transcriber(config, transcriber)
+    }
+
+    fn create_test_handler_with_config_and_transcriber(
+        config: Config,
+        transcriber: Arc<dyn crate::stt::transcriber::Transcriber>,
+    ) -> DaemonCommandHandler {
         let state = DaemonState::new(
             config,
             transcriber,
@@ -1114,7 +1199,7 @@ mod tests {
 
         match response {
             Response::Error { message } => {
-                assert!(message.contains("Failed to open"));
+                assert!(message.contains("Failed to inspect"));
                 assert!(message.contains("/definitely/missing/voice.wav"));
             }
             _ => panic!(
@@ -1164,6 +1249,66 @@ mod tests {
                 message: "No speech detected".to_string()
             }
         );
+    }
+
+    #[tokio::test]
+    async fn test_handler_transcribe_file_rejects_oversized_file_before_parsing() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let wav_path = temp_dir.path().join("too-large.wav");
+        let file = File::create(&wav_path).expect("create sparse file");
+        file.set_len(MAX_TRANSCRIBE_FILE_BYTES + 1)
+            .expect("size sparse file");
+
+        let handler = create_file_test_handler();
+        let response = handler
+            .handle(Command::TranscribeFile {
+                path: wav_path.to_string_lossy().into_owned(),
+            })
+            .await;
+
+        match response {
+            Response::Error { message } => {
+                assert!(message.contains("too large"));
+                assert!(message.contains(&MAX_TRANSCRIBE_FILE_BYTES.to_string()));
+            }
+            _ => panic!("Expected oversized-file error, got: {:?}", response),
+        }
+
+        let response = handler
+            .handle(Command::TranscribeFile {
+                path: fixture_wav_path(),
+            })
+            .await;
+        assert!(
+            matches!(response, Response::Transcription { .. }),
+            "operation guard should be released after oversized-file error, got: {:?}",
+            response
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handler_transcribe_file_rejects_when_daemon_is_busy() {
+        let handler = create_file_test_handler();
+        handler
+            .state
+            .operation_busy
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        let response = handler
+            .handle(Command::TranscribeFile {
+                path: fixture_wav_path(),
+            })
+            .await;
+
+        handler
+            .state
+            .operation_busy
+            .store(false, std::sync::atomic::Ordering::Release);
+
+        match response {
+            Response::Error { message } => assert_eq!(message, "Daemon is busy"),
+            _ => panic!("Expected busy error, got: {:?}", response),
+        }
     }
 
     #[tokio::test]

@@ -11,6 +11,7 @@ use crate::pipeline::orchestrator::PipelineHandle;
 use crate::stt::transcriber::Transcriber;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::sync::Mutex;
 
 #[cfg(feature = "portal")]
@@ -41,6 +42,8 @@ pub struct DaemonState {
     pub allowed_languages: Arc<std::sync::RwLock<Vec<String>>>,
     /// Minimum confidence threshold (live-updatable during recording)
     pub min_confidence: Arc<std::sync::RwLock<f32>>,
+    /// Short-lived guard for daemon operations that must not overlap.
+    pub operation_busy: Arc<AtomicBool>,
 }
 
 /// Detect GPU device name and memory from nvidia-smi.
@@ -113,6 +116,7 @@ impl DaemonState {
             device,
             allowed_languages,
             min_confidence,
+            operation_busy: Arc::new(AtomicBool::new(false)),
         }
     }
 
