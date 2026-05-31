@@ -148,6 +148,17 @@ impl PipelineHandle {
         result
     }
 
+    /// Waits for the sink's accumulated result without signaling shutdown.
+    ///
+    /// Finite sources such as WAV files close the audio channel on their own. This
+    /// lets callers wait for that natural channel cascade before using `stop()` for
+    /// cleanup.
+    pub fn wait_for_result(&mut self, timeout: Duration) -> Option<String> {
+        self.result_rx
+            .take()
+            .and_then(|rx| rx.recv_timeout(timeout).ok().flatten())
+    }
+
     /// Returns true if the pipeline is running.
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)

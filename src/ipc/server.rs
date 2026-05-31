@@ -428,6 +428,9 @@ mod tests {
                 Command::Follow => Response::Ok {
                     message: "Following".to_string(),
                 },
+                Command::TranscribeFile { .. } => Response::Transcription {
+                    text: "test transcription".to_string(),
+                },
                 Command::SetLanguage { .. } => Response::Ok {
                     message: "Language updated".to_string(),
                 },
@@ -759,6 +762,30 @@ mod tests {
         // Test Stop command separately (returns Transcription)
         let mut stream = UnixStream::connect(&socket_path).await.unwrap();
         let command_json = format!("{}\n", Command::Stop.to_json().unwrap());
+        stream.write_all(command_json.as_bytes()).await.unwrap();
+
+        let mut response_data = Vec::new();
+        stream.read_to_end(&mut response_data).await.unwrap();
+        let response_str = String::from_utf8(response_data).unwrap();
+        let response = Response::from_json(response_str.trim()).unwrap();
+
+        match response {
+            Response::Transcription { text } => {
+                assert_eq!(text, "test transcription");
+            }
+            _ => panic!("Expected Transcription response"),
+        }
+
+        // Test TranscribeFile command separately (also returns Transcription)
+        let mut stream = UnixStream::connect(&socket_path).await.unwrap();
+        let command_json = format!(
+            "{}\n",
+            Command::TranscribeFile {
+                path: "/tmp/voice.wav".to_string()
+            }
+            .to_json()
+            .unwrap()
+        );
         stream.write_all(command_json.as_bytes()).await.unwrap();
 
         let mut response_data = Vec::new();

@@ -185,6 +185,9 @@ mod tests {
                 Command::Follow => Response::Ok {
                     message: "Following".to_string(),
                 },
+                Command::TranscribeFile { .. } => Response::Transcription {
+                    text: "test transcription".to_string(),
+                },
                 Command::SetLanguage { .. } => Response::Ok {
                     message: "Language updated".to_string(),
                 },
@@ -388,13 +391,19 @@ mod tests {
             Command::Status,
             Command::Toggle,
             Command::Start,
+            Command::TranscribeFile {
+                path: "/tmp/voice.wav".to_string(),
+            },
             Command::Cancel,
         ];
 
         for cmd in commands {
             let response = send_command(&socket_path, cmd.clone()).await.unwrap();
             assert!(
-                matches!(response, Response::Ok { .. } | Response::Status { .. }),
+                matches!(
+                    response,
+                    Response::Ok { .. } | Response::Status { .. } | Response::Transcription { .. }
+                ),
                 "Unexpected response for {:?}: {:?}",
                 cmd,
                 response

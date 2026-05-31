@@ -147,6 +147,17 @@ pub enum Commands {
         socket: Option<PathBuf>,
     },
 
+    /// Transcribe a WAV file via the daemon's loaded model
+    TranscribeFile {
+        /// WAV file to transcribe
+        #[arg(value_name = "FILE")]
+        path: PathBuf,
+
+        /// Path to Unix socket (default: $XDG_RUNTIME_DIR/voicsh.sock)
+        #[arg(long, value_name = "PATH")]
+        socket: Option<PathBuf>,
+    },
+
     /// Benchmark transcription performance across models
     #[cfg(feature = "benchmark")]
     Benchmark {

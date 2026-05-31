@@ -20,6 +20,8 @@ pub enum Command {
     Shutdown,
     /// Follow daemon events (live streaming)
     Follow,
+    /// Transcribe a WAV file with the daemon's loaded model
+    TranscribeFile { path: String },
     /// Set language for transcription
     SetLanguage { language: String },
     /// List supported languages
@@ -233,6 +235,9 @@ mod tests {
             Command::Status,
             Command::Shutdown,
             Command::Follow,
+            Command::TranscribeFile {
+                path: "/tmp/input.wav".to_string(),
+            },
             Command::SetLanguage {
                 language: "de".to_string(),
             },
@@ -271,6 +276,20 @@ mod tests {
             json.contains("\"type\":\"start\""),
             "JSON should use snake_case. Got: {}",
             json
+        );
+    }
+
+    #[test]
+    fn test_command_transcribe_file_json_roundtrip() {
+        let cmd = Command::TranscribeFile {
+            path: "/tmp/voice.wav".to_string(),
+        };
+        let json = cmd.to_json().expect("should serialize");
+        let deserialized = Command::from_json(&json).expect("should deserialize");
+        assert_eq!(cmd, deserialized);
+        assert_eq!(
+            json,
+            r#"{"type":"transcribe_file","path":"/tmp/voice.wav"}"#
         );
     }
 

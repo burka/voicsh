@@ -100,6 +100,15 @@ async fn main() -> Result<()> {
         Some(voicsh::cli::Commands::Follow { socket }) => {
             handle_follow(socket).await?;
         }
+        Some(voicsh::cli::Commands::TranscribeFile { path, socket }) => {
+            handle_ipc_command(
+                socket,
+                Command::TranscribeFile {
+                    path: path.to_string_lossy().into_owned(),
+                },
+            )
+            .await?;
+        }
         Some(voicsh::cli::Commands::InstallService) => {
             voicsh::systemd::install_and_activate()?;
         }

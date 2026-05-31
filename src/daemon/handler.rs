@@ -3,6 +3,7 @@
 use crate::audio::capture::CpalAudioSource;
 use crate::audio::recorder::AudioSource;
 use crate::audio::vad::VadConfig;
+use crate::audio::wav::WavAudioSource;
 use crate::config::{Config, resolve_hallucination_filters, resolve_suspect_phrases};
 use crate::daemon::DaemonState;
 use crate::inject::focused_window::reset_detection_cache;
@@ -11,8 +12,10 @@ use crate::ipc::server::CommandHandler;
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
 use crate::pipeline::post_processor::build_post_processors;
-use crate::pipeline::sink::InjectorSink;
+use crate::pipeline::sink::{CollectorSink, InjectorSink};
+use std::fs::File;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Command handler for daemon IPC commands.
 pub struct DaemonCommandHandler {
@@ -166,6 +169,32 @@ impl DaemonCommandHandler {
         }
     }
 
+    /// Build pipeline configuration for finite WAV file transcription.
+    fn build_file_pipeline_config(&self, config: &Config) -> PipelineConfig {
+        let hallucination_filters =
+            resolve_hallucination_filters(&config.transcription.hallucination_filters);
+        let suspect_phrases = resolve_suspect_phrases(&config.transcription.hallucination_filters);
+
+        PipelineConfig {
+            vad: VadConfig {
+                speech_threshold: config.audio.vad_threshold,
+                silence_duration_ms: config.audio.silence_duration_ms,
+                ..Default::default()
+            },
+            chunker: AdaptiveChunkerConfig::default(),
+            verbosity: self.verbosity,
+            auto_level: false,
+            quiet: true,
+            sample_rate: crate::defaults::SAMPLE_RATE,
+            hallucination_filters,
+            suspect_phrases,
+            event_tx: Some(self.state.pipeline_event_tx.clone()),
+            allowed_languages: self.state.allowed_languages.clone(),
+            min_confidence: self.state.min_confidence.clone(),
+            ..Default::default()
+        }
+    }
+
     /// Create sink with portal support based on config.
     #[cfg(feature = "portal")]
     fn create_sink(
@@ -288,6 +317,72 @@ impl DaemonCommandHandler {
             error_correction_model,
             error_correction_backend,
             dictionary_language,
+        }
+    }
+
+    /// Transcribe a finite WAV file using the daemon's already-loaded model.
+    async fn handle_transcribe_file(&self, path: String) -> Response {
+        if path.trim().is_empty() {
+            return Response::Error {
+                message: "File path is empty".to_string(),
+            };
+        }
+
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("Failed to open '{}': {}", path, e),
+                };
+            }
+        };
+
+        let audio_source: Box<dyn AudioSource> = match WavAudioSource::from_reader(Box::new(file)) {
+            Ok(source) => Box::new(source),
+            Err(e) => {
+                return Response::Error {
+                    message: format!("Failed to read WAV '{}': {}", path, e),
+                };
+            }
+        };
+
+        let config = self.state.config.lock().await.clone();
+        let pipeline_config = self.build_file_pipeline_config(&config);
+        let post_processors = build_post_processors(&config);
+        let transcriber = self.state.transcriber.read().await.clone();
+        let mut pipeline = Pipeline::new(pipeline_config);
+
+        if config.transcription.error_correction.enabled {
+            let correction_station = self
+                .build_correction_station(&config.transcription.error_correction)
+                .await;
+            if let Some(station) = correction_station {
+                pipeline = pipeline.with_correction(station);
+            }
+        }
+
+        let mut handle = match pipeline.start_with_post_processors(
+            audio_source,
+            transcriber,
+            Box::new(CollectorSink::new()),
+            post_processors,
+        ) {
+            Ok(handle) => handle,
+            Err(e) => {
+                return Response::Error {
+                    message: format!("Failed to start file transcription: {}", e),
+                };
+            }
+        };
+
+        let result = handle.wait_for_result(Duration::from_secs(120));
+        let _ = handle.stop();
+
+        match result {
+            Some(text) if !text.trim().is_empty() => Response::Transcription { text },
+            _ => Response::Ok {
+                message: "No speech detected".to_string(),
+            },
         }
     }
 
@@ -868,6 +963,7 @@ impl CommandHandler for DaemonCommandHandler {
                         .to_string(),
                 }
             }
+            Command::TranscribeFile { path } => self.handle_transcribe_file(path).await,
             Command::SetLanguage { language } => self.handle_set_language(language).await,
             Command::ListLanguages => self.handle_list_languages().await,
             Command::SetModel { model } => self.handle_set_model(model).await,
@@ -893,6 +989,10 @@ mod tests {
 
     fn create_test_handler() -> DaemonCommandHandler {
         let config = Config::default();
+        create_test_handler_with_config(config)
+    }
+
+    fn create_test_handler_with_config(config: Config) -> DaemonCommandHandler {
         let transcriber: Arc<dyn crate::stt::transcriber::Transcriber> =
             Arc::new(MockTranscriber::new("mock-test-model"));
         let state = DaemonState::new(
@@ -902,6 +1002,33 @@ mod tests {
             None,
         );
         DaemonCommandHandler::new(state, true, 0)
+    }
+
+    fn create_file_test_handler() -> DaemonCommandHandler {
+        let mut config = Config::default();
+        config.transcription.error_correction.enabled = false;
+        create_test_handler_with_config(config)
+    }
+
+    fn fixture_wav_path() -> String {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/quick_brown_fox.wav")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn write_silence_wav(path: &std::path::Path) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: crate::defaults::SAMPLE_RATE,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(path, spec).expect("create silence WAV");
+        for _ in 0..crate::defaults::SAMPLE_RATE {
+            writer.write_sample(0i16).expect("write silence sample");
+        }
+        writer.finalize().expect("finalize silence WAV");
     }
 
     #[tokio::test]
@@ -974,6 +1101,87 @@ mod tests {
             }
             _ => panic!("Expected Error response when not recording"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_handler_transcribe_file_missing_file_returns_error() {
+        let handler = create_file_test_handler();
+        let response = handler
+            .handle(Command::TranscribeFile {
+                path: "/definitely/missing/voice.wav".to_string(),
+            })
+            .await;
+
+        match response {
+            Response::Error { message } => {
+                assert!(message.contains("Failed to open"));
+                assert!(message.contains("/definitely/missing/voice.wav"));
+            }
+            _ => panic!(
+                "Expected Error response for missing file, got: {:?}",
+                response
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handler_transcribe_file_wav_returns_transcription() {
+        let handler = create_file_test_handler();
+        let response = handler
+            .handle(Command::TranscribeFile {
+                path: fixture_wav_path(),
+            })
+            .await;
+
+        match response {
+            Response::Transcription { text } => {
+                assert!(
+                    text.contains("mock transcription"),
+                    "expected mock transcription, got: '{}'",
+                    text
+                );
+            }
+            _ => panic!("Expected Transcription response, got: {:?}", response),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handler_transcribe_file_no_speech_returns_ok() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let wav_path = temp_dir.path().join("silence.wav");
+        write_silence_wav(&wav_path);
+
+        let handler = create_file_test_handler();
+        let response = handler
+            .handle(Command::TranscribeFile {
+                path: wav_path.to_string_lossy().into_owned(),
+            })
+            .await;
+
+        assert_eq!(
+            response,
+            Response::Ok {
+                message: "No speech detected".to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_file_pipeline_config_matches_pipe_mode_contract() {
+        let handler = create_file_test_handler();
+        let config = Config::default();
+        let pipeline_config = handler.build_file_pipeline_config(&config);
+
+        assert!(
+            !pipeline_config.auto_level,
+            "file input should not use microphone auto-leveling"
+        );
+        assert!(
+            pipeline_config.quiet,
+            "file input should not render a meter"
+        );
+        assert_eq!(pipeline_config.sample_rate, crate::defaults::SAMPLE_RATE);
+        assert!(pipeline_config.event_tx.is_some());
     }
 
     #[tokio::test]
