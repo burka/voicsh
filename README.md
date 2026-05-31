@@ -50,9 +50,9 @@ Mic/WAV → VAD → Chunker → Whisper → Post-processor → Text injection
 Pipe mode (`cat file.wav | voicsh`) skips injection and writes to stdout.
 
 For integrations that keep the model warm, run `voicsh daemon` and send
-newline-delimited JSON over its Unix socket. The daemon accepts WAV file paths
-with `{"type":"transcribe_file","path":"/tmp/voice.wav"}` and returns the same
-transcription response shape used by `voicsh stop`. See
+newline-delimited JSON over its Unix socket. The daemon accepts WAV file jobs
+with `{"type":"submit_transcribe_file","path":"/tmp/voice.wav"}` and streams
+queued/running/done updates on the same socket by default. See
 [INTEGRATIONS.md](INTEGRATIONS.md) for the Go/Telegram sidecar pattern,
 including OGG/Opus conversion before calling voicsh.
 

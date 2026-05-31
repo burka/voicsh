@@ -1,6 +1,7 @@
 //! Daemon mode for voicsh - manages recording state and IPC server.
 
 pub mod handler;
+pub mod jobs;
 
 use crate::audio::capture::suppress_audio_warnings;
 use crate::config::Config;
@@ -44,6 +45,8 @@ pub struct DaemonState {
     pub min_confidence: Arc<std::sync::RwLock<f32>>,
     /// Short-lived guard for daemon operations that must not overlap.
     pub operation_busy: Arc<AtomicBool>,
+    /// In-memory queue and subscription state for file transcription jobs.
+    pub jobs: Arc<jobs::JobManager>,
 }
 
 /// Detect GPU device name and memory from nvidia-smi.
@@ -117,6 +120,7 @@ impl DaemonState {
             allowed_languages,
             min_confidence,
             operation_busy: Arc::new(AtomicBool::new(false)),
+            jobs: Arc::new(jobs::JobManager::default()),
         }
     }
 

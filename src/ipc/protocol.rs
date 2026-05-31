@@ -22,6 +22,26 @@ pub enum Command {
     Follow,
     /// Transcribe a WAV file with the daemon's loaded model
     TranscribeFile { path: String },
+    /// Queue a WAV file transcription job. Subscribes to updates by default.
+    SubmitTranscribeFile {
+        path: String,
+        #[serde(default = "default_true")]
+        subscribe: bool,
+    },
+    /// Get the current status snapshot for a transcription job.
+    JobStatus { job_id: String },
+    /// Get the terminal result for a transcription job.
+    JobResult { job_id: String },
+    /// Stream updates for a transcription job.
+    JobSubscribe {
+        job_id: String,
+        #[serde(default = "default_true")]
+        replay_current: bool,
+    },
+    /// Request cancellation for a queued or running transcription job.
+    CancelJob { job_id: String },
+    /// List retained transcription jobs, optionally filtered by state.
+    ListJobs { state: Option<JobState> },
     /// Set language for transcription
     SetLanguage { language: String },
     /// List supported languages
@@ -36,6 +56,10 @@ pub enum Command {
     SetCorrectionModel { model: String },
     /// List available error correction models
     ListCorrectionModels,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Command {
@@ -69,6 +93,46 @@ pub struct CorrectionModelInfoResponse {
     pub description: String,
 }
 
+/// Lifecycle state for daemon-managed transcription jobs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobState {
+    Queued,
+    Running,
+    Done,
+    Failed,
+    Canceled,
+    Expired,
+}
+
+impl JobState {
+    /// Whether this state will receive no more updates.
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            JobState::Done | JobState::Failed | JobState::Canceled | JobState::Expired
+        )
+    }
+}
+
+/// Public snapshot of a transcription job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobInfo {
+    pub job_id: String,
+    pub state: JobState,
+    pub path: String,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[cfg(feature = "model-download")]
 impl From<&crate::models::correction_catalog::CorrectionModelInfo> for CorrectionModelInfoResponse {
     fn from(m: &crate::models::correction_catalog::CorrectionModelInfo) -> Self {
@@ -89,6 +153,23 @@ pub enum Response {
     Ok { message: String },
     /// Command succeeded with transcription result
     Transcription { text: String },
+    /// Transcription job was accepted by the daemon.
+    JobSubmitted { job_id: String, status: JobState },
+    /// Current transcription job snapshot.
+    JobStatus { job: JobInfo },
+    /// Current or terminal transcription job result.
+    JobResult {
+        job_id: String,
+        status: JobState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// Retained transcription jobs.
+    JobList { jobs: Vec<JobInfo> },
+    /// Streamed transcription job update.
+    JobUpdate { job: JobInfo },
     /// Current daemon status
     Status {
         recording: bool,
@@ -238,6 +319,31 @@ mod tests {
             Command::TranscribeFile {
                 path: "/tmp/input.wav".to_string(),
             },
+            Command::SubmitTranscribeFile {
+                path: "/tmp/input.wav".to_string(),
+                subscribe: true,
+            },
+            Command::SubmitTranscribeFile {
+                path: "/tmp/input.wav".to_string(),
+                subscribe: false,
+            },
+            Command::JobStatus {
+                job_id: "job-1".to_string(),
+            },
+            Command::JobResult {
+                job_id: "job-1".to_string(),
+            },
+            Command::JobSubscribe {
+                job_id: "job-1".to_string(),
+                replay_current: true,
+            },
+            Command::CancelJob {
+                job_id: "job-1".to_string(),
+            },
+            Command::ListJobs { state: None },
+            Command::ListJobs {
+                state: Some(JobState::Running),
+            },
             Command::SetLanguage {
                 language: "de".to_string(),
             },
@@ -290,6 +396,33 @@ mod tests {
         assert_eq!(
             json,
             r#"{"type":"transcribe_file","path":"/tmp/voice.wav"}"#
+        );
+    }
+
+    #[test]
+    fn test_command_submit_transcribe_file_defaults_to_subscribe() {
+        let cmd =
+            Command::from_json(r#"{"type":"submit_transcribe_file","path":"/tmp/voice.wav"}"#)
+                .expect("should deserialize");
+        assert_eq!(
+            cmd,
+            Command::SubmitTranscribeFile {
+                path: "/tmp/voice.wav".to_string(),
+                subscribe: true
+            }
+        );
+    }
+
+    #[test]
+    fn test_command_job_subscribe_defaults_to_replay_current() {
+        let cmd = Command::from_json(r#"{"type":"job_subscribe","job_id":"job-1"}"#)
+            .expect("should deserialize");
+        assert_eq!(
+            cmd,
+            Command::JobSubscribe {
+                job_id: "job-1".to_string(),
+                replay_current: true
+            }
         );
     }
 
@@ -936,6 +1069,28 @@ mod tests {
         assert_eq!(resp, deserialized);
         assert!(json.contains(r#""type":"models""#));
         assert!(json.contains(r#""current":"base""#));
+    }
+
+    #[test]
+    fn test_response_job_update_json_roundtrip() {
+        let job = JobInfo {
+            job_id: "job-1".to_string(),
+            state: JobState::Done,
+            path: "/tmp/voice.wav".to_string(),
+            created_at_ms: 10,
+            updated_at_ms: 20,
+            started_at_ms: Some(11),
+            finished_at_ms: Some(20),
+            text: Some("hello".to_string()),
+            error: None,
+        };
+        let resp = Response::JobUpdate { job: job.clone() };
+        let json = resp.to_json().expect("should serialize");
+        let deserialized = Response::from_json(&json).expect("should deserialize");
+        assert_eq!(resp, deserialized);
+        assert!(json.contains(r#""type":"job_update""#));
+        assert!(json.contains(r#""state":"done""#));
+        assert!(json.contains(r#""text":"hello""#));
     }
 
     #[test]

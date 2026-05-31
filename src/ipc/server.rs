@@ -28,6 +28,15 @@ pub trait CommandHandler: Send + Sync {
     fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<DaemonEvent>> {
         None
     }
+
+    /// Stream responses for commands that keep the client connection open.
+    async fn handle_stream(
+        &self,
+        _command: Command,
+        _writer: &mut tokio::net::unix::OwnedWriteHalf,
+    ) -> Option<Result<()>> {
+        None
+    }
 }
 
 /// State for managing server shutdown.
@@ -230,10 +239,23 @@ where
         return handle_follow_client(writer, handler).await;
     }
 
+    if let Some(result) = handler.handle_stream(command.clone(), &mut writer).await {
+        return result;
+    }
+
     // Handle regular command
     let response = handler.handle(command).await;
 
-    // Send response
+    write_response(&mut writer, &response).await?;
+
+    Ok(())
+}
+
+/// Write a single response frame as newline-delimited JSON.
+pub async fn write_response(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    response: &Response,
+) -> Result<()> {
     let response_json = response.to_json().map_err(|e| VoicshError::IpcProtocol {
         message: format!("Failed to serialize response: {}", e),
     })?;
@@ -431,6 +453,23 @@ mod tests {
                 Command::TranscribeFile { .. } => Response::Transcription {
                     text: "test transcription".to_string(),
                 },
+                Command::SubmitTranscribeFile { .. } => Response::JobSubmitted {
+                    job_id: "job-1".to_string(),
+                    status: crate::ipc::protocol::JobState::Queued,
+                },
+                Command::JobStatus { .. } => Response::Error {
+                    message: "Unknown job id: job-1".to_string(),
+                },
+                Command::JobResult { .. } => Response::Error {
+                    message: "Unknown job id: job-1".to_string(),
+                },
+                Command::JobSubscribe { .. } => Response::Error {
+                    message: "JobSubscribe requires streaming".to_string(),
+                },
+                Command::CancelJob { .. } => Response::Error {
+                    message: "Unknown job id: job-1".to_string(),
+                },
+                Command::ListJobs { .. } => Response::JobList { jobs: vec![] },
                 Command::SetLanguage { .. } => Response::Ok {
                     message: "Language updated".to_string(),
                 },
@@ -457,6 +496,54 @@ mod tests {
                     enabled: false,
                     backend: Some("symspell".to_string()),
                 },
+            }
+        }
+    }
+
+    struct StreamingMockCommandHandler;
+
+    #[async_trait::async_trait]
+    impl CommandHandler for StreamingMockCommandHandler {
+        async fn handle(&self, _command: Command) -> Response {
+            Response::Error {
+                message: "expected streaming command".to_string(),
+            }
+        }
+
+        async fn handle_stream(
+            &self,
+            command: Command,
+            writer: &mut tokio::net::unix::OwnedWriteHalf,
+        ) -> Option<Result<()>> {
+            match command {
+                Command::SubmitTranscribeFile {
+                    subscribe: true, ..
+                } => Some(
+                    async {
+                        let now = 1;
+                        let queued = crate::ipc::protocol::JobInfo {
+                            job_id: "job-1".to_string(),
+                            state: crate::ipc::protocol::JobState::Queued,
+                            path: "/tmp/voice.wav".to_string(),
+                            created_at_ms: now,
+                            updated_at_ms: now,
+                            started_at_ms: None,
+                            finished_at_ms: None,
+                            text: None,
+                            error: None,
+                        };
+                        let mut done = queued.clone();
+                        done.state = crate::ipc::protocol::JobState::Done;
+                        done.updated_at_ms = 2;
+                        done.finished_at_ms = Some(2);
+                        done.text = Some("hello".to_string());
+
+                        write_response(writer, &Response::JobUpdate { job: queued }).await?;
+                        write_response(writer, &Response::JobUpdate { job: done }).await
+                    }
+                    .await,
+                ),
+                _ => None,
             }
         }
     }
@@ -609,6 +696,74 @@ mod tests {
         }
 
         // Cleanup
+        drop(server_handle);
+    }
+
+    #[tokio::test]
+    async fn test_submit_transcribe_file_can_stream_job_updates() {
+        let temp_dir = TempDir::new().unwrap();
+        let socket_path = temp_dir.path().join("test.sock");
+
+        let server_socket_path = socket_path.clone();
+        let server_handle = tokio::spawn(async move {
+            let server = IpcServer::new(server_socket_path).unwrap();
+            server.start(StreamingMockCommandHandler).await
+        });
+
+        let stream = {
+            let mut result = None;
+            for _ in 0..10 {
+                match UnixStream::connect(&socket_path).await {
+                    Ok(s) => {
+                        result = Some(s);
+                        break;
+                    }
+                    Err(_) => tokio::time::sleep(tokio::time::Duration::from_millis(10)).await,
+                }
+            }
+            result.expect("server should accept connections")
+        };
+
+        let (reader, mut writer) = stream.into_split();
+        let command = Command::SubmitTranscribeFile {
+            path: "/tmp/voice.wav".to_string(),
+            subscribe: true,
+        };
+        writer
+            .write_all(format!("{}\n", command.to_json().unwrap()).as_bytes())
+            .await
+            .unwrap();
+        writer.flush().await.unwrap();
+
+        let mut reader = tokio::io::BufReader::new(reader);
+        let mut first = String::new();
+        let mut second = String::new();
+        tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut first)
+            .await
+            .unwrap();
+        tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut second)
+            .await
+            .unwrap();
+
+        let first = Response::from_json(first.trim()).unwrap();
+        let second = Response::from_json(second.trim()).unwrap();
+        assert!(matches!(
+            first,
+            Response::JobUpdate {
+                job: crate::ipc::protocol::JobInfo {
+                    state: crate::ipc::protocol::JobState::Queued,
+                    ..
+                }
+            }
+        ));
+        match second {
+            Response::JobUpdate { job } => {
+                assert_eq!(job.state, crate::ipc::protocol::JobState::Done);
+                assert_eq!(job.text.as_deref(), Some("hello"));
+            }
+            response => panic!("Expected final job update, got: {:?}", response),
+        }
+
         drop(server_handle);
     }
 

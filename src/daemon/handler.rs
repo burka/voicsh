@@ -6,9 +6,10 @@ use crate::audio::vad::VadConfig;
 use crate::audio::wav::WavAudioSource;
 use crate::config::{Config, resolve_hallucination_filters, resolve_suspect_phrases};
 use crate::daemon::DaemonState;
+use crate::daemon::jobs::JobEntry;
 use crate::inject::focused_window::reset_detection_cache;
-use crate::ipc::protocol::{Command, DaemonEvent, Response, TextOrigin};
-use crate::ipc::server::CommandHandler;
+use crate::ipc::protocol::{Command, DaemonEvent, JobState, Response, TextOrigin};
+use crate::ipc::server::{CommandHandler, write_response};
 use crate::pipeline::adaptive_chunker::AdaptiveChunkerConfig;
 use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
 use crate::pipeline::post_processor::build_post_processors;
@@ -20,6 +21,7 @@ use std::time::Duration;
 
 const MAX_TRANSCRIBE_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const FILE_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(120);
+const JOB_SUBSCRIBE_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 struct OperationGuard {
     busy: Arc<std::sync::atomic::AtomicBool>,
@@ -32,6 +34,7 @@ impl Drop for OperationGuard {
 }
 
 /// Command handler for daemon IPC commands.
+#[derive(Clone)]
 pub struct DaemonCommandHandler {
     state: Arc<DaemonState>,
     quiet: bool,
@@ -368,43 +371,20 @@ impl DaemonCommandHandler {
             }
         };
 
+        self.transcribe_file_once(path).await
+    }
+
+    async fn transcribe_file_once(&self, path: String) -> Response {
         if self.state.is_recording().await {
             return Response::Error {
                 message: "Cannot transcribe file while recording".to_string(),
             };
         }
 
-        if path.trim().is_empty() {
-            return Response::Error {
-                message: "File path is empty".to_string(),
-            };
-        }
-
-        let metadata = match std::fs::metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(e) => {
-                return Response::Error {
-                    message: format!("Failed to inspect '{}': {}", path, e),
-                };
-            }
+        let path = match Self::validate_transcribe_file_path(path) {
+            Ok(path) => path,
+            Err(response) => return *response,
         };
-
-        if !metadata.is_file() {
-            return Response::Error {
-                message: format!("Not a regular file: '{}'", path),
-            };
-        }
-
-        if metadata.len() > MAX_TRANSCRIBE_FILE_BYTES {
-            return Response::Error {
-                message: format!(
-                    "File '{}' is too large ({} bytes, max {} bytes)",
-                    path,
-                    metadata.len(),
-                    MAX_TRANSCRIBE_FILE_BYTES
-                ),
-            };
-        }
 
         let file = match File::open(&path) {
             Ok(file) => file,
@@ -461,6 +441,240 @@ impl DaemonCommandHandler {
             _ => Response::Ok {
                 message: "No speech detected".to_string(),
             },
+        }
+    }
+
+    fn validate_transcribe_file_path(path: String) -> Result<String, Box<Response>> {
+        if path.trim().is_empty() {
+            return Err(Box::new(Response::Error {
+                message: "File path is empty".to_string(),
+            }));
+        }
+
+        let metadata = std::fs::metadata(&path).map_err(|e| {
+            Box::new(Response::Error {
+                message: format!("Failed to inspect '{}': {}", path, e),
+            })
+        })?;
+
+        if !metadata.is_file() {
+            return Err(Box::new(Response::Error {
+                message: format!("Not a regular file: '{}'", path),
+            }));
+        }
+
+        if metadata.len() > MAX_TRANSCRIBE_FILE_BYTES {
+            return Err(Box::new(Response::Error {
+                message: format!(
+                    "File '{}' is too large ({} bytes, max {} bytes)",
+                    path,
+                    metadata.len(),
+                    MAX_TRANSCRIBE_FILE_BYTES
+                ),
+            }));
+        }
+
+        Ok(std::fs::canonicalize(&path)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or(path))
+    }
+
+    async fn submit_transcribe_file_job(&self, path: String) -> Result<Arc<JobEntry>, Response> {
+        if self.state.is_recording().await {
+            return Err(Response::Error {
+                message: "Cannot transcribe file while recording".to_string(),
+            });
+        }
+
+        let path = Self::validate_transcribe_file_path(path).map_err(|response| *response)?;
+        let entry = self
+            .state
+            .jobs
+            .submit(path)
+            .await
+            .map_err(|message| Response::Error { message })?;
+
+        self.spawn_transcription_worker(Arc::clone(&entry));
+        Ok(entry)
+    }
+
+    fn spawn_transcription_worker(&self, entry: Arc<JobEntry>) {
+        let handler = self.clone();
+        let jobs = Arc::clone(&self.state.jobs);
+        tokio::spawn(async move {
+            let semaphore = jobs.semaphore();
+            let _permit = match semaphore.acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    entry
+                        .set_state(
+                            JobState::Failed,
+                            None,
+                            Some("Transcription worker stopped".to_string()),
+                        )
+                        .await;
+                    jobs.release_active_slot(&entry);
+                    jobs.prune_terminal_jobs().await;
+                    return;
+                }
+            };
+
+            if entry.is_cancel_requested() {
+                entry
+                    .set_state(JobState::Canceled, None, Some("Job canceled".to_string()))
+                    .await;
+                jobs.release_active_slot(&entry);
+                jobs.prune_terminal_jobs().await;
+                return;
+            }
+
+            entry.set_state(JobState::Running, None, None).await;
+
+            let _operation = match handler.try_begin_operation() {
+                Some(guard) => guard,
+                None => {
+                    entry
+                        .set_state(JobState::Failed, None, Some("Daemon is busy".to_string()))
+                        .await;
+                    jobs.release_active_slot(&entry);
+                    jobs.prune_terminal_jobs().await;
+                    return;
+                }
+            };
+
+            if entry.is_cancel_requested() {
+                entry
+                    .set_state(JobState::Canceled, None, Some("Job canceled".to_string()))
+                    .await;
+                jobs.release_active_slot(&entry);
+                jobs.prune_terminal_jobs().await;
+                return;
+            }
+
+            let path = entry.snapshot().await.path;
+            match handler.transcribe_file_once(path).await {
+                Response::Transcription { text } => {
+                    if entry.is_cancel_requested() {
+                        entry
+                            .set_state(JobState::Canceled, None, Some("Job canceled".to_string()))
+                            .await;
+                    } else {
+                        entry.set_state(JobState::Done, Some(text), None).await;
+                    }
+                }
+                Response::Ok { message } => {
+                    if entry.is_cancel_requested() {
+                        entry
+                            .set_state(JobState::Canceled, None, Some("Job canceled".to_string()))
+                            .await;
+                    } else {
+                        entry
+                            .set_state(JobState::Done, Some(String::new()), Some(message))
+                            .await;
+                    }
+                }
+                Response::Error { message } => {
+                    entry.set_state(JobState::Failed, None, Some(message)).await;
+                }
+                other => {
+                    entry
+                        .set_state(
+                            JobState::Failed,
+                            None,
+                            Some(format!("Unexpected transcription response: {other:?}")),
+                        )
+                        .await;
+                }
+            }
+
+            jobs.release_active_slot(&entry);
+            jobs.prune_terminal_jobs().await;
+        });
+    }
+
+    async fn handle_submit_transcribe_file(&self, path: String) -> Response {
+        match self.submit_transcribe_file_job(path).await {
+            Ok(entry) => {
+                let job = entry.snapshot().await;
+                Response::JobSubmitted {
+                    job_id: job.job_id,
+                    status: job.state,
+                }
+            }
+            Err(response) => response,
+        }
+    }
+
+    async fn handle_job_status(&self, job_id: String) -> Response {
+        match self.state.jobs.get(&job_id).await {
+            Some(entry) => Response::JobStatus {
+                job: entry.snapshot().await,
+            },
+            None => Response::Error {
+                message: format!("Unknown job id: {job_id}"),
+            },
+        }
+    }
+
+    async fn handle_job_result(&self, job_id: String) -> Response {
+        match self.state.jobs.get(&job_id).await {
+            Some(entry) => {
+                let job = entry.snapshot().await;
+                Response::JobResult {
+                    job_id: job.job_id,
+                    status: job.state,
+                    text: job.text,
+                    error: job.error,
+                }
+            }
+            None => Response::Error {
+                message: format!("Unknown job id: {job_id}"),
+            },
+        }
+    }
+
+    async fn handle_cancel_job(&self, job_id: String) -> Response {
+        match self.state.jobs.cancel(&job_id).await {
+            Some(job) => Response::JobStatus { job },
+            None => Response::Error {
+                message: format!("Unknown job id: {job_id}"),
+            },
+        }
+    }
+
+    async fn handle_list_jobs(&self, state: Option<JobState>) -> Response {
+        Response::JobList {
+            jobs: self.state.jobs.list(state).await,
+        }
+    }
+
+    async fn stream_job_updates(
+        &self,
+        writer: &mut tokio::net::unix::OwnedWriteHalf,
+        entry: Arc<JobEntry>,
+        replay_current: bool,
+    ) -> crate::error::Result<()> {
+        let mut rx = entry.subscribe();
+        if replay_current {
+            let job = rx.borrow().clone();
+            write_response(writer, &Response::JobUpdate { job: job.clone() }).await?;
+            if job.state.is_terminal() {
+                return Ok(());
+            }
+        }
+
+        loop {
+            match tokio::time::timeout(JOB_SUBSCRIBE_IDLE_TIMEOUT, rx.changed()).await {
+                Ok(Ok(())) => {
+                    let job = rx.borrow().clone();
+                    write_response(writer, &Response::JobUpdate { job: job.clone() }).await?;
+                    if job.state.is_terminal() {
+                        return Ok(());
+                    }
+                }
+                Ok(Err(_closed)) => return Ok(()),
+                Err(_elapsed) => return Ok(()),
+            }
         }
     }
 
@@ -1042,6 +1256,22 @@ impl CommandHandler for DaemonCommandHandler {
                 }
             }
             Command::TranscribeFile { path } => self.handle_transcribe_file(path).await,
+            Command::SubmitTranscribeFile {
+                path,
+                subscribe: false,
+            } => self.handle_submit_transcribe_file(path).await,
+            Command::SubmitTranscribeFile {
+                subscribe: true, ..
+            } => Response::Error {
+                message: "SubmitTranscribeFile with subscribe=true requires streaming".to_string(),
+            },
+            Command::JobStatus { job_id } => self.handle_job_status(job_id).await,
+            Command::JobResult { job_id } => self.handle_job_result(job_id).await,
+            Command::JobSubscribe { .. } => Response::Error {
+                message: "JobSubscribe requires streaming".to_string(),
+            },
+            Command::CancelJob { job_id } => self.handle_cancel_job(job_id).await,
+            Command::ListJobs { state } => self.handle_list_jobs(state).await,
             Command::SetLanguage { language } => self.handle_set_language(language).await,
             Command::ListLanguages => self.handle_list_languages().await,
             Command::SetModel { model } => self.handle_set_model(model).await,
@@ -1056,6 +1286,48 @@ impl CommandHandler for DaemonCommandHandler {
 
     fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<DaemonEvent>> {
         Some(self.state.subscribe())
+    }
+
+    async fn handle_stream(
+        &self,
+        command: Command,
+        writer: &mut tokio::net::unix::OwnedWriteHalf,
+    ) -> Option<crate::error::Result<()>> {
+        match command {
+            Command::SubmitTranscribeFile {
+                path,
+                subscribe: true,
+            } => Some(
+                async {
+                    match self.submit_transcribe_file_job(path).await {
+                        Ok(entry) => self.stream_job_updates(writer, entry, true).await,
+                        Err(response) => write_response(writer, &response).await,
+                    }
+                }
+                .await,
+            ),
+            Command::JobSubscribe {
+                job_id,
+                replay_current,
+            } => Some(
+                async {
+                    match self.state.jobs.get(&job_id).await {
+                        Some(entry) => self.stream_job_updates(writer, entry, replay_current).await,
+                        None => {
+                            write_response(
+                                writer,
+                                &Response::Error {
+                                    message: format!("Unknown job id: {job_id}"),
+                                },
+                            )
+                            .await
+                        }
+                    }
+                }
+                .await,
+            ),
+            _ => None,
+        }
     }
 }
 
@@ -1095,6 +1367,14 @@ mod tests {
         create_test_handler_with_config(config)
     }
 
+    fn create_file_test_handler_with_transcriber(
+        transcriber: MockTranscriber,
+    ) -> DaemonCommandHandler {
+        let mut config = Config::default();
+        config.transcription.error_correction.enabled = false;
+        create_test_handler_with_config_and_transcriber(config, Arc::new(transcriber))
+    }
+
     fn fixture_wav_path() -> String {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/quick_brown_fox.wav")
@@ -1114,6 +1394,34 @@ mod tests {
             writer.write_sample(0i16).expect("write silence sample");
         }
         writer.finalize().expect("finalize silence WAV");
+    }
+
+    fn submitted_job_id(response: Response) -> String {
+        match response {
+            Response::JobSubmitted { job_id, .. } => job_id,
+            _ => panic!("Expected submitted job response, got: {:?}", response),
+        }
+    }
+
+    async fn wait_for_terminal_job(
+        handler: &DaemonCommandHandler,
+        job_id: &str,
+    ) -> crate::ipc::protocol::JobInfo {
+        for _ in 0..100 {
+            match handler
+                .handle(Command::JobStatus {
+                    job_id: job_id.to_string(),
+                })
+                .await
+            {
+                Response::JobStatus { job } if job.state.is_terminal() => return job,
+                Response::JobStatus { .. } => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                response => panic!("Expected job status, got: {:?}", response),
+            }
+        }
+        panic!("job {job_id} did not reach terminal state");
     }
 
     #[tokio::test]
@@ -1309,6 +1617,109 @@ mod tests {
             Response::Error { message } => assert_eq!(message, "Daemon is busy"),
             _ => panic!("Expected busy error, got: {:?}", response),
         }
+    }
+
+    #[tokio::test]
+    async fn test_handler_submit_transcribe_file_returns_job_and_status() {
+        let handler = create_file_test_handler();
+        let response = handler
+            .handle(Command::SubmitTranscribeFile {
+                path: fixture_wav_path(),
+                subscribe: false,
+            })
+            .await;
+
+        let job_id = match response {
+            Response::JobSubmitted {
+                job_id,
+                status: JobState::Queued,
+            } => job_id,
+            _ => panic!("Expected queued job submission, got: {:?}", response),
+        };
+
+        let final_job = wait_for_terminal_job(&handler, &job_id).await;
+        assert_eq!(final_job.state, JobState::Done);
+        assert_eq!(final_job.text.as_deref(), Some("mock transcription"));
+
+        let response = handler
+            .handle(Command::JobResult {
+                job_id: job_id.clone(),
+            })
+            .await;
+        match response {
+            Response::JobResult { status, text, .. } => {
+                assert_eq!(status, JobState::Done);
+                assert_eq!(text.as_deref(), Some("mock transcription"));
+            }
+            _ => panic!("Expected job result, got: {:?}", response),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handler_submit_transcribe_file_rejects_missing_file_before_queueing() {
+        let handler = create_file_test_handler();
+        let response = handler
+            .handle(Command::SubmitTranscribeFile {
+                path: "/definitely/missing/voice.wav".to_string(),
+                subscribe: false,
+            })
+            .await;
+
+        match response {
+            Response::Error { message } => assert!(message.contains("Failed to inspect")),
+            _ => panic!("Expected missing-file error, got: {:?}", response),
+        }
+
+        let response = handler.handle(Command::ListJobs { state: None }).await;
+        match response {
+            Response::JobList { jobs } => assert!(jobs.is_empty()),
+            _ => panic!("Expected empty job list, got: {:?}", response),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handler_cancel_queued_job_is_observable() {
+        let handler = create_file_test_handler_with_transcriber(
+            crate::stt::transcriber::MockTranscriber::new("mock")
+                .with_delay(Duration::from_millis(50))
+                .with_response("slow"),
+        );
+
+        let first = submitted_job_id(
+            handler
+                .handle(Command::SubmitTranscribeFile {
+                    path: fixture_wav_path(),
+                    subscribe: false,
+                })
+                .await,
+        );
+        let second = submitted_job_id(
+            handler
+                .handle(Command::SubmitTranscribeFile {
+                    path: fixture_wav_path(),
+                    subscribe: false,
+                })
+                .await,
+        );
+
+        let response = handler
+            .handle(Command::CancelJob {
+                job_id: second.clone(),
+            })
+            .await;
+        match response {
+            Response::JobStatus { job } => assert_eq!(job.state, JobState::Canceled),
+            _ => panic!("Expected canceled job status, got: {:?}", response),
+        }
+
+        assert_eq!(
+            wait_for_terminal_job(&handler, &second).await.state,
+            JobState::Canceled
+        );
+        assert_eq!(
+            wait_for_terminal_job(&handler, &first).await.state,
+            JobState::Done
+        );
     }
 
     #[tokio::test]

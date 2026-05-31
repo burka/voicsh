@@ -188,6 +188,23 @@ mod tests {
                 Command::TranscribeFile { .. } => Response::Transcription {
                     text: "test transcription".to_string(),
                 },
+                Command::SubmitTranscribeFile { .. } => Response::JobSubmitted {
+                    job_id: "job-1".to_string(),
+                    status: crate::ipc::protocol::JobState::Queued,
+                },
+                Command::JobStatus { .. } => Response::Error {
+                    message: "Unknown job id: job-1".to_string(),
+                },
+                Command::JobResult { .. } => Response::Error {
+                    message: "Unknown job id: job-1".to_string(),
+                },
+                Command::JobSubscribe { .. } => Response::Error {
+                    message: "JobSubscribe requires streaming".to_string(),
+                },
+                Command::CancelJob { .. } => Response::Error {
+                    message: "Unknown job id: job-1".to_string(),
+                },
+                Command::ListJobs { .. } => Response::JobList { jobs: vec![] },
                 Command::SetLanguage { .. } => Response::Ok {
                     message: "Language updated".to_string(),
                 },

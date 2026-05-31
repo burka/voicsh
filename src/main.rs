@@ -483,6 +483,41 @@ async fn handle_ipc_command(socket: Option<std::path::PathBuf>, command: Command
             Response::Transcription { text } => {
                 println!("{}", text);
             }
+            Response::JobSubmitted { job_id, status } => {
+                println!("{} {:?}", job_id, status);
+            }
+            Response::JobStatus { job } | Response::JobUpdate { job } => {
+                println!("{} {:?}", job.job_id, job.state);
+                if let Some(text) = job.text
+                    && !text.is_empty()
+                {
+                    println!("{}", text);
+                }
+                if let Some(error) = job.error {
+                    eprintln!("{}", error);
+                }
+            }
+            Response::JobResult {
+                job_id,
+                status,
+                text,
+                error,
+            } => {
+                println!("{} {:?}", job_id, status);
+                if let Some(text) = text
+                    && !text.is_empty()
+                {
+                    println!("{}", text);
+                }
+                if let Some(error) = error {
+                    eprintln!("{}", error);
+                }
+            }
+            Response::JobList { jobs } => {
+                for job in jobs {
+                    println!("{} {:?}", job.job_id, job.state);
+                }
+            }
             Response::Status {
                 recording,
                 model_loaded,
