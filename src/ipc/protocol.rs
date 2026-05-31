@@ -41,7 +41,10 @@ pub enum Command {
     /// Request cancellation for a queued or running transcription job.
     CancelJob { job_id: String },
     /// List retained transcription jobs, optionally filtered by state.
-    ListJobs { state: Option<JobState> },
+    ListJobs {
+        #[serde(default)]
+        state: Option<JobState>,
+    },
     /// Set language for transcription
     SetLanguage { language: String },
     /// List supported languages
@@ -424,6 +427,12 @@ mod tests {
                 replay_current: true
             }
         );
+    }
+
+    #[test]
+    fn test_command_list_jobs_defaults_to_no_filter() {
+        let cmd = Command::from_json(r#"{"type":"list_jobs"}"#).expect("should deserialize");
+        assert_eq!(cmd, Command::ListJobs { state: None });
     }
 
     // Response Tests

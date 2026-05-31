@@ -46,6 +46,9 @@ impl JobEntry {
     ) -> JobInfo {
         let now = now_ms();
         let mut info = self.info.lock().await;
+        if info.state.is_terminal() {
+            return info.clone();
+        }
         info.state = state;
         info.updated_at_ms = now;
         match state {
@@ -64,9 +67,7 @@ impl JobEntry {
             info.error = Some(error);
         }
         let snapshot = info.clone();
-        if self.tx.send(snapshot.clone()).is_err() {
-            // No subscribers are currently attached; the stored snapshot remains authoritative.
-        }
+        drop(self.tx.send_replace(snapshot.clone()));
         snapshot
     }
 
@@ -167,7 +168,7 @@ impl JobManager {
                 jobs.push(info);
             }
         }
-        jobs.sort_by_key(|job| job.created_at_ms);
+        jobs.sort_by_key(|job| (job.created_at_ms, job_sequence(&job.job_id)));
         jobs
     }
 
@@ -206,7 +207,11 @@ impl JobManager {
         for (id, entry) in entries {
             let info = entry.snapshot().await;
             if info.state.is_terminal() {
-                terminal_jobs.push((info.finished_at_ms.unwrap_or(info.updated_at_ms), id));
+                terminal_jobs.push((
+                    info.finished_at_ms.unwrap_or(info.updated_at_ms),
+                    info.created_at_ms,
+                    id,
+                ));
             }
         }
 
@@ -214,12 +219,14 @@ impl JobManager {
             return;
         }
 
-        terminal_jobs.sort_by_key(|(finished_at_ms, _)| *finished_at_ms);
+        terminal_jobs.sort_by_key(|(finished_at_ms, created_at_ms, id)| {
+            (*finished_at_ms, *created_at_ms, job_sequence(id))
+        });
         let remove_count = terminal_jobs.len() - self.max_retained_terminal_jobs;
         let remove_ids: std::collections::HashSet<String> = terminal_jobs
             .into_iter()
             .take(remove_count)
-            .map(|(_, id)| id)
+            .map(|(_, _, id)| id)
             .collect();
 
         self.jobs
@@ -234,6 +241,13 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn job_sequence(job_id: &str) -> u64 {
+    job_id
+        .strip_prefix("job-")
+        .and_then(|id| id.parse().ok())
+        .unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -318,5 +332,24 @@ mod tests {
 
         assert!(manager.get("job-1").await.is_none());
         assert!(manager.get("job-2").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn terminal_state_cannot_be_overwritten_by_worker_race() {
+        let manager = JobManager::new(4, 1, 1000);
+        let entry = manager.submit("/tmp/a.wav".to_string()).await.unwrap();
+
+        entry
+            .set_state(JobState::Canceled, None, Some("Job canceled".to_string()))
+            .await;
+        let after_running = entry.set_state(JobState::Running, None, None).await;
+        let after_done = entry
+            .set_state(JobState::Done, Some("late result".to_string()), None)
+            .await;
+
+        assert_eq!(after_running.state, JobState::Canceled);
+        assert_eq!(after_done.state, JobState::Canceled);
+        assert_eq!(after_done.text, None);
+        assert_eq!(entry.snapshot().await.state, JobState::Canceled);
     }
 }

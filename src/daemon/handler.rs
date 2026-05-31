@@ -395,6 +395,10 @@ impl DaemonCommandHandler {
             }
         };
 
+        if let Err(response) = Self::validate_opened_transcribe_file(&path, &file) {
+            return *response;
+        }
+
         let audio_source: Box<dyn AudioSource> = match WavAudioSource::from_reader(Box::new(file)) {
             Ok(source) => Box::new(source),
             Err(e) => {
@@ -477,6 +481,33 @@ impl DaemonCommandHandler {
         Ok(std::fs::canonicalize(&path)
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or(path))
+    }
+
+    fn validate_opened_transcribe_file(path: &str, file: &File) -> Result<(), Box<Response>> {
+        let metadata = file.metadata().map_err(|e| {
+            Box::new(Response::Error {
+                message: format!("Failed to inspect opened '{}': {}", path, e),
+            })
+        })?;
+
+        if !metadata.is_file() {
+            return Err(Box::new(Response::Error {
+                message: format!("Not a regular file: '{}'", path),
+            }));
+        }
+
+        if metadata.len() > MAX_TRANSCRIBE_FILE_BYTES {
+            return Err(Box::new(Response::Error {
+                message: format!(
+                    "File '{}' is too large ({} bytes, max {} bytes)",
+                    path,
+                    metadata.len(),
+                    MAX_TRANSCRIBE_FILE_BYTES
+                ),
+            }));
+        }
+
+        Ok(())
     }
 
     async fn submit_transcribe_file_job(&self, path: String) -> Result<Arc<JobEntry>, Response> {
@@ -661,6 +692,8 @@ impl DaemonCommandHandler {
             if job.state.is_terminal() {
                 return Ok(());
             }
+        } else if rx.borrow().state.is_terminal() {
+            return Ok(());
         }
 
         loop {
@@ -1594,6 +1627,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_validate_opened_transcribe_file_rejects_oversized_file() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let wav_path = temp_dir.path().join("too-large-open.wav");
+        let file = File::create(&wav_path).expect("create sparse file");
+        file.set_len(MAX_TRANSCRIBE_FILE_BYTES + 1)
+            .expect("size sparse file");
+
+        let response = DaemonCommandHandler::validate_opened_transcribe_file(
+            &wav_path.to_string_lossy(),
+            &file,
+        )
+        .expect_err("opened oversized file should be rejected");
+
+        match *response {
+            Response::Error { message } => assert!(message.contains("too large")),
+            _ => panic!("Expected oversized-file error, got: {:?}", response),
+        }
+    }
+
     #[tokio::test]
     async fn test_handler_transcribe_file_rejects_when_daemon_is_busy() {
         let handler = create_file_test_handler();
@@ -1720,6 +1773,39 @@ mod tests {
             wait_for_terminal_job(&handler, &first).await.state,
             JobState::Done
         );
+    }
+
+    #[tokio::test]
+    async fn test_handler_job_subscribe_without_replay_closes_for_terminal_job() {
+        let handler = create_file_test_handler();
+        let job_id = submitted_job_id(
+            handler
+                .handle(Command::SubmitTranscribeFile {
+                    path: fixture_wav_path(),
+                    subscribe: false,
+                })
+                .await,
+        );
+        let final_job = wait_for_terminal_job(&handler, &job_id).await;
+        assert_eq!(final_job.state, JobState::Done);
+
+        let (_client, server) = tokio::net::UnixStream::pair().expect("unix stream pair");
+        let (_reader, mut writer) = server.into_split();
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            CommandHandler::handle_stream(
+                &handler,
+                Command::JobSubscribe {
+                    job_id,
+                    replay_current: false,
+                },
+                &mut writer,
+            ),
+        )
+        .await
+        .expect("terminal subscription should close immediately");
+
+        assert!(matches!(result, Some(Ok(()))));
     }
 
     #[tokio::test]
