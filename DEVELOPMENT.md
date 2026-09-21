@@ -147,6 +147,16 @@ gnome-extensions enable voicsh@voic.sh
 
 Code changes require a session restart (log out/in) due to GJS module caching.
 
+**Indicator never appears after enabling?** Check the global kill-switch — when
+`disable-user-extensions` is `true`, GNOME keeps *all* user extensions inactive
+and `gnome-extensions enable` succeeds silently:
+
+```bash
+gsettings get org.gnome.shell disable-user-extensions   # true → that's the cause
+gsettings set org.gnome.shell disable-user-extensions false
+# Log out and back in
+```
+
 ## Quality Checks
 
 See [CLAUDE.md](CLAUDE.md) for the canonical quality gate commands to run before every commit.

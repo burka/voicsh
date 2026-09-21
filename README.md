@@ -129,6 +129,10 @@ Config file: `~/.config/voicsh/config.toml`. Environment overrides: `VOICSH_MODE
 voicsh install-gnome-extension
 ```
 
+Log out and back in to load the indicator (GNOME only scans extensions at shell startup).
+
+**Indicator not showing?** GNOME has a global kill-switch, `disable-user-extensions`, that keeps *every* user extension inactive even after install — `gnome-extensions enable` reports success but nothing loads. `install-gnome-extension` detects this and prints the fix; clear it yourself with `gsettings set org.gnome.shell disable-user-extensions false`, then log back in.
+
 **Shell completions:** `voicsh completions bash|zsh|fish` — run `voicsh completions --help` for install paths.
 
 ## License

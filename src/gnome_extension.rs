@@ -109,7 +109,46 @@ fn install_extension_files() -> Result<()> {
         );
     }
 
+    // The enable above can succeed silently while the indicator never loads,
+    // so check GNOME's global kill-switch and tell the user how to clear it.
+    warn_if_user_extensions_disabled();
+
     Ok(())
+}
+
+/// GNOME's `org.gnome.shell disable-user-extensions` is a global kill-switch:
+/// while it is `true`, every user-installed extension stays inactive even after
+/// `gnome-extensions enable` reports success. We don't flip it automatically —
+/// it affects all of the user's extensions — but we surface the exact fix so a
+/// silently-missing indicator isn't a mystery.
+fn warn_if_user_extensions_disabled() {
+    let output = Command::new("gsettings")
+        .args(["get", "org.gnome.shell", "disable-user-extensions"])
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            if !user_extensions_globally_disabled(&String::from_utf8_lossy(&out.stdout)) {
+                return;
+            }
+            eprintln!(
+                "Note: GNOME has all user extensions globally disabled \
+                 (disable-user-extensions=true), so the voicsh indicator will not appear.\n\
+                 To enable it, run:\n\
+                 \x20\x20gsettings set org.gnome.shell disable-user-extensions false\n\
+                 This re-activates your other user extensions too. Then log out and back in."
+            );
+        }
+        // gsettings missing or schema unavailable (not a GNOME session) — nothing to do.
+        Ok(_) | Err(_) => {}
+    }
+}
+
+/// Returns true when `gsettings get ... disable-user-extensions` reports the
+/// global kill-switch is on. gsettings prints the boolean as `true`/`false`
+/// with a trailing newline.
+fn user_extensions_globally_disabled(gsettings_value: &str) -> bool {
+    gsettings_value.trim() == "true"
 }
 
 /// Migration: remove the old `voicsh@voicsh.dev` extension directory.
@@ -193,6 +232,19 @@ mod tests {
     #[test]
     fn test_embedded_gschema_contains_key() {
         assert!(GSCHEMA_XML.contains("toggle-shortcut"));
+    }
+
+    #[test]
+    fn test_user_extensions_globally_disabled_parses_gsettings_output() {
+        // gsettings emits the boolean with a trailing newline.
+        assert!(user_extensions_globally_disabled("true\n"));
+        assert!(user_extensions_globally_disabled("true"));
+        assert!(!user_extensions_globally_disabled("false\n"));
+        assert!(!user_extensions_globally_disabled("false"));
+        // Unexpected output is treated as "not disabled" so install never
+        // clobbers the setting on a guess.
+        assert!(!user_extensions_globally_disabled(""));
+        assert!(!user_extensions_globally_disabled("nonsense"));
     }
 
     #[test]
