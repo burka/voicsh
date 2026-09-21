@@ -647,6 +647,9 @@ fn save_and_summarize(model: &str, size_mb: u32, speed_multiplier: f64) -> anyho
     println!("voicsh is ready! Run 'voicsh' to start voice typing.");
     println!("  Model: {} ({} MB)", model, size_mb);
     println!("  Speed: {:.1}x real-time", speed_multiplier);
+    if let Some(suggestion) = crate::diagnostics::gpu_build_suggestion() {
+        println!("  Tip: {}", suggestion);
+    }
     println!("  Tip: Run 'voicsh init' again anytime to re-tune.");
     Ok(())
 }

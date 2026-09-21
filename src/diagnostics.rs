@@ -202,9 +202,12 @@ pub fn check_dependencies() {
     println!("GPU acceleration:");
     let compiled = defaults::gpu_backend();
     println!("  Compiled backend: {}", compiled);
-    check_gpu_nvidia(compiled);
-    check_gpu_vulkan(compiled);
-    check_gpu_rocm(compiled);
+    print!("  NVIDIA (CUDA):   ");
+    print_gpu_check(check_gpu_nvidia(compiled));
+    print!("  Vulkan:          ");
+    print_gpu_check(check_gpu_vulkan(compiled));
+    print!("  AMD (ROCm):      ");
+    print_gpu_check(check_gpu_rocm(compiled));
 
     println!();
     if portal_available {
@@ -220,10 +223,36 @@ pub fn check_dependencies() {
     }
 }
 
-/// Check for NVIDIA GPU via GPU detection.
-fn check_gpu_nvidia(compiled: &str) {
-    print!("  NVIDIA (CUDA):   ");
+/// Outcome of probing one GPU backend against the compiled binary.
+#[derive(Debug, Clone, PartialEq)]
+enum GpuCheck {
+    /// Hardware detected and the binary was built with the matching backend.
+    Active(String),
+    /// Hardware detected but the binary wasn't built with this backend.
+    Found {
+        name: String,
+        rebuild_features: &'static str,
+    },
+    /// No hardware/tooling for this backend found.
+    NotFound(&'static str),
+}
 
+fn print_gpu_check(check: GpuCheck) {
+    match check {
+        GpuCheck::Active(name) => println!("✓ Active ({})", name),
+        GpuCheck::Found {
+            name,
+            rebuild_features,
+        } => println!(
+            "✓ {} found → rebuild with: cargo build --release --features {}",
+            name, rebuild_features
+        ),
+        GpuCheck::NotFound(reason) => println!("- {}", reason),
+    }
+}
+
+/// Check for NVIDIA GPU via GPU detection.
+fn check_gpu_nvidia(compiled: &str) -> GpuCheck {
     #[cfg(feature = "benchmark")]
     {
         // Use shared GPU detection when benchmark feature is available
@@ -231,17 +260,16 @@ fn check_gpu_nvidia(compiled: &str) {
             && gpu.name.starts_with("NVIDIA")
         {
             let name = gpu.name.strip_prefix("NVIDIA ").unwrap_or(&gpu.name);
-            if compiled == "CUDA" {
-                println!("✓ Active ({})", name);
+            return if compiled == "CUDA" {
+                GpuCheck::Active(name.to_string())
             } else {
-                println!(
-                    "✓ {} found → rebuild with: cargo build --release --features cuda",
-                    name
-                );
-            }
-            return;
+                GpuCheck::Found {
+                    name: name.to_string(),
+                    rebuild_features: "cuda",
+                }
+            };
         }
-        println!("- not detected");
+        GpuCheck::NotFound("not detected")
     }
 
     #[cfg(not(feature = "benchmark"))]
@@ -255,51 +283,78 @@ fn check_gpu_nvidia(compiled: &str) {
             Ok(output) if output.status.success() => {
                 let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 if compiled == "CUDA" {
-                    println!("✓ Active ({})", name);
+                    GpuCheck::Active(name)
                 } else {
-                    println!(
-                        "✓ {} found → rebuild with: cargo build --release --features cuda",
-                        name
-                    );
+                    GpuCheck::Found {
+                        name,
+                        rebuild_features: "cuda",
+                    }
                 }
             }
-            _ => println!("- nvidia-smi not found"),
+            _ => GpuCheck::NotFound("nvidia-smi not found"),
         }
     }
 }
 
 /// Check for Vulkan support via `vulkaninfo`.
-fn check_gpu_vulkan(compiled: &str) {
-    print!("  Vulkan:          ");
+fn check_gpu_vulkan(compiled: &str) -> GpuCheck {
     match Command::new("vulkaninfo").arg("--summary").output() {
         Ok(output) if output.status.success() => {
             if compiled == "Vulkan" {
-                println!("✓ Active");
+                GpuCheck::Active("vulkaninfo".to_string())
             } else {
-                println!(
-                    "✓ vulkaninfo found → rebuild with: cargo build --release --features vulkan"
-                );
+                GpuCheck::Found {
+                    name: "vulkaninfo".to_string(),
+                    rebuild_features: "vulkan",
+                }
             }
         }
-        _ => println!("- vulkaninfo not found"),
+        _ => GpuCheck::NotFound("vulkaninfo not found"),
     }
 }
 
 /// Check for AMD GPU via `rocminfo`.
-fn check_gpu_rocm(compiled: &str) {
-    print!("  AMD (ROCm):      ");
+fn check_gpu_rocm(compiled: &str) -> GpuCheck {
     match Command::new("rocminfo").output() {
         Ok(output) if output.status.success() => {
             if compiled == "HipBLAS (AMD)" {
-                println!("✓ Active");
+                GpuCheck::Active("rocminfo".to_string())
             } else {
-                println!(
-                    "✓ rocminfo found → rebuild with: cargo build --release --features hipblas"
-                );
+                GpuCheck::Found {
+                    name: "rocminfo".to_string(),
+                    rebuild_features: "hipblas",
+                }
             }
         }
-        _ => println!("- rocminfo not found"),
+        _ => GpuCheck::NotFound("rocminfo not found"),
     }
+}
+
+/// One-line rebuild suggestion for `voicsh init`, if compiled hardware
+/// support doesn't match what's actually detected on this machine.
+/// Returns `None` when the compiled backend already matches, or no
+/// GPU backend was detected at all — never changes build defaults itself,
+/// per INSTALL.md's "GPU feature gates are untested and unverified" stance.
+pub fn gpu_build_suggestion() -> Option<String> {
+    let compiled = defaults::gpu_backend();
+    for check in [
+        check_gpu_nvidia(compiled),
+        check_gpu_vulkan(compiled),
+        check_gpu_rocm(compiled),
+    ] {
+        if let GpuCheck::Found {
+            name,
+            rebuild_features,
+        } = check
+        {
+            return Some(format!(
+                "{} detected but not compiled in (running on CPU). For GPU acceleration: \
+                 cargo build --release --features {} (untested/unverified — see INSTALL.md)",
+                name, rebuild_features
+            ));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -368,20 +423,39 @@ mod tests {
     }
 
     #[test]
-    fn gpu_nvidia_runs_without_panic() {
-        // Just verify it doesn't panic regardless of whether nvidia-smi exists
-        check_gpu_nvidia("CPU");
+    fn gpu_nvidia_returns_valid_variant() {
+        // Justified exception: outcome is machine-dependent (GPU may or may not be
+        // present). We only assert the function returns a well-formed variant.
+        match check_gpu_nvidia("CPU") {
+            GpuCheck::Active(_) | GpuCheck::Found { .. } | GpuCheck::NotFound(_) => {}
+        }
     }
 
     #[test]
-    fn gpu_vulkan_runs_without_panic() {
-        // GPU detection returns () unconditionally — return type has no observable value in a headless env
-        check_gpu_vulkan("CPU");
+    fn gpu_vulkan_returns_valid_variant() {
+        match check_gpu_vulkan("CPU") {
+            GpuCheck::Active(_) | GpuCheck::Found { .. } | GpuCheck::NotFound(_) => {}
+        }
     }
 
     #[test]
-    fn gpu_rocm_runs_without_panic() {
-        // GPU detection returns () unconditionally — return type has no observable value in a headless env
-        check_gpu_rocm("CPU");
+    fn gpu_rocm_returns_valid_variant() {
+        match check_gpu_rocm("CPU") {
+            GpuCheck::Active(_) | GpuCheck::Found { .. } | GpuCheck::NotFound(_) => {}
+        }
+    }
+
+    #[test]
+    fn gpu_build_suggestion_returns_valid_result() {
+        // Justified exception: machine-dependent (GPU hardware may or may not be
+        // present in CI/test environments). Validate the type is well-formed:
+        // when Some, it must name a --features flag consumers can act on.
+        match gpu_build_suggestion() {
+            None => {}
+            Some(msg) => assert!(
+                msg.contains("--features"),
+                "suggestion should mention a --features flag, got: {msg}"
+            ),
+        }
     }
 }
