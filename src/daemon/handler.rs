@@ -510,20 +510,23 @@ impl DaemonCommandHandler {
         Ok(())
     }
 
-    async fn submit_transcribe_file_job(&self, path: String) -> Result<Arc<JobEntry>, Response> {
+    async fn submit_transcribe_file_job(
+        &self,
+        path: String,
+    ) -> Result<Arc<JobEntry>, Box<Response>> {
         if self.state.is_recording().await {
-            return Err(Response::Error {
+            return Err(Box::new(Response::Error {
                 message: "Cannot transcribe file while recording".to_string(),
-            });
+            }));
         }
 
-        let path = Self::validate_transcribe_file_path(path).map_err(|response| *response)?;
+        let path = Self::validate_transcribe_file_path(path)?;
         let entry = self
             .state
             .jobs
             .submit(path)
             .await
-            .map_err(|message| Response::Error { message })?;
+            .map_err(|message| Box::new(Response::Error { message }))?;
 
         self.spawn_transcription_worker(Arc::clone(&entry));
         Ok(entry)
@@ -632,7 +635,7 @@ impl DaemonCommandHandler {
                     status: job.state,
                 }
             }
-            Err(response) => response,
+            Err(response) => *response,
         }
     }
 

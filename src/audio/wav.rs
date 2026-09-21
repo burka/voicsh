@@ -36,7 +36,9 @@ impl WavAudioSource {
         // Convert to mono if stereo
         let mono_samples = if source_channels == 2 {
             raw_samples
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|chunk| {
                     let left = chunk[0] as i32;
                     let right = chunk[1] as i32;
