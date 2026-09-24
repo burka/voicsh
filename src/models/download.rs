@@ -161,7 +161,11 @@ async fn download_to_path(
 
     // Verify SHA-1 checksum
     if !sha1.is_empty() {
-        let calculated = format!("{:x}", sha1_hasher.finalize());
+        let calculated = sha1_hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         if calculated != sha1 {
             if let Err(e) = fs::remove_file(output_path) {
                 eprintln!("voicsh: failed to remove corrupted download: {e}");
@@ -178,7 +182,11 @@ async fn download_to_path(
 
     // Verify SHA-256 checksum
     if !sha256.is_empty() {
-        let calculated = format!("{:x}", sha256_hasher.finalize());
+        let calculated = sha256_hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         if calculated != sha256 {
             if let Err(e) = fs::remove_file(output_path) {
                 eprintln!("voicsh: failed to remove corrupted download: {e}");
@@ -937,7 +945,11 @@ mod tests {
     fn test_sha1_digest_matches_known_test_vector() {
         let mut hasher = Sha1::new();
         hasher.update(b"abc");
-        let calculated = format!("{:x}", hasher.finalize());
+        let calculated = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         assert_eq!(
             calculated, "a9993e364706816aba3e25717850c26c9cd0d89d",
             "SHA-1(\"abc\") should match the published test vector"
@@ -948,7 +960,11 @@ mod tests {
     fn test_sha256_digest_matches_known_test_vector() {
         let mut hasher = Sha256::new();
         hasher.update(b"abc");
-        let calculated = format!("{:x}", hasher.finalize());
+        let calculated = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         assert_eq!(
             calculated, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
             "SHA-256(\"abc\") should match the published test vector"
@@ -960,11 +976,19 @@ mod tests {
         let mut incremental = Sha1::new();
         incremental.update(b"ab");
         incremental.update(b"c");
-        let incremental_result = format!("{:x}", incremental.finalize());
+        let incremental_result = incremental
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
 
         let mut single = Sha1::new();
         single.update(b"abc");
-        let single_result = format!("{:x}", single.finalize());
+        let single_result = single
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
 
         assert_eq!(
             incremental_result, single_result,
@@ -982,11 +1006,19 @@ mod tests {
         let mut incremental = Sha256::new();
         incremental.update(b"ab");
         incremental.update(b"c");
-        let incremental_result = format!("{:x}", incremental.finalize());
+        let incremental_result = incremental
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
 
         let mut single = Sha256::new();
         single.update(b"abc");
-        let single_result = format!("{:x}", single.finalize());
+        let single_result = single
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
 
         assert_eq!(
             incremental_result, single_result,

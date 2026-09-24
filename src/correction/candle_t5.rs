@@ -62,7 +62,10 @@ fn verify_sha256(path: &std::path::Path, expected: &str) -> Result<()> {
     }
     let bytes = std::fs::read(path)
         .map_err(|e| VoicshError::Other(format!("Read {} for checksum: {e}", path.display())))?;
-    let calculated = format!("{:x}", Sha256::digest(&bytes));
+    let calculated = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
     if calculated != expected {
         if let Err(e) = std::fs::remove_file(path) {
             eprintln!("voicsh: failed to remove corrupted download: {e}");
@@ -369,7 +372,10 @@ mod tests {
 
         let bytes = std::fs::read(&config_path)
             .unwrap_or_else(|e| panic!("read downloaded {}: {e}", config_path.display()));
-        let digest = format!("{:x}", Sha256::digest(&bytes));
+        let digest = Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         assert_eq!(digest, info.sha256_config);
 
         verify_sha256(&config_path, info.sha256_config)
