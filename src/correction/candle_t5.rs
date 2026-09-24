@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use candle_core::{Device, Tensor};
 use candle_transformers::models::quantized_t5::{Config as T5Config, T5ForConditionalGeneration};
 use candle_transformers::quantized_var_builder::VarBuilder;
-use hf_hub::api::sync::Api;
+use hf_hub::{HFClientSync, split_id};
 use tokenizers::Tokenizer;
 
 /// Maximum number of tokens to generate during correction.
@@ -92,28 +92,35 @@ impl CandleT5Corrector {
     /// Downloads model, config, and tokenizer on first call.
     pub fn load(info: &CorrectionModelInfo) -> Result<Self> {
         let device = Device::Cpu;
-        let api = Api::new().map_err(|e| VoicshError::Inference {
-            message: format!("HF Hub API init: {e}"),
+        let client = HFClientSync::new().map_err(|e| VoicshError::Inference {
+            message: format!("HF Hub client init: {e}"),
         })?;
-        let repo = api.model(info.hf_repo.to_string());
+        let (owner, name) = split_id(info.hf_repo);
+        let repo = client.model(owner, name);
 
         // Download / resolve paths
         let model_path = repo
-            .get(info.hf_filename)
+            .download_file()
+            .filename(info.hf_filename)
+            .send()
             .map_err(|e| VoicshError::Inference {
                 message: format!("Download model {}: {e}", info.hf_filename),
             })?;
         verify_sha256(&model_path, info.sha256_model)?;
 
         let config_path = repo
-            .get(info.config_filename)
+            .download_file()
+            .filename(info.config_filename)
+            .send()
             .map_err(|e| VoicshError::Inference {
                 message: format!("Download config {}: {e}", info.config_filename),
             })?;
         verify_sha256(&config_path, info.sha256_config)?;
 
         let tokenizer_path = repo
-            .get(crate::models::correction_catalog::TOKENIZER_FILENAME)
+            .download_file()
+            .filename(crate::models::correction_catalog::TOKENIZER_FILENAME)
+            .send()
             .map_err(|e| VoicshError::Inference {
                 message: format!("Download tokenizer: {e}"),
             })?;
@@ -343,7 +350,7 @@ mod tests {
     }
 
     /// Downloads the real flan-t5-small config.json from HuggingFace via
-    /// `hf_hub::api::sync::Api` and verifies its SHA-256 against the known
+    /// `hf_hub::HFClientSync` and verifies its SHA-256 against the known
     /// value from the correction catalog, exercising the exact download +
     /// checksum path `CandleT5Corrector::load` relies on.
     #[test]
@@ -351,16 +358,17 @@ mod tests {
         let info = crate::models::correction_catalog::get_correction_model("flan-t5-small")
             .expect("flan-t5-small must be in the correction catalog");
 
-        let api = match Api::new() {
-            Ok(api) => api,
+        let client = match HFClientSync::new() {
+            Ok(client) => client,
             Err(e) => {
-                eprintln!("voicsh: skipping hf_hub download test — API init failed: {e}");
+                eprintln!("voicsh: skipping hf_hub download test — client init failed: {e}");
                 return;
             }
         };
-        let repo = api.model(info.hf_repo.to_string());
+        let (owner, name) = split_id(info.hf_repo);
+        let repo = client.model(owner, name);
 
-        let config_path = match repo.get(info.config_filename) {
+        let config_path = match repo.download_file().filename(info.config_filename).send() {
             Ok(path) => path,
             Err(e) => {
                 eprintln!(
