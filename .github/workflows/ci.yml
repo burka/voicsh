@@ -83,6 +83,34 @@ jobs:
         if: failure()
         run: echo "::warning::Full-feature build failed — check cmake/ALSA dependencies"
 
+  check-error-correction:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (error-correction feature)
+        run: cargo clippy --lib --no-default-features --features error-correction -- -D warnings
+
+      - name: Build (error-correction feature)
+        run: cargo build --lib --no-default-features --features error-correction
+
+      - name: Test (error-correction feature)
+        run: cargo test --lib --no-default-features --features error-correction
+
+      - name: Report error-correction status
+        if: failure()
+        run: echo "::warning::error-correction feature build/test failed — check candle/hf-hub deps or network access"
+
   audit:
     runs-on: ubuntu-latest
     steps:

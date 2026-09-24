@@ -338,4 +338,41 @@ mod tests {
         assert_eq!(clean_t5_output(""), None);
         assert_eq!(clean_t5_output("   "), None);
     }
+
+    /// Downloads the real flan-t5-small config.json from HuggingFace via
+    /// `hf_hub::api::sync::Api` and verifies its SHA-256 against the known
+    /// value from the correction catalog, exercising the exact download +
+    /// checksum path `CandleT5Corrector::load` relies on.
+    #[test]
+    fn hf_hub_downloads_and_verifies_known_config_checksum() {
+        let info = crate::models::correction_catalog::get_correction_model("flan-t5-small")
+            .expect("flan-t5-small must be in the correction catalog");
+
+        let api = match Api::new() {
+            Ok(api) => api,
+            Err(e) => {
+                eprintln!("voicsh: skipping hf_hub download test — API init failed: {e}");
+                return;
+            }
+        };
+        let repo = api.model(info.hf_repo.to_string());
+
+        let config_path = match repo.get(info.config_filename) {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!(
+                    "voicsh: skipping hf_hub download test — no network access or download failed: {e}"
+                );
+                return;
+            }
+        };
+
+        let bytes = std::fs::read(&config_path)
+            .unwrap_or_else(|e| panic!("read downloaded {}: {e}", config_path.display()));
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        assert_eq!(digest, info.sha256_config);
+
+        verify_sha256(&config_path, info.sha256_config)
+            .expect("verify_sha256 must accept a matching digest");
+    }
 }
