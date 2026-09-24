@@ -224,7 +224,7 @@ impl CpalAudioSource {
         let buffer = Arc::clone(&self.buffer);
         let counter = Arc::clone(&self.callback_count);
         if let Ok(stream) = self.device.build_input_stream(
-            &preferred_config,
+            preferred_config,
             move |data: &[i16], _: &cpal::InputCallbackInfo| {
                 counter.fetch_add(1, Ordering::Relaxed);
                 if let Ok(mut buf) = buffer.lock() {
@@ -241,14 +241,11 @@ impl CpalAudioSource {
         let buffer = Arc::clone(&self.buffer);
         let counter = Arc::clone(&self.callback_count);
         if let Ok(stream) = self.device.build_input_stream(
-            &preferred_config,
+            preferred_config,
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
                 counter.fetch_add(1, Ordering::Relaxed);
                 if let Ok(mut buf) = buffer.lock() {
-                    buf.extend(
-                        data.iter()
-                            .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16),
-                    );
+                    buf.extend_from_slice(&samples_to_i16(data));
                 }
             },
             err_callback,
@@ -263,10 +260,10 @@ impl CpalAudioSource {
     }
 
     /// Build a stream using the device's default/native config, with software
-    /// channel mixing (stereo→mono) and resampling (native rate→16kHz).
+    /// sample conversion to i16, channel mixing (stereo→mono) and resampling
+    /// (native rate→16kHz).
     fn build_stream_native(&self) -> Result<cpal::Stream> {
         use cpal::SampleFormat;
-        use std::sync::atomic::Ordering;
 
         let default_config =
             self.device
@@ -275,75 +272,27 @@ impl CpalAudioSource {
                     message: format!("Failed to query default input config: {}", e),
                 })?;
 
-        let native_rate = default_config.sample_rate();
-        let native_channels = default_config.channels() as usize;
-        let target_rate = self.sample_rate;
-
-        let stream_config: cpal::StreamConfig = default_config.clone().into();
-
         eprintln!(
             "voicsh: using native audio format ({}ch/{}Hz/{:?}), converting in software",
-            native_channels,
-            native_rate,
+            default_config.channels(),
+            default_config.sample_rate(),
             default_config.sample_format(),
         );
 
-        let err_callback = |err| {
-            eprintln!("Audio stream error: {}", err);
-        };
-
-        let buffer = Arc::clone(&self.buffer);
-        let counter = Arc::clone(&self.callback_count);
-
+        let config = default_config.config();
         match default_config.sample_format() {
-            SampleFormat::I16 => self
-                .device
-                .build_input_stream(
-                    &stream_config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        counter.fetch_add(1, Ordering::Relaxed);
-                        let converted = convert_to_mono_16khz_i16(
-                            data,
-                            native_channels,
-                            native_rate,
-                            target_rate,
-                        );
-                        if let Ok(mut buf) = buffer.lock() {
-                            buf.extend_from_slice(&converted);
-                        }
-                    },
-                    err_callback,
-                    None,
-                )
-                .map_err(|e| VoicshError::AudioCapture {
-                    message: format!("Failed to build native i16 stream: {}", e),
-                }),
-            SampleFormat::F32 => self
-                .device
-                .build_input_stream(
-                    &stream_config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        counter.fetch_add(1, Ordering::Relaxed);
-                        let i16_data: Vec<i16> = data
-                            .iter()
-                            .map(|&s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
-                            .collect();
-                        let converted = convert_to_mono_16khz_i16(
-                            &i16_data,
-                            native_channels,
-                            native_rate,
-                            target_rate,
-                        );
-                        if let Ok(mut buf) = buffer.lock() {
-                            buf.extend_from_slice(&converted);
-                        }
-                    },
-                    err_callback,
-                    None,
-                )
-                .map_err(|e| VoicshError::AudioCapture {
-                    message: format!("Failed to build native f32 stream: {}", e),
-                }),
+            SampleFormat::I8 => self.build_native_input::<i8>(config),
+            SampleFormat::I16 => self.build_native_input::<i16>(config),
+            SampleFormat::I24 => self.build_native_input::<cpal::I24>(config),
+            SampleFormat::I32 => self.build_native_input::<i32>(config),
+            SampleFormat::I64 => self.build_native_input::<i64>(config),
+            SampleFormat::U8 => self.build_native_input::<u8>(config),
+            SampleFormat::U16 => self.build_native_input::<u16>(config),
+            SampleFormat::U24 => self.build_native_input::<cpal::U24>(config),
+            SampleFormat::U32 => self.build_native_input::<u32>(config),
+            SampleFormat::U64 => self.build_native_input::<u64>(config),
+            SampleFormat::F32 => self.build_native_input::<f32>(config),
+            SampleFormat::F64 => self.build_native_input::<f64>(config),
             fmt => Err(VoicshError::AudioCapture {
                 message: format!(
                     "Unsupported native sample format: {:?}. \
@@ -353,6 +302,50 @@ impl CpalAudioSource {
             }),
         }
     }
+
+    fn build_native_input<T>(&self, config: cpal::StreamConfig) -> Result<cpal::Stream>
+    where
+        T: cpal::SizedSample,
+        i16: cpal::FromSample<T>,
+    {
+        use std::sync::atomic::Ordering;
+
+        let native_channels = config.channels as usize;
+        let native_rate = config.sample_rate;
+        let target_rate = self.sample_rate;
+        let buffer = Arc::clone(&self.buffer);
+        let counter = Arc::clone(&self.callback_count);
+
+        self.device
+            .build_input_stream(
+                config,
+                move |data: &[T], _: &cpal::InputCallbackInfo| {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    let converted = convert_to_mono_16khz_i16(
+                        &samples_to_i16(data),
+                        native_channels,
+                        native_rate,
+                        target_rate,
+                    );
+                    if let Ok(mut buf) = buffer.lock() {
+                        buf.extend_from_slice(&converted);
+                    }
+                },
+                |err| eprintln!("Audio stream error: {}", err),
+                None,
+            )
+            .map_err(|e| VoicshError::AudioCapture {
+                message: format!("Failed to build native {:?} stream: {}", T::FORMAT, e),
+            })
+    }
+}
+
+fn samples_to_i16<T>(samples: &[T]) -> Vec<i16>
+where
+    T: cpal::Sample,
+    i16: cpal::FromSample<T>,
+{
+    samples.iter().map(|&s| s.to_sample::<i16>()).collect()
 }
 
 /// Mix multi-channel audio to mono and resample to the target rate.
@@ -655,7 +648,7 @@ mod tests {
 
         let build_result = match default_config.sample_format() {
             cpal::SampleFormat::I16 => device.build_input_stream(
-                &stream_config,
+                stream_config,
                 move |_data: &[i16], _: &cpal::InputCallbackInfo| {
                     received_cb.store(true, std::sync::atomic::Ordering::Relaxed);
                 },
@@ -666,7 +659,7 @@ mod tests {
                 None,
             ),
             cpal::SampleFormat::F32 => device.build_input_stream(
-                &stream_config,
+                stream_config,
                 move |_data: &[f32], _: &cpal::InputCallbackInfo| {
                     received_cb.store(true, std::sync::atomic::Ordering::Relaxed);
                 },
@@ -706,6 +699,70 @@ mod tests {
 
         stream.pause().expect("Failed to stop real cpal stream");
         drop(stream);
+    }
+
+    #[test]
+    fn test_samples_to_i16_narrows_every_pcm_width() {
+        assert_eq!(
+            samples_to_i16(&[i32::MAX, i32::MIN, 1 << 16, -(1 << 16), 0]),
+            vec![i16::MAX, i16::MIN, 1, -1, 0]
+        );
+        assert_eq!(
+            samples_to_i16(&[
+                cpal::I24::new(8_388_607).unwrap(),
+                cpal::I24::new(-8_388_608).unwrap(),
+                cpal::I24::new(256).unwrap(),
+            ]),
+            vec![i16::MAX, i16::MIN, 1]
+        );
+        assert_eq!(
+            samples_to_i16(&[1.0f32, -1.0, 0.5, 2.0, -2.0]),
+            vec![i16::MAX, i16::MIN, 16_384, i16::MAX, i16::MIN]
+        );
+        assert_eq!(samples_to_i16(&[0.25f64]), vec![8_192]);
+        assert_eq!(
+            samples_to_i16(&[u16::MAX, 32_768u16, 0]),
+            vec![i16::MAX, 0, i16::MIN]
+        );
+        assert_eq!(samples_to_i16(&[-5i16, 7]), vec![-5, 7]);
+    }
+
+    /// Raw ALSA `hw:` devices (e.g. Realtek ALC897) default to I32, and cpal
+    /// 0.18 ranks I32/I24 above I16, so the native fallback must accept every
+    /// PCM format a device reports as its default.
+    #[test]
+    #[ignore] // Requires audio hardware
+    fn test_native_stream_builds_for_every_device_default_format() {
+        let devices = cpal::default_host()
+            .input_devices()
+            .expect("Failed to enumerate input devices");
+
+        let mut opened_formats = Vec::new();
+        for device in devices {
+            let Ok(format) = device.default_input_config().map(|c| c.sample_format()) else {
+                continue; // plugin/virtual devices that cannot be opened for capture
+            };
+            let source = CpalAudioSource {
+                device,
+                stream: Arc::new(Mutex::new(None)),
+                buffer: Arc::new(Mutex::new(Vec::new())),
+                callback_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                sample_rate: defaults::SAMPLE_RATE,
+            };
+            match source.build_stream_native() {
+                Ok(_) => opened_formats.push(format),
+                Err(VoicshError::AudioCapture { message }) => assert!(
+                    !message.contains("Unsupported native sample format"),
+                    "{format:?} must be supported: {message}"
+                ),
+                Err(other) => panic!("Unexpected error for {format:?}: {other}"),
+            }
+        }
+        assert!(
+            !opened_formats.is_empty(),
+            "Expected at least one native stream to open"
+        );
+        println!("Opened native streams with formats: {opened_formats:?}");
     }
 
     #[test]
