@@ -612,6 +612,102 @@ mod tests {
         }
     }
 
+    /// Opens a real (non-mocked) cpal input stream against whatever hardware
+    /// is available, to catch cpal API/behavior changes (e.g. the 0.17->0.18
+    /// bump) that mocked `AudioSource` tests can't see.
+    ///
+    /// Unlike the hardware tests above, this does NOT use `#[ignore]`: it
+    /// self-skips gracefully when no input device is present, mirroring the
+    /// `find_model()` skip idiom in `tests/backend_transcription.rs`.
+    #[test]
+    fn test_real_cpal_stream_opens_and_plays() {
+        let Ok(device) = get_best_default_device() else {
+            eprintln!(
+                "voicsh: no audio input device available in this environment — skipping test_real_cpal_stream_opens_and_plays"
+            );
+            return;
+        };
+
+        let Ok(default_config) = device.default_input_config() else {
+            eprintln!(
+                "voicsh: input device present but has no default input config — skipping test_real_cpal_stream_opens_and_plays"
+            );
+            return;
+        };
+
+        let expected_channels = default_config.channels();
+        let expected_sample_rate = default_config.sample_rate();
+        let stream_config: cpal::StreamConfig = default_config.clone().into();
+
+        assert_eq!(
+            stream_config.channels, expected_channels,
+            "StreamConfig channel count must match the device's default input config"
+        );
+        assert_eq!(
+            stream_config.sample_rate, expected_sample_rate,
+            "StreamConfig sample rate must match the device's default input config"
+        );
+
+        let received = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let received_cb = Arc::clone(&received);
+        let err_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let err_flag_cb = Arc::clone(&err_flag);
+
+        let build_result = match default_config.sample_format() {
+            cpal::SampleFormat::I16 => device.build_input_stream(
+                &stream_config,
+                move |_data: &[i16], _: &cpal::InputCallbackInfo| {
+                    received_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                },
+                move |err| {
+                    eprintln!("Audio stream error: {}", err);
+                    err_flag_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                },
+                None,
+            ),
+            cpal::SampleFormat::F32 => device.build_input_stream(
+                &stream_config,
+                move |_data: &[f32], _: &cpal::InputCallbackInfo| {
+                    received_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                },
+                move |err| {
+                    eprintln!("Audio stream error: {}", err);
+                    err_flag_cb.store(true, std::sync::atomic::Ordering::Relaxed);
+                },
+                None,
+            ),
+            fmt => {
+                eprintln!(
+                    "voicsh: unsupported native sample format {:?} — skipping test_real_cpal_stream_opens_and_plays",
+                    fmt
+                );
+                return;
+            }
+        };
+
+        let stream = match build_result {
+            Ok(stream) => stream,
+            Err(e) => {
+                eprintln!(
+                    "voicsh: failed to build input stream ({e}) — skipping test_real_cpal_stream_opens_and_plays"
+                );
+                return;
+            }
+        };
+
+        stream.play().expect("Failed to start real cpal stream");
+
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        assert!(
+            !err_flag.load(std::sync::atomic::Ordering::Relaxed),
+            "cpal stream reported an error callback during playback"
+        );
+
+        stream.pause().expect("Failed to stop real cpal stream");
+        drop(stream);
+    }
+
     #[test]
     #[ignore] // Requires audio hardware
     fn test_can_be_used_as_trait_object() {
