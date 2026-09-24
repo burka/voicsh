@@ -930,4 +930,104 @@ mod tests {
             "list_installed_models should always return sorted results"
         );
     }
+
+    // ── Digest tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_sha1_digest_matches_known_test_vector() {
+        let mut hasher = Sha1::new();
+        hasher.update(b"abc");
+        let calculated = format!("{:x}", hasher.finalize());
+        assert_eq!(
+            calculated, "a9993e364706816aba3e25717850c26c9cd0d89d",
+            "SHA-1(\"abc\") should match the published test vector"
+        );
+    }
+
+    #[test]
+    fn test_sha256_digest_matches_known_test_vector() {
+        let mut hasher = Sha256::new();
+        hasher.update(b"abc");
+        let calculated = format!("{:x}", hasher.finalize());
+        assert_eq!(
+            calculated, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "SHA-256(\"abc\") should match the published test vector"
+        );
+    }
+
+    #[test]
+    fn test_sha1_digest_updates_incrementally_matches_single_update() {
+        let mut incremental = Sha1::new();
+        incremental.update(b"ab");
+        incremental.update(b"c");
+        let incremental_result = format!("{:x}", incremental.finalize());
+
+        let mut single = Sha1::new();
+        single.update(b"abc");
+        let single_result = format!("{:x}", single.finalize());
+
+        assert_eq!(
+            incremental_result, single_result,
+            "Chunked updates (matching the streaming download pattern) should \
+             produce the same digest as a single update"
+        );
+        assert_eq!(
+            incremental_result, "a9993e364706816aba3e25717850c26c9cd0d89d",
+            "Incremental digest should still match the known test vector"
+        );
+    }
+
+    #[test]
+    fn test_sha256_digest_updates_incrementally_matches_single_update() {
+        let mut incremental = Sha256::new();
+        incremental.update(b"ab");
+        incremental.update(b"c");
+        let incremental_result = format!("{:x}", incremental.finalize());
+
+        let mut single = Sha256::new();
+        single.update(b"abc");
+        let single_result = format!("{:x}", single.finalize());
+
+        assert_eq!(
+            incremental_result, single_result,
+            "Chunked updates (matching the streaming download pattern) should \
+             produce the same digest as a single update"
+        );
+        assert_eq!(
+            incremental_result, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "Incremental digest should still match the known test vector"
+        );
+    }
+
+    // ── dirs tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_dirs_cache_dir_has_expected_structure_when_present() {
+        let Some(cache_dir) = dirs::cache_dir() else {
+            // No cache dir in this environment (e.g. $HOME/$XDG_CACHE_HOME unset).
+            // models_dir()/dictionaries_dir() fall back to ".cache" in that case,
+            // which is covered by the other tests; nothing to assert here.
+            return;
+        };
+
+        assert!(
+            cache_dir.is_absolute(),
+            "dirs::cache_dir() should be an absolute path, got: {}",
+            cache_dir.display()
+        );
+
+        let voicsh_models = cache_dir.join("voicsh").join("models");
+        assert_eq!(
+            voicsh_models,
+            models_dir(),
+            "models_dir() should join 'voicsh/models' onto dirs::cache_dir()"
+        );
+
+        let voicsh_dictionaries = cache_dir.join("voicsh").join("dictionaries");
+        assert_eq!(
+            voicsh_dictionaries,
+            dictionaries_dir(),
+            "dictionaries_dir() should join 'voicsh/dictionaries' onto dirs::cache_dir()"
+        );
+    }
 }
