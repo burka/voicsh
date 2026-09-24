@@ -51,7 +51,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 clap_complete = { version = "4", optional = true }
 
 # Paths
-dirs = { version = "6", optional = true }
+dirs = { version = "7", optional = true }
 
 # System
 libc = "0.2"
