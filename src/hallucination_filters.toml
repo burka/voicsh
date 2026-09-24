@@ -27,7 +27,7 @@ phrases = [
     "Pfff",
     "Meow",
 ]
-suspect_phrases = ["okay", "oh", "yeah", "yes", "no", "alright", "all right", "right", "sure", "so", "well", "hey", "hi", "wow", "huh", "uh", "oop", "oops", "ah", "good", "sorry", "thanks", "exactly", "peace", "four", "what", "fine"]
+suspect_phrases = ["okay", "oh", "yeah", "yes", "no", "alright", "all right", "right", "sure", "so", "well", "hey", "hi", "wow", "huh", "uh", "oop", "oops", "ah", "good", "sorry", "thanks", "exactly", "peace", "four", "what", "let's go", "fine"]
 
 [de]
 phrases = [
@@ -115,7 +115,7 @@ phrases = [
     "お疲れ様でした",
     "見てくれてありがとう",
 ]
-suspect_phrases = ["はい", "いいえ", "うん", "ええ", "ああ", "そう", "ね"]
+suspect_phrases = ["はい", "いいえ", "うん", "ええ", "ああ", "そう", "ね", "おーっ", "またね"]
 
 [zh]
 phrases = [
