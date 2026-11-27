@@ -69,6 +69,27 @@ sudo apt install libopenblas-dev
 
 The build script runs preflight checks and will panic with specific guidance before compilation starts. If you need to bypass the check: `export CLANG_PATH=/usr/bin/clang-20`.
 
+### Parakeet / Nemotron backend
+
+The optional `parakeet` feature adds NVIDIA Parakeet TDT v3 and Nemotron 3.5 ASR. They run as int8 ONNX models on the CPU through [parakeet-rs](https://crates.io/crates/parakeet-rs) and ONNX Runtime (`src/stt/parakeet.rs`). The catalog's `ModelBackend` decides which engine loads a model (`src/stt/loader.rs`). Whisper stays the default.
+
+```bash
+cargo build --features parakeet
+voicsh models install parakeet-tdt-0.6b-v3-int8   # or nemotron-3.5-asr-0.6b-int8
+voicsh config set stt.model parakeet-tdt-0.6b-v3-int8
+```
+
+- **ONNX Runtime binaries:** by default, `ort-sys` downloads a prebuilt static ONNX Runtime from `cdn.pyke.io` at build time and caches it in `~/.cache/ort.pyke.io`. For offline builds, set `ORT_LIB_PATH` to a local ONNX Runtime build. `ORT_SKIP_DOWNLOAD=1` makes a missing library fail instead of fetching it.
+- **Models and licenses:**
+
+  | Model | Source | License |
+  |-------|--------|---------|
+  | `parakeet-tdt-0.6b-v3-int8` | `istupakov/parakeet-tdt-0.6b-v3-onnx` (int8 export of `nvidia/parakeet-tdt-0.6b-v3`) | CC-BY-4.0 |
+  | `nemotron-3.5-asr-0.6b-int8` | `smcleod/nemotron-3.5-asr-streaming-0.6b-int8` (community int8 quant) | OpenMDW-1.1 |
+
+- **Language:** Parakeet TDT detects the language itself, ignores `stt.language`, and reports no language and a fixed confidence of 1.0. Nemotron accepts `auto` or a language code and reports the language tag it emits, along with token confidences.
+- **Real-model tests** are `#[ignore]`d. Install both models, then run `cargo test --lib --features parakeet stt::parakeet -- --ignored`.
+
 ## Local Install
 
 ```bash
