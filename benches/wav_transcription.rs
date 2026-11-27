@@ -4,7 +4,7 @@ use std::hint::black_box;
 use std::io::BufReader;
 use std::time::Duration;
 use voicsh::audio::wav::WavAudioSource;
-use voicsh::models::catalog::MODELS;
+use voicsh::models::catalog::{MODELS, ModelBackend};
 use voicsh::models::download::model_path;
 use voicsh::stt::transcriber::Transcriber;
 use voicsh::stt::whisper::{WhisperConfig, WhisperTranscriber};
@@ -38,7 +38,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     group.sample_size(10); // Reduce sample size due to long transcription times
     group.measurement_time(Duration::from_secs(60)); // Allow up to 60s per benchmark
 
-    for model in MODELS.iter() {
+    for model in MODELS.iter().filter(|m| m.backend == ModelBackend::Whisper) {
         if !model_path(model.name).exists() {
             eprintln!("Skipping {}: not installed", model.name);
             continue;
