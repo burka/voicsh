@@ -1,0 +1,9 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.15.0+cpu
+nemo_toolkit[asr]==3.0.0
+onnx==1.23.2
+onnxruntime==1.32.0
+onnxscript==0.7.2
+safetensors==0.8.0
+soundfile==0.14.0
+jiwer==4.0.0

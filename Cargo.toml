@@ -24,6 +24,7 @@ exclude = [
     "scripts/",
     "test-containers/",
     "tests/",
+    "tools/",
 ]
 
 [dependencies]
