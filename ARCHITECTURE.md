@@ -3,7 +3,7 @@ title: Architecture
 weight: 3
 ---
 
-Wayland-only voice typing: audio capture → VAD → chunking → Whisper transcription → text injection.
+Wayland-only voice typing: audio capture → VAD → chunking → transcription (Whisper; optionally Parakeet/Nemotron) → text injection.
 
 ## Design Principles
 
@@ -76,10 +76,12 @@ src/
 ├── stt/
 │   ├── transcriber.rs      # Transcriber trait + MockTranscriber
 │   ├── whisper.rs          # WhisperTranscriber (feature: whisper)
+│   ├── parakeet.rs         # ParakeetTranscriber: Parakeet TDT / Nemotron on ONNX Runtime (feature: parakeet)
+│   ├── loader.rs           # open_transcriber: picks the backend from the catalog entry
 │   └── fan_out.rs          # Parallel model comparison (--fan-out)
 ├── models/
-│   ├── catalog.rs          # Model metadata, English/multilingual variants
-│   └── download.rs         # HuggingFace download with SHA-1 verification (feature: model-download)
+│   ├── catalog.rs          # Model metadata, backend (whisper / ONNX snapshot), English/multilingual variants
+│   └── download.rs         # HuggingFace download: ggml files and multi-file snapshot dirs, SHA verification (feature: model-download)
 └── ipc/
     ├── protocol.rs         # JSON command/response types
     └── server.rs           # Unix socket IPC server
@@ -94,6 +96,7 @@ cuda    = ["whisper-rs/cuda"]       # NVIDIA GPU
 vulkan  = ["whisper-rs/vulkan"]     # Cross-platform GPU
 hipblas = ["whisper-rs/hipblas"]    # AMD GPU
 openblas = ["whisper-rs/openblas"]  # CPU BLAS
+parakeet = ["dep:parakeet-rs", "dep:ort"]  # Parakeet TDT / Nemotron (ONNX Runtime, CPU)
 ```
 
 Use `--no-default-features` for fast lib-only builds (skips whisper-rs compilation).

@@ -246,8 +246,12 @@ async fn collect_all_candidates(
     let mut seen = HashSet::new();
     let mut candidates = Vec::new();
 
-    // Catalog models first (have verified SHA-1 checksums)
-    for m in catalog::list_models() {
+    // Catalog models first (have verified SHA-1 checksums). Only whisper
+    // models: the RTF estimate extrapolates from a whisper probe run.
+    let whisper_models = catalog::list_models()
+        .iter()
+        .filter(|m| m.backend == catalog::ModelBackend::Whisper);
+    for m in whisper_models {
         if seen.insert(m.name.to_string()) {
             candidates.push(ModelCandidate {
                 name: m.name.to_string(),

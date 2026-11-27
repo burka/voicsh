@@ -48,6 +48,21 @@ impl IdleTracker {
         self.clock.now().duration_since(last) >= threshold
     }
 
+    /// Drops the model held in `slot` if the idle threshold has been reached.
+    ///
+    /// Returns `true` only if a loaded model was dropped. Idleness is checked
+    /// again after acquiring the lock: a concurrent transcription may have
+    /// called [`mark_used`](Self::mark_used) between the lock-free fast-path
+    /// check and the lock (TOCTOU window).
+    #[allow(clippy::unwrap_used)] // Mutex poisoning means the owning thread already panicked; propagate.
+    pub fn unload_if_idle<T>(&self, slot: &Mutex<Option<T>>) -> bool {
+        if !self.is_idle() {
+            return false;
+        }
+        let mut guard = slot.lock().unwrap();
+        self.is_idle() && guard.take().is_some()
+    }
+
     /// Returns the configured idle threshold, or `None` if idle unloading is
     /// disabled.
     pub fn threshold(&self) -> Option<Duration> {
@@ -62,6 +77,54 @@ mod tests {
 
     fn make_tracker(threshold: Option<Duration>, clock: Arc<MockClock>) -> IdleTracker {
         IdleTracker::new(threshold, clock as Arc<dyn Clock>)
+    }
+
+    #[test]
+    fn unload_if_idle_drops_loaded_model_after_threshold() {
+        let clock = Arc::new(MockClock::new());
+        let tracker = make_tracker(Some(Duration::from_secs(5)), Arc::clone(&clock));
+        let slot = Mutex::new(Some("model"));
+
+        clock.advance(Duration::from_secs(6));
+
+        assert_eq!(tracker.unload_if_idle(&slot), true);
+        assert_eq!(*slot.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn unload_if_idle_keeps_model_before_threshold() {
+        let clock = Arc::new(MockClock::new());
+        let tracker = make_tracker(Some(Duration::from_secs(5)), Arc::clone(&clock));
+        let slot = Mutex::new(Some("model"));
+
+        clock.advance(Duration::from_secs(4));
+
+        assert_eq!(tracker.unload_if_idle(&slot), false);
+        assert_eq!(*slot.lock().unwrap(), Some("model"));
+    }
+
+    #[test]
+    fn unload_if_idle_on_empty_slot_reports_nothing_unloaded() {
+        let clock = Arc::new(MockClock::new());
+        let tracker = make_tracker(Some(Duration::from_secs(5)), Arc::clone(&clock));
+        let slot: Mutex<Option<&str>> = Mutex::new(None);
+
+        clock.advance(Duration::from_secs(6));
+
+        assert_eq!(tracker.unload_if_idle(&slot), false);
+        assert_eq!(*slot.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn unload_if_idle_without_threshold_never_unloads() {
+        let clock = Arc::new(MockClock::new());
+        let tracker = make_tracker(None, Arc::clone(&clock));
+        let slot = Mutex::new(Some("model"));
+
+        clock.advance(Duration::from_secs(3600));
+
+        assert_eq!(tracker.unload_if_idle(&slot), false);
+        assert_eq!(*slot.lock().unwrap(), Some("model"));
     }
 
     #[test]

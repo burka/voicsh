@@ -1,10 +1,12 @@
 //! Model download and installation management.
 //!
-//! Handles downloading Whisper models from HuggingFace, verifying their integrity,
-//! and storing them in the user's cache directory.
+//! Handles downloading catalog models from HuggingFace, verifying their integrity,
+//! and storing them in the user's cache directory: Whisper models as one
+//! `ggml-{name}.bin` file, snapshot models (Parakeet TDT, Nemotron) as a
+//! `{name}/` directory.
 
 use crate::error::{Result, VoicshError};
-use crate::models::catalog::{ModelInfo, get_model};
+use crate::models::catalog::{HfSnapshot, ModelInfo, get_model};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use sha1::{Digest, Sha1};
@@ -61,14 +63,17 @@ pub fn is_dictionary_installed(lang: &str) -> bool {
     dictionary_path(lang).exists()
 }
 
-/// Get the full path for a model file.
+/// Get the full path for a model: `ggml-{name}.bin` for Whisper and non-catalog
+/// names, `{name}/` for snapshot models (Parakeet TDT, Nemotron).
 ///
 /// Always returns a path regardless of whether the model is in the catalog.
-/// The file may or may not exist on disk.
+/// The path may or may not exist on disk.
 pub fn model_path(name: &str) -> PathBuf {
     let resolved = crate::models::catalog::resolve_name(name);
-    let filename = format!("ggml-{resolved}.bin");
-    models_dir().join(filename)
+    match get_model(resolved).and_then(ModelInfo::snapshot) {
+        Some(_) => models_dir().join(resolved),
+        None => models_dir().join(format!("ggml-{resolved}.bin")),
+    }
 }
 
 /// Check if a model is installed.
@@ -201,14 +206,62 @@ async fn download_to_path(
         }
     }
 
-    if progress {
-        eprintln!("Model installed to: {}", output_path.display());
-    }
-
     Ok(())
 }
 
-/// Download a Whisper model.
+/// Staging directory for a snapshot download: `.{name}.partial` next to `model_dir`.
+fn snapshot_staging_dir(model_dir: &Path) -> PathBuf {
+    let name = model_dir
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    model_dir.with_file_name(format!(".{name}.partial"))
+}
+
+/// Download every file of `snapshot` into `model_dir`.
+///
+/// Files land in a staging directory first and are moved into place with a
+/// single rename, so `model_dir` only exists once every file is verified.
+async fn download_snapshot(
+    name: &str,
+    snapshot: &HfSnapshot,
+    model_dir: &Path,
+    progress: bool,
+) -> Result<()> {
+    let staging = snapshot_staging_dir(model_dir);
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|e| VoicshError::ModelDownload {
+            message: format!(
+                "Failed to clear leftover partial download {}: {e}\n\
+                 Delete it manually and retry.",
+                staging.display()
+            ),
+        })?;
+    }
+
+    for file in snapshot.files {
+        download_to_path(
+            &format!("{name}/{}", file.name),
+            &snapshot.file_url(file.name),
+            "", // snapshot files are pinned by SHA-256 only
+            file.sha256,
+            file.size_mb,
+            &staging.join(file.name),
+            progress,
+        )
+        .await?;
+    }
+
+    fs::rename(&staging, model_dir).map_err(|e| VoicshError::ModelDownload {
+        message: format!(
+            "Failed to move {} to {}: {e}",
+            staging.display(),
+            model_dir.display()
+        ),
+    })
+}
+
+/// Download a catalog model (Whisper file or snapshot directory).
 ///
 /// Only downloads models that are in the static catalog. Models not in the
 /// catalog are rejected to prevent unverified downloads.
@@ -250,16 +303,24 @@ pub async fn download_model(name: &str, progress: bool) -> Result<PathBuf> {
         }
     })?;
 
-    download_to_path(
-        name,
-        &info.url(),
-        info.sha1,
-        info.sha256,
-        info.size_mb,
-        &path,
-        progress,
-    )
-    .await?;
+    match info.snapshot() {
+        Some(snapshot) => download_snapshot(name, snapshot, &path, progress).await?,
+        None => {
+            download_to_path(
+                name,
+                &info.url(),
+                info.sha1,
+                info.sha256,
+                info.size_mb,
+                &path,
+                progress,
+            )
+            .await?
+        }
+    }
+    if progress {
+        eprintln!("Model installed to: {}", path.display());
+    }
     Ok(path)
 }
 
@@ -305,6 +366,9 @@ pub async fn download_dictionary(lang: &str, progress: bool) -> Result<PathBuf> 
         progress,
     )
     .await?;
+    if progress {
+        eprintln!("Dictionary installed to: {}", path.display());
+    }
 
     Ok(path)
 }
@@ -335,11 +399,18 @@ pub fn find_any_installed_model() -> Option<String> {
 
 /// List all installed model names by scanning the models directory.
 ///
-/// Discovers every `ggml-*.bin` file, not just catalog models.
-/// Returns model names (with the `ggml-` prefix and `.bin` suffix stripped).
+/// See [`installed_models_in`].
 pub fn list_installed_models() -> Vec<String> {
-    let dir = models_dir();
-    let entries = match fs::read_dir(&dir) {
+    installed_models_in(&models_dir())
+}
+
+/// List installed model names in `dir`, sorted.
+///
+/// Discovers every `ggml-*.bin` file, not just catalog models (names are
+/// returned with the `ggml-` prefix and `.bin` suffix stripped), plus every
+/// catalog snapshot model whose `{name}/` directory exists.
+fn installed_models_in(dir: &Path) -> Vec<String> {
+    let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(_) => return Vec::new(),
     };
@@ -357,6 +428,13 @@ pub fn list_installed_models() -> Vec<String> {
             }
         })
         .collect();
+
+    names.extend(
+        crate::models::catalog::list_models()
+            .iter()
+            .filter(|m| m.snapshot().is_some() && dir.join(m.name).is_dir())
+            .map(|m| m.name.to_string()),
+    );
 
     names.sort();
     names
@@ -459,10 +537,55 @@ mod tests {
         assert!(formatted.contains("installed"));
     }
 
+    fn whisper_models() -> impl Iterator<Item = &'static ModelInfo> {
+        crate::models::catalog::list_models()
+            .iter()
+            .filter(|m| m.snapshot().is_none())
+    }
+
+    #[test]
+    fn test_model_path_for_snapshot_model_is_named_directory() {
+        for name in ["parakeet-tdt-0.6b-v3", "nemotron-3.5-asr-0.6b"] {
+            assert_eq!(model_path(name), models_dir().join(name));
+        }
+    }
+
+    #[test]
+    fn test_snapshot_staging_dir_is_hidden_sibling() {
+        let model_dir = Path::new("/cache/models/parakeet-tdt-0.6b-v3");
+        assert_eq!(
+            snapshot_staging_dir(model_dir),
+            Path::new("/cache/models/.parakeet-tdt-0.6b-v3.partial")
+        );
+    }
+
+    #[test]
+    fn test_installed_models_in_lists_complete_snapshot_directories() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::write(temp_dir.path().join("ggml-base.bin"), b"mock").unwrap();
+        std::fs::create_dir(temp_dir.path().join("parakeet-tdt-0.6b-v3")).unwrap();
+        // An interrupted download leaves only the staging directory behind.
+        std::fs::create_dir(temp_dir.path().join(".nemotron-3.5-asr-0.6b.partial")).unwrap();
+        // Directories that are not catalog snapshot models are ignored.
+        std::fs::create_dir(temp_dir.path().join("my-notes")).unwrap();
+
+        assert_eq!(
+            installed_models_in(temp_dir.path()),
+            ["base", "parakeet-tdt-0.6b-v3"]
+        );
+    }
+
+    #[test]
+    fn test_installed_models_in_ignores_file_named_like_snapshot_model() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::write(temp_dir.path().join("nemotron-3.5-asr-0.6b"), b"x").unwrap();
+
+        assert_eq!(installed_models_in(temp_dir.path()), Vec::<String>::new());
+    }
+
     #[test]
     fn test_model_path_filename_format() {
-        let models = crate::models::catalog::list_models();
-        for model in models {
+        for model in whisper_models() {
             let path = model_path(model.name);
             let filename = path.file_name().unwrap().to_string_lossy();
             assert!(
@@ -514,11 +637,14 @@ mod tests {
             installed, sorted,
             "list_installed_models should return sorted names"
         );
-        // Every returned name should correspond to an existing file.
+        // Every returned name should correspond to an existing file or snapshot directory.
         // Note: we check the literal filename here, not model_path() which may resolve aliases.
         let dir = models_dir();
         for name in &installed {
-            let literal_path = dir.join(format!("ggml-{}.bin", name));
+            let literal_path = match get_model(name).and_then(ModelInfo::snapshot) {
+                Some(_) => dir.join(name),
+                None => dir.join(format!("ggml-{}.bin", name)),
+            };
             assert!(
                 literal_path.exists(),
                 "Listed model '{}' should exist on disk at {}",
@@ -545,22 +671,7 @@ mod tests {
         let subdir = temp_dir.path().join("ggml-subdir.bin");
         std::fs::create_dir(&subdir).unwrap();
 
-        let entries = std::fs::read_dir(temp_dir.path()).unwrap();
-        let mut found_names: Vec<String> = entries
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let name = entry.file_name();
-                let name = name.to_str()?;
-                let model = name.strip_prefix("ggml-")?.strip_suffix(".bin")?;
-                if entry.path().is_file() {
-                    Some(model.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        found_names.sort();
+        let found_names = installed_models_in(temp_dir.path());
         let mut expected = models.to_vec();
         expected.sort();
 
@@ -574,20 +685,7 @@ mod tests {
     fn test_list_installed_models_with_empty_directory() {
         let temp_dir = tempfile::tempdir().unwrap();
 
-        let entries = std::fs::read_dir(temp_dir.path()).unwrap();
-        let found: Vec<String> = entries
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let name = entry.file_name();
-                let name = name.to_str()?;
-                let model = name.strip_prefix("ggml-")?.strip_suffix(".bin")?;
-                if entry.path().is_file() {
-                    Some(model.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let found = installed_models_in(temp_dir.path());
 
         assert_eq!(found.len(), 0, "Empty directory should yield no models");
     }
@@ -609,22 +707,7 @@ mod tests {
         let valid = temp_dir.path().join("ggml-tiny.bin");
         std::fs::write(&valid, b"valid").unwrap();
 
-        let entries = std::fs::read_dir(temp_dir.path()).unwrap();
-        let mut found: Vec<String> = entries
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let name = entry.file_name();
-                let name = name.to_str()?;
-                let model = name.strip_prefix("ggml-")?.strip_suffix(".bin")?;
-                if entry.path().is_file() {
-                    Some(model.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        found.sort();
+        let found = installed_models_in(temp_dir.path());
 
         assert_eq!(
             found.len(),
@@ -902,8 +985,8 @@ mod tests {
     }
 
     #[test]
-    fn test_model_path_works_for_all_catalog_models() {
-        for model in crate::models::catalog::list_models() {
+    fn test_model_path_works_for_all_whisper_models() {
+        for model in whisper_models() {
             let path = model_path(model.name);
             let filename = path.file_name().unwrap().to_string_lossy();
 
