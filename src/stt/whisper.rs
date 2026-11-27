@@ -13,7 +13,7 @@
 
 use crate::defaults;
 use crate::error::{Result, VoicshError};
-use crate::stt::transcriber::{TokenProbability, Transcriber, TranscriptionResult};
+use crate::stt::transcriber::{TokenProbability, Transcriber, TranscriptionResult, pcm_to_f32};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -208,17 +208,6 @@ impl WhisperTranscriber {
     pub fn config(&self) -> &WhisperConfig {
         &self.config
     }
-
-    /// Convert i16 audio samples to f32 normalized to [-1.0, 1.0]
-    ///
-    /// Whisper expects audio in f32 format normalized to the range [-1.0, 1.0].
-    /// Input is 16-bit PCM audio where samples range from -32768 to 32767.
-    fn convert_audio(samples: &[i16]) -> Vec<f32> {
-        samples
-            .iter()
-            .map(|&sample| sample as f32 / 32768.0)
-            .collect()
-    }
 }
 
 #[cfg(not(feature = "whisper"))]
@@ -247,23 +236,13 @@ impl WhisperTranscriber {
     pub fn config(&self) -> &WhisperConfig {
         &self.config
     }
-
-    /// Convert i16 audio samples to f32 normalized to [-1.0, 1.0]
-    ///
-    /// This function is available even without the whisper feature for testing.
-    pub fn convert_audio(samples: &[i16]) -> Vec<f32> {
-        samples
-            .iter()
-            .map(|&sample| sample as f32 / 32768.0)
-            .collect()
-    }
 }
 
 #[cfg(feature = "whisper")]
 impl Transcriber for WhisperTranscriber {
     fn transcribe(&self, audio: &[i16]) -> Result<TranscriptionResult> {
         // Convert audio format from i16 to f32
-        let audio_f32 = Self::convert_audio(audio);
+        let audio_f32 = pcm_to_f32(audio);
 
         // Lock the context for thread-safe access
         let mut guard =
@@ -394,28 +373,16 @@ impl Transcriber for WhisperTranscriber {
         true
     }
 
-    #[allow(clippy::unwrap_used)] // Mutex poisoning means the owning thread already panicked; propagate.
     fn try_unload_if_idle(&self) -> bool {
-        // Fast-path: avoid acquiring the lock when clearly not idle.
-        if !self.idle.is_idle() {
-            return false;
-        }
-        let mut guard = self.context.lock().unwrap();
-        // Re-check after acquiring the lock: a concurrent transcribe() may have called
-        // mark_used() between the fast-path check above and here (TOCTOU window).
-        if !self.idle.is_idle() {
-            return false;
-        }
-        if guard.take().is_some() {
+        let unloaded = self.idle.unload_if_idle(&self.context);
+        if unloaded {
             eprintln!(
                 "voicsh: unloaded whisper model '{}' after {:?} idle",
                 self.model_name,
                 self.idle.threshold().unwrap_or_default()
             );
-            true
-        } else {
-            false
         }
+        unloaded
     }
 }
 
@@ -565,36 +532,6 @@ mod tests {
         let cloned = config.clone();
         assert_eq!(config.idle_unload_after, None);
         assert_eq!(cloned.idle_unload_after, None);
-    }
-
-    #[test]
-    fn test_convert_audio_i16_to_f32() {
-        // Test conversion of common values
-        let samples = vec![0i16, 16384, -16384, 32767, -32768];
-        let converted = WhisperTranscriber::convert_audio(&samples);
-
-        assert_eq!(converted.len(), samples.len());
-        assert_eq!(converted[0], 0.0); // 0 -> 0.0
-        assert!((converted[1] - 0.5).abs() < 0.01); // 16384 -> ~0.5
-        assert!((converted[2] + 0.5).abs() < 0.01); // -16384 -> ~-0.5
-        assert!((converted[3] - 0.999969).abs() < 0.01); // 32767 -> ~1.0
-        assert_eq!(converted[4], -1.0); // -32768 -> -1.0
-    }
-
-    #[test]
-    fn test_convert_audio_empty() {
-        let samples: Vec<i16> = vec![];
-        let converted = WhisperTranscriber::convert_audio(&samples);
-        assert_eq!(converted.len(), 0);
-    }
-
-    #[test]
-    fn test_convert_audio_large_array() {
-        // Test with a larger array (1 second of audio at 16kHz)
-        let samples = vec![0i16; 16000];
-        let converted = WhisperTranscriber::convert_audio(&samples);
-        assert_eq!(converted.len(), 16000);
-        assert!(converted.iter().all(|&x| x == 0.0));
     }
 
     // Integration tests — run automatically when any model is installed,

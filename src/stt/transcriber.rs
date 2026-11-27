@@ -82,6 +82,17 @@ impl<T: Transcriber + ?Sized> Transcriber for Arc<T> {
     }
 }
 
+/// Convert 16-bit PCM samples to `f32` normalized to [-1.0, 1.0).
+///
+/// Every speech-to-text backend takes normalized float samples; the pipeline
+/// produces 16 kHz mono `i16` PCM.
+pub fn pcm_to_f32(samples: &[i16]) -> Vec<f32> {
+    samples
+        .iter()
+        .map(|&sample| f32::from(sample) / 32768.0)
+        .collect()
+}
+
 /// Configuration for transcriber initialization
 #[derive(Debug, Clone)]
 pub struct TranscriberConfig {
@@ -184,6 +195,27 @@ impl Transcriber for MockTranscriber {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_pcm_to_f32_normalizes_full_range() {
+        let converted = pcm_to_f32(&[0, 16384, -16384, 32767, -32768]);
+        assert_eq!(
+            converted,
+            vec![0.0, 0.5, -0.5, 32767.0 / 32768.0, -1.0],
+            "i16 samples must map linearly onto [-1.0, 1.0)"
+        );
+    }
+
+    #[test]
+    fn test_pcm_to_f32_empty_input_gives_empty_output() {
+        assert_eq!(pcm_to_f32(&[]), Vec::<f32>::new());
+    }
+
+    #[test]
+    fn test_pcm_to_f32_preserves_length() {
+        let converted = pcm_to_f32(&[0i16; 16000]);
+        assert_eq!(converted, vec![0.0f32; 16000]);
+    }
 
     #[test]
     fn test_mock_transcriber_returns_response() {
