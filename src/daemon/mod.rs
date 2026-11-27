@@ -328,13 +328,18 @@ pub(crate) async fn create_transcriber(
         download_model, find_any_installed_model, is_model_installed, model_path,
     };
     use crate::stt::fan_out::FanOutTranscriber;
-    use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
+    use crate::stt::loader::{TranscriberSettings, open_transcriber};
 
     let model_name = &config.stt.model;
     let language = &config.stt.language;
+    let settings_for = |language: &str| TranscriberSettings {
+        language: language.to_string(),
+        threads: None,
+        idle_unload_after: Some(std::time::Duration::from_secs(300)),
+    };
 
     // Resolve model name
-    let resolved_model = resolve_model_for_language(model_name, language, quiet);
+    let mut resolved_model = resolve_model_for_language(model_name, language, quiet);
 
     // Check if model is installed
     if !is_model_installed(&resolved_model) {
@@ -347,6 +352,7 @@ pub(crate) async fn create_transcriber(
                         resolved_model, fallback
                     );
                 }
+                resolved_model = fallback;
             } else {
                 return Err(VoicshError::TranscriptionModelNotFound {
                     path: resolved_model,
@@ -381,37 +387,21 @@ pub(crate) async fn create_transcriber(
             download_model(en_model, true).await?;
         }
 
-        let en_transcriber = WhisperTranscriber::new(WhisperConfig {
-            model_path: en_path,
-            language: "en".to_string(),
-            threads: None,
-            use_gpu: true,
-            idle_unload_after: Some(std::time::Duration::from_secs(300)),
-        })?;
-
-        let multilingual_transcriber = WhisperTranscriber::new(WhisperConfig {
-            model_path: path,
-            language: language.clone(),
-            threads: None,
-            use_gpu: true,
-            idle_unload_after: Some(std::time::Duration::from_secs(300)),
-        })?;
+        let en_transcriber = open_transcriber(
+            en_model,
+            en_path,
+            &settings_for(crate::defaults::ENGLISH_LANGUAGE),
+        )?;
+        let multilingual_transcriber =
+            open_transcriber(&resolved_model, path, &settings_for(language))?;
 
         Ok(Arc::new(FanOutTranscriber::new(vec![
-            Arc::new(en_transcriber) as Arc<dyn Transcriber>,
-            Arc::new(multilingual_transcriber) as Arc<dyn Transcriber>,
+            en_transcriber,
+            multilingual_transcriber,
         ])))
     } else {
         // Single model mode
-        let transcriber = WhisperTranscriber::new(WhisperConfig {
-            model_path: path,
-            language: language.clone(),
-            threads: None,
-            use_gpu: true,
-            idle_unload_after: Some(std::time::Duration::from_secs(300)),
-        })?;
-
-        Ok(Arc::new(transcriber))
+        open_transcriber(&resolved_model, path, &settings_for(language))
     }
 }
 

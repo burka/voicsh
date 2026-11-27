@@ -12,8 +12,8 @@ use sysinfo::{Pid, System};
 use crate::audio::wav::WavAudioSource;
 use crate::defaults;
 use crate::models::download::{list_installed_models, model_path};
+use crate::stt::loader::{TranscriberSettings, open_transcriber};
 use crate::stt::transcriber::Transcriber;
-use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 
 /// Compute default thread count for whisper inference.
 ///
@@ -391,17 +391,15 @@ pub fn benchmark_model(
     verbose: u8,
     threads: usize,
 ) -> anyhow::Result<BenchmarkResult> {
-    let path = model_path(model_name);
-
-    let config = WhisperConfig {
-        model_path: path,
-        language: language.to_string(),
-        threads: Some(threads),
-        use_gpu: true,
-        idle_unload_after: None,
-    };
-
-    let transcriber = WhisperTranscriber::new(config)?;
+    let transcriber = open_transcriber(
+        model_name,
+        model_path(model_name),
+        &TranscriberSettings {
+            language: language.to_string(),
+            threads: Some(threads),
+            idle_unload_after: None,
+        },
+    )?;
 
     let mut total_elapsed_ms = 0u128;
     let mut total_cpu_total = 0.0f32;

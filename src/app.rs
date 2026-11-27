@@ -20,8 +20,8 @@ use crate::pipeline::orchestrator::{Pipeline, PipelineConfig};
 use crate::pipeline::post_processor::build_post_processors;
 use crate::pipeline::sink::{CollectorSink, InjectorSink, StdoutSink};
 use crate::stt::fan_out::FanOutTranscriber;
+use crate::stt::loader::{TranscriberSettings, open_transcriber};
 use crate::stt::transcriber::Transcriber;
-use crate::stt::whisper::{WhisperConfig, WhisperTranscriber};
 use crate::sys::suppress_audio_warnings;
 use std::path::PathBuf;
 use std::process::Command;
@@ -493,10 +493,7 @@ async fn create_transcriber(
         if verbosity >= 1 {
             eprintln!("Fan-out: {} + {}", ml.model_name(), en.model_name());
         }
-        return Ok(Arc::new(FanOutTranscriber::new(vec![
-            Arc::new(ml) as Arc<dyn Transcriber>,
-            Arc::new(en) as Arc<dyn Transcriber>,
-        ])));
+        return Ok(Arc::new(FanOutTranscriber::new(vec![ml, en])));
     }
 
     // Warn if fan-out was requested but won't be used
@@ -507,18 +504,16 @@ async fn create_transcriber(
         );
     }
 
-    let transcriber =
-        load_single_model(&resolved_model, &config.stt.language, quiet, no_download).await?;
-    Ok(Arc::new(transcriber))
+    load_single_model(&resolved_model, &config.stt.language, quiet, no_download).await
 }
 
-/// Load a single Whisper model, downloading if needed.
+/// Load a single model with its catalog backend, downloading if needed.
 async fn load_single_model(
     model_name: &str,
     language: &str,
     quiet: bool,
     no_download: bool,
-) -> Result<WhisperTranscriber> {
+) -> Result<Arc<dyn Transcriber>> {
     let model_to_use = if is_model_installed(model_name) {
         model_name.to_string()
     } else if no_download {
@@ -551,18 +546,18 @@ async fn load_single_model(
     };
 
     let model_path = build_model_path(&model_to_use)?;
-    let whisper_config = WhisperConfig {
+    open_transcriber(
+        &model_to_use,
         model_path,
-        language: language.to_string(),
-        threads: None,
-        use_gpu: true,
-        idle_unload_after: Some(std::time::Duration::from_secs(300)),
-    };
-
-    WhisperTranscriber::new(whisper_config)
+        &TranscriberSettings {
+            language: language.to_string(),
+            threads: None,
+            idle_unload_after: Some(std::time::Duration::from_secs(300)),
+        },
+    )
 }
 
-/// Build the full path to a Whisper model file.
+/// Build the full path to a model file (whisper) or snapshot directory.
 fn build_model_path(model: &str) -> Result<PathBuf> {
     let path = PathBuf::from(model);
 

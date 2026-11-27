@@ -83,6 +83,12 @@ candle-transformers = { version = "0.11", optional = true }
 tokenizers = { version = "0.23", default-features = false, features = ["onig"], optional = true }
 hf-hub = { version = "1.0", features = ["blocking"], optional = true }
 
+# Speech-to-text: NVIDIA Parakeet TDT / Nemotron via ONNX Runtime (CPU).
+# `ort` is listed only to select its features: prebuilt static ONNX Runtime
+# downloaded at build time over rustls (no openssl, no cmake).
+parakeet-rs = { version = "0.4.4", default-features = false, features = ["cpu", "api-28"], optional = true }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["download-binaries", "tls-rustls"], optional = true }
+
 # Error correction (SymSpell)
 symspell = { version = "0.5", optional = true }
 xkeysym = { version = "0.2", optional = true }
@@ -91,6 +97,7 @@ xkeysym = { version = "0.2", optional = true }
 default = ["full"]
 full = ["whisper", "cpal-audio", "model-download", "cli", "portal"]
 whisper = ["whisper-rs"]
+parakeet = ["dep:parakeet-rs", "dep:ort"]
 cpal-audio = ["dep:cpal"]
 model-download = ["dep:reqwest", "dep:sha1", "dep:sha2", "dep:indicatif", "dep:futures-util", "dep:dirs"]
 cli = ["dep:clap", "dep:clap_complete", "dep:dirs", "dep:humantime", "dep:owo-colors"]
