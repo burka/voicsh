@@ -217,7 +217,7 @@ impl PortalConnector for AshpdConnector {
         let saved_token = load_restore_token();
 
         let select_opts = SelectDevicesOptions::default()
-            .set_devices(ashpd::enumflags2::BitFlags::from(DeviceType::Keyboard))
+            .set_devices(DeviceType::KEYBOARD)
             .set_restore_token(saved_token.as_deref())
             .set_persist_mode(PersistMode::ExplicitlyRevoked);
 
@@ -250,7 +250,7 @@ impl PortalConnector for AshpdConnector {
         }
 
         let devices = response.devices();
-        if !devices.contains(DeviceType::Keyboard) {
+        if !devices.contains(DeviceType::KEYBOARD) {
             return Err(VoicshError::PortalError {
                 message: format!(
                     "Portal granted devices {:?} but keyboard not included",

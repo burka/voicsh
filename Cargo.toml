@@ -2,7 +2,7 @@
 name = "voicsh"
 version = "0.2.4"
 edition = "2024"
-rust-version = "1.93"
+rust-version = "1.95"
 description = "Voice typing for Wayland Linux"
 authors = ["Florian Burka <fburka@noidea.de>"]
 license = "MIT"
@@ -44,7 +44,7 @@ anyhow = "1"
 crossbeam-channel = "0.5"
 
 # XDG Desktop Portal (RemoteDesktop for GNOME key injection)
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "remote_desktop", "screencast"], optional = true }
+ashpd = { version = "0.14", default-features = false, features = ["tokio", "remote_desktop", "screencast"], optional = true }
 
 # CLI
 clap = { version = "4", features = ["derive"], optional = true }
@@ -104,7 +104,7 @@ hipblas = ["full", "whisper-rs/hipblas"]
 openblas = ["full", "whisper-rs/openblas"]
 
 [dependencies.sysinfo]
-version = "0.39"
+version = "0.40"
 optional = true
 
 [dependencies.flate2]
@@ -113,7 +113,7 @@ optional = true
 
 [dev-dependencies]
 tempfile = "3"
-sysinfo = "0.39"
+sysinfo = "0.40"
 criterion = "0.8"
 
 [[bench]]
