@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn test_new_fails_with_model_not_found_for_missing_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let missing = dir.path().join("parakeet-tdt-0.6b-v3-int8");
+        let missing = dir.path().join("parakeet-tdt-0.6b-v3");
 
         let error = ParakeetTranscriber::new(config(ParakeetArchitecture::Tdt, missing.clone()))
             .unwrap_err();
@@ -485,7 +485,7 @@ mod tests {
 }
 
 /// Real-model tests. Ignored by default: they need the models installed
-/// (`voicsh models install parakeet-tdt-0.6b-v3-int8` and
+/// (`voicsh models install parakeet-tdt-0.6b-v3` and
 /// `voicsh models install nemotron-3.5-asr-0.6b`) and take seconds each.
 /// Run with:
 /// `cargo test --lib --features parakeet stt::parakeet -- --ignored`
@@ -522,15 +522,15 @@ mod real_model_tests {
 
     /// Transcribes the English fixture with the installed Parakeet TDT model.
     #[test]
-    #[ignore = "needs installed parakeet-tdt-0.6b-v3-int8 model"]
+    #[ignore = "needs installed parakeet-tdt-0.6b-v3 model"]
     fn test_tdt_transcribes_known_speech() {
-        let dir = installed_model_dir("parakeet-tdt-0.6b-v3-int8");
+        let dir = installed_model_dir("parakeet-tdt-0.6b-v3");
         let transcriber = ParakeetTranscriber::new(config(ParakeetArchitecture::Tdt, dir)).unwrap();
 
         let result = transcriber.transcribe(&quick_brown_fox()).unwrap();
 
         assert_quick_brown_fox(&result.text);
-        assert_eq!(transcriber.model_name(), "parakeet-tdt-0.6b-v3-int8");
+        assert_eq!(transcriber.model_name(), "parakeet-tdt-0.6b-v3");
     }
 
     /// Transcribes the English fixture with the installed Nemotron model and
@@ -574,10 +574,10 @@ mod real_model_tests {
 
     /// Unloads after the idle threshold and reloads lazily on the next chunk.
     #[test]
-    #[ignore = "needs installed parakeet-tdt-0.6b-v3-int8 model"]
+    #[ignore = "needs installed parakeet-tdt-0.6b-v3 model"]
     fn test_tdt_unloads_when_idle_and_reloads_on_transcribe() {
         let clock = Arc::new(MockClock::new());
-        let dir = installed_model_dir("parakeet-tdt-0.6b-v3-int8");
+        let dir = installed_model_dir("parakeet-tdt-0.6b-v3");
         let transcriber = ParakeetTranscriber::new_with_clock(
             config(ParakeetArchitecture::Tdt, dir),
             clock.clone(),

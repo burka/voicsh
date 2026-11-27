@@ -111,22 +111,29 @@ impl ModelInfo {
     }
 }
 
-/// Parakeet TDT 0.6B v3 (25 European languages), int8 ONNX export.
+/// Parakeet TDT 0.6B v3 (25 European languages), fp32 ONNX export.
 /// Weights: CC-BY-4.0 (NVIDIA). Export: istupakov/parakeet-tdt-0.6b-v3-onnx.
-const PARAKEET_TDT_V3_INT8: HfSnapshot = HfSnapshot {
+///
+/// fp32 on purpose; see "Parakeet / Nemotron backend" in DEVELOPMENT.md.
+const PARAKEET_TDT_V3: HfSnapshot = HfSnapshot {
     repo: "istupakov/parakeet-tdt-0.6b-v3-onnx",
     revision: "8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
     dir: "",
     files: &[
         ModelFile {
-            name: "encoder-model.int8.onnx",
-            size_mb: 653,
-            sha256: "6139d2fa7e1b086097b277c7149725edbab89cc7c7ae64b23c741be4055aff09",
+            name: "encoder-model.onnx",
+            size_mb: 42,
+            sha256: "98a74b21b4cc0017c1e7030319a4a96f4a9506e50f0708f3a516d02a77c96bb1",
         },
         ModelFile {
-            name: "decoder_joint-model.int8.onnx",
-            size_mb: 19,
-            sha256: "eea7483ee3d1a30375daedc8ed83e3960c91b098812127a0d99d1c8977667a70",
+            name: "encoder-model.onnx.data",
+            size_mb: 2436,
+            sha256: "9a22d372c51455c34f13405da2520baefb7125bd16981397561423ed32d24f36",
+        },
+        ModelFile {
+            name: "decoder_joint-model.onnx",
+            size_mb: 73,
+            sha256: "e978ddf6688527182c10fde2eb4b83068421648985ef23f7a86be732be8706c1",
         },
         ModelFile {
             name: "vocab.txt",
@@ -139,8 +146,7 @@ const PARAKEET_TDT_V3_INT8: HfSnapshot = HfSnapshot {
 /// Nemotron 3.5 ASR streaming 0.6B (multilingual), fp32 ONNX export by the
 /// parakeet-rs author. Weights: OpenMDW-1.1 (NVIDIA).
 ///
-/// fp32 on purpose: the only published int8 build quantizes the encoder
-/// per-tensor, which costs accuracy and sometimes breaks language detection.
+/// fp32 on purpose; see "Parakeet / Nemotron backend" in DEVELOPMENT.md.
 const NEMOTRON_3_5: HfSnapshot = HfSnapshot {
     repo: "altunenes/parakeet-rs",
     revision: "26684938ff242cb4f7a65fad712476c6015a4477",
@@ -469,13 +475,13 @@ pub const MODELS: &[ModelInfo] = &[
     // ONNX models (require the `parakeet` feature). Listed after Whisper so
     // fallbacks that pick the first installed model prefer Whisper.
     ModelInfo {
-        name: "parakeet-tdt-0.6b-v3-int8",
-        size_mb: 673,
+        name: "parakeet-tdt-0.6b-v3",
+        size_mb: 2552,
         sha1: "",
         sha256: "",
         english_only: false,
-        quantized: true,
-        backend: ModelBackend::ParakeetTdt(&PARAKEET_TDT_V3_INT8),
+        quantized: false,
+        backend: ModelBackend::ParakeetTdt(&PARAKEET_TDT_V3),
     },
     ModelInfo {
         name: "nemotron-3.5-asr-0.6b",
@@ -750,7 +756,7 @@ mod tests {
             ("large-v2-q8_0", 1660),
             ("large-v3-turbo-q8_0", 874),
             // ONNX snapshot models
-            ("parakeet-tdt-0.6b-v3-int8", 673),
+            ("parakeet-tdt-0.6b-v3", 2552),
             ("nemotron-3.5-asr-0.6b", 2600),
         ];
 
@@ -927,16 +933,14 @@ mod tests {
 
     #[test]
     fn test_parakeet_tdt_entry_lists_files_parakeet_rs_loads() {
-        let model = get_model("parakeet-tdt-0.6b-v3-int8").unwrap();
-        assert_eq!(
-            model.backend,
-            ModelBackend::ParakeetTdt(&PARAKEET_TDT_V3_INT8)
-        );
+        let model = get_model("parakeet-tdt-0.6b-v3").unwrap();
+        assert_eq!(model.backend, ModelBackend::ParakeetTdt(&PARAKEET_TDT_V3));
         assert_eq!(
             file_names(model.name),
             [
-                "encoder-model.int8.onnx",
-                "decoder_joint-model.int8.onnx",
+                "encoder-model.onnx",
+                "encoder-model.onnx.data",
+                "decoder_joint-model.onnx",
                 "vocab.txt"
             ]
         );
@@ -959,7 +963,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_file_url_pins_revision() {
-        let snapshot = get_model("parakeet-tdt-0.6b-v3-int8")
+        let snapshot = get_model("parakeet-tdt-0.6b-v3")
             .unwrap()
             .snapshot()
             .unwrap();
@@ -991,7 +995,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_models_have_no_language_variants() {
-        for name in ["parakeet-tdt-0.6b-v3-int8", "nemotron-3.5-asr-0.6b"] {
+        for name in ["parakeet-tdt-0.6b-v3", "nemotron-3.5-asr-0.6b"] {
             assert_eq!(english_variant(name), None);
             assert_eq!(multilingual_variant(name), Some(name));
             assert_eq!(resolve_model_for_language(name, "de", true), name);

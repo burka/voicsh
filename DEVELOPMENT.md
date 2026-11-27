@@ -75,8 +75,8 @@ The optional `parakeet` feature adds NVIDIA Parakeet TDT v3 and Nemotron 3.5 ASR
 
 ```bash
 cargo build --features parakeet
-voicsh models install parakeet-tdt-0.6b-v3-int8   # or nemotron-3.5-asr-0.6b
-voicsh config set stt.model parakeet-tdt-0.6b-v3-int8
+voicsh models install parakeet-tdt-0.6b-v3   # or nemotron-3.5-asr-0.6b
+voicsh config set stt.model parakeet-tdt-0.6b-v3
 ```
 
 - **ONNX Runtime binaries:** by default, `ort-sys` downloads a prebuilt static ONNX Runtime from `cdn.pyke.io` at build time and caches it in `~/.cache/ort.pyke.io`. For offline builds, set `ORT_LIB_PATH` to a local ONNX Runtime build. `ORT_SKIP_DOWNLOAD=1` makes a missing library fail instead of fetching it.
@@ -84,10 +84,10 @@ voicsh config set stt.model parakeet-tdt-0.6b-v3-int8
 
   | Model | Source | License |
   |-------|--------|---------|
-  | `parakeet-tdt-0.6b-v3-int8` | `istupakov/parakeet-tdt-0.6b-v3-onnx` (int8 export of `nvidia/parakeet-tdt-0.6b-v3`) | CC-BY-4.0 |
+  | `parakeet-tdt-0.6b-v3` | `istupakov/parakeet-tdt-0.6b-v3-onnx` (fp32 export of `nvidia/parakeet-tdt-0.6b-v3`) | CC-BY-4.0 |
   | `nemotron-3.5-asr-0.6b` | `altunenes/parakeet-rs`, directory `nemotron-3.5-asr-streaming-0.6b-onnx` (fp32 export of `nvidia/nemotron-3.5-asr-streaming-0.6b`) | OpenMDW-1.1 |
 
-  Nemotron ships as fp32 (about 2.5 GB on disk and in RAM): the only published int8 build (`smcleod/nemotron-3.5-asr-streaming-0.6b-int8`) quantizes the encoder per-tensor and transcribes markedly worse and in `auto` mode sometimes picks the wrong language or returns nothing.
+  Both ship as fp32 (about 2.5 GB on disk and in RAM). The published int8 builds (`istupakov/parakeet-tdt-0.6b-v3-onnx`'s `*.int8.onnx`, `smcleod/nemotron-3.5-asr-streaming-0.6b-int8`) come from `onnxruntime` `quantize_dynamic` with default settings, which quantizes the encoder per-tensor. They transcribe markedly worse, drift into English on German speech, and Nemotron in `auto` mode sometimes picks the wrong language or returns nothing.
 
 - **Language:** Parakeet TDT detects the language itself, ignores `stt.language`, and reports no language and a fixed confidence of 1.0. Nemotron accepts `auto` or a language code and reports the language tag it emits, along with token confidences.
 - **Real-model tests** are `#[ignore]`d. Install both models, then run `cargo test --lib --features parakeet stt::parakeet -- --ignored`.

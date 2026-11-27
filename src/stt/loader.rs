@@ -131,7 +131,7 @@ fn missing_snapshot_file(snapshot: &HfSnapshot, model_dir: &std::path::Path) -> 
 mod tests {
     use super::*;
 
-    const PARAKEET_TDT: &str = "parakeet-tdt-0.6b-v3-int8";
+    const PARAKEET_TDT: &str = "parakeet-tdt-0.6b-v3";
 
     fn settings() -> TranscriberSettings {
         TranscriberSettings {
@@ -195,7 +195,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let model_dir = dir.path().join(PARAKEET_TDT);
         std::fs::create_dir(&model_dir).unwrap();
-        std::fs::write(model_dir.join("encoder-model.int8.onnx"), b"stub").unwrap();
+        std::fs::write(model_dir.join("encoder-model.onnx"), b"stub").unwrap();
 
         let message = error_message(open_transcriber(
             PARAKEET_TDT,
@@ -206,7 +206,7 @@ mod tests {
         let expected = format!(
             "Model '{PARAKEET_TDT}' is incomplete: {} is missing.\n\
              Reinstall it: rm -r {} && voicsh models install {PARAKEET_TDT}",
-            model_dir.join("decoder_joint-model.int8.onnx").display(),
+            model_dir.join("encoder-model.onnx.data").display(),
             model_dir.display()
         );
         assert_eq!(message, expected);

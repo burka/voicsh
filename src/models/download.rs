@@ -545,17 +545,17 @@ mod tests {
 
     #[test]
     fn test_model_path_for_snapshot_model_is_named_directory() {
-        for name in ["parakeet-tdt-0.6b-v3-int8", "nemotron-3.5-asr-0.6b"] {
+        for name in ["parakeet-tdt-0.6b-v3", "nemotron-3.5-asr-0.6b"] {
             assert_eq!(model_path(name), models_dir().join(name));
         }
     }
 
     #[test]
     fn test_snapshot_staging_dir_is_hidden_sibling() {
-        let model_dir = Path::new("/cache/models/parakeet-tdt-0.6b-v3-int8");
+        let model_dir = Path::new("/cache/models/parakeet-tdt-0.6b-v3");
         assert_eq!(
             snapshot_staging_dir(model_dir),
-            Path::new("/cache/models/.parakeet-tdt-0.6b-v3-int8.partial")
+            Path::new("/cache/models/.parakeet-tdt-0.6b-v3.partial")
         );
     }
 
@@ -563,7 +563,7 @@ mod tests {
     fn test_installed_models_in_lists_complete_snapshot_directories() {
         let temp_dir = tempfile::tempdir().unwrap();
         std::fs::write(temp_dir.path().join("ggml-base.bin"), b"mock").unwrap();
-        std::fs::create_dir(temp_dir.path().join("parakeet-tdt-0.6b-v3-int8")).unwrap();
+        std::fs::create_dir(temp_dir.path().join("parakeet-tdt-0.6b-v3")).unwrap();
         // An interrupted download leaves only the staging directory behind.
         std::fs::create_dir(temp_dir.path().join(".nemotron-3.5-asr-0.6b.partial")).unwrap();
         // Directories that are not catalog snapshot models are ignored.
@@ -571,7 +571,7 @@ mod tests {
 
         assert_eq!(
             installed_models_in(temp_dir.path()),
-            ["base", "parakeet-tdt-0.6b-v3-int8"]
+            ["base", "parakeet-tdt-0.6b-v3"]
         );
     }
 
