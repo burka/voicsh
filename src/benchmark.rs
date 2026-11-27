@@ -129,9 +129,19 @@ pub struct SystemInfo {
     pub available_backends: Vec<BackendInfo>,
 }
 
+/// Load system information; without it neither detection nor benchmarking can proceed.
+fn load_system() -> System {
+    System::new_all().unwrap_or_else(|e| {
+        eprintln!(
+            "Failed to initialize system information: {e}. Run on a supported platform with /proc access."
+        );
+        std::process::exit(1);
+    })
+}
+
 impl SystemInfo {
     pub fn detect() -> Self {
-        let mut system = System::new_all();
+        let mut system = load_system();
         system.refresh_all();
 
         // CPU information
@@ -313,7 +323,7 @@ pub struct ResourceMonitor {
 
 impl ResourceMonitor {
     pub fn new() -> Self {
-        let mut system = System::new_all();
+        let mut system = load_system();
         system.refresh_all();
         // Safe: This is a benchmark tool; if we can't get PID, we can't benchmark
         let pid = sysinfo::get_current_pid().unwrap_or_else(|e| {

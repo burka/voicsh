@@ -119,7 +119,7 @@ impl JobManager {
     pub async fn submit(&self, path: String) -> Result<Arc<JobEntry>, String> {
         if self
             .active_jobs
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < self.max_active_jobs).then_some(count + 1)
             })
             .is_err()

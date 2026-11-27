@@ -1,0 +1,7 @@
+[advisories]
+ignore = [
+    "RUSTSEC-2025-0119",  # number_prefix — unmaintained, via indicatif/hf-hub, no CVE
+    "RUSTSEC-2024-0436",  # paste — unmaintained, via tokenizers/candle, no CVE
+    "RUSTSEC-2026-0543",  # chrono — unmaintained, only via hf-hub -> hf-xet -> xet-*; resolved when hf-xet drops chrono
+    "RUSTSEC-2026-0542",  # humantime — unmaintained, also required by hf-hub -> hf-xet -> xet-runtime; resolved when xet-runtime drops it (then replace the direct use in src/cli.rs)
+]
