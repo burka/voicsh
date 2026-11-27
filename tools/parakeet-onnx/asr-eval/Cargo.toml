@@ -1,0 +1,12 @@
+[package]
+name = "asr-eval"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone on purpose: an evaluation tool, not part of the voicsh build or its gate.
+[workspace]
+
+[dependencies]
+voicsh = { path = "../../..", default-features = false, features = ["parakeet", "whisper"] }
+hound = "3.5"
