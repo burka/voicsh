@@ -486,8 +486,8 @@ mod tests {
 
 /// Real-model tests. Ignored by default: they need the models installed
 /// (`voicsh models install parakeet-tdt-0.6b-v3-int8` and
-/// `voicsh models install nemotron-3.5-asr-0.6b-int8`, ~670 MB each) and take
-/// seconds each. Run with:
+/// `voicsh models install nemotron-3.5-asr-0.6b`) and take seconds each.
+/// Run with:
 /// `cargo test --lib --features parakeet stt::parakeet -- --ignored`
 #[cfg(all(test, feature = "model-download"))]
 mod real_model_tests {
@@ -536,9 +536,9 @@ mod real_model_tests {
     /// Transcribes the English fixture with the installed Nemotron model and
     /// checks the detected language and token confidence.
     #[test]
-    #[ignore = "needs installed nemotron-3.5-asr-0.6b-int8 model"]
+    #[ignore = "needs installed nemotron-3.5-asr-0.6b model"]
     fn test_nemotron_transcribes_known_speech() {
-        let dir = installed_model_dir("nemotron-3.5-asr-0.6b-int8");
+        let dir = installed_model_dir("nemotron-3.5-asr-0.6b");
         let transcriber =
             ParakeetTranscriber::new(config(ParakeetArchitecture::Nemotron, dir)).unwrap();
 
@@ -551,11 +551,11 @@ mod real_model_tests {
 
     /// Rejects a language Nemotron has no prompt for, with a hint to fix the config.
     #[test]
-    #[ignore = "needs installed nemotron-3.5-asr-0.6b-int8 model"]
+    #[ignore = "needs installed nemotron-3.5-asr-0.6b model"]
     fn test_nemotron_rejects_unsupported_language() {
         let mut config = config(
             ParakeetArchitecture::Nemotron,
-            installed_model_dir("nemotron-3.5-asr-0.6b-int8"),
+            installed_model_dir("nemotron-3.5-asr-0.6b"),
         );
         config.language = "xx".to_string();
 

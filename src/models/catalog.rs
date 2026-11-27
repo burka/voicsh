@@ -30,6 +30,8 @@ pub struct HfSnapshot {
     pub repo: &'static str,
     /// Full git commit hash the files are pinned to.
     pub revision: &'static str,
+    /// Directory inside the repository holding the files; empty for the root.
+    pub dir: &'static str,
     /// Every file the backend needs, all downloaded into the model directory.
     pub files: &'static [ModelFile],
 }
@@ -37,10 +39,15 @@ pub struct HfSnapshot {
 impl HfSnapshot {
     /// Download URL for `file_name` at the pinned revision.
     pub fn file_url(&self, file_name: &str) -> String {
-        format!(
-            "https://huggingface.co/{}/resolve/{}/{file_name}",
+        let base = format!(
+            "https://huggingface.co/{}/resolve/{}",
             self.repo, self.revision
-        )
+        );
+        if self.dir.is_empty() {
+            format!("{base}/{file_name}")
+        } else {
+            format!("{base}/{}/{file_name}", self.dir)
+        }
     }
 }
 
@@ -109,6 +116,7 @@ impl ModelInfo {
 const PARAKEET_TDT_V3_INT8: HfSnapshot = HfSnapshot {
     repo: "istupakov/parakeet-tdt-0.6b-v3-onnx",
     revision: "8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce",
+    dir: "",
     files: &[
         ModelFile {
             name: "encoder-model.int8.onnx",
@@ -128,26 +136,30 @@ const PARAKEET_TDT_V3_INT8: HfSnapshot = HfSnapshot {
     ],
 };
 
-/// Nemotron 3.5 ASR streaming 0.6B (multilingual), community int8 ONNX quant.
-/// Weights: OpenMDW-1.1 (NVIDIA). Quant: smcleod/nemotron-3.5-asr-streaming-0.6b-int8.
-const NEMOTRON_3_5_INT8: HfSnapshot = HfSnapshot {
-    repo: "smcleod/nemotron-3.5-asr-streaming-0.6b-int8",
-    revision: "f1f26d22dab5c4eabe6d01b63c906889e7e817d3",
+/// Nemotron 3.5 ASR streaming 0.6B (multilingual), fp32 ONNX export by the
+/// parakeet-rs author. Weights: OpenMDW-1.1 (NVIDIA).
+///
+/// fp32 on purpose: the only published int8 build quantizes the encoder
+/// per-tensor, which costs accuracy and sometimes breaks language detection.
+const NEMOTRON_3_5: HfSnapshot = HfSnapshot {
+    repo: "altunenes/parakeet-rs",
+    revision: "26684938ff242cb4f7a65fad712476c6015a4477",
+    dir: "nemotron-3.5-asr-streaming-0.6b-onnx",
     files: &[
         ModelFile {
             name: "encoder.onnx",
-            size_mb: 43,
-            sha256: "a6fd0bbedae97047cb444dba928273b66b9cae36249cf697f4bf7b6f0e167c5d",
+            size_mb: 5,
+            sha256: "487519292b5b12178442dabc9ad5803f859354680ec929140d4027dceb16a20d",
         },
         ModelFile {
             name: "encoder.onnx.data",
-            size_mb: 615,
-            sha256: "c2f230b026aa4f29b1b5ce099b2fba853db361773157d478d67127b877f64c42",
+            size_mb: 2496,
+            sha256: "1cdddec47b0570170183716dff74df8ca827facb41b11302ebdd479616171988",
         },
         ModelFile {
             name: "decoder_joint.onnx",
-            size_mb: 25,
-            sha256: "7fe1a8c2e247b55bbb8ca917ef64cf60227909c6fe63be2da7ea6fc3858d6a69",
+            size_mb: 98,
+            sha256: "a4258dfb3a4c5c15ef3ff7e52483bf9b4fcf721ae5a8d2dac777178e8fa39252",
         },
         ModelFile {
             name: "tokenizer.model",
@@ -466,13 +478,13 @@ pub const MODELS: &[ModelInfo] = &[
         backend: ModelBackend::ParakeetTdt(&PARAKEET_TDT_V3_INT8),
     },
     ModelInfo {
-        name: "nemotron-3.5-asr-0.6b-int8",
-        size_mb: 684,
+        name: "nemotron-3.5-asr-0.6b",
+        size_mb: 2600,
         sha1: "",
         sha256: "",
         english_only: false,
-        quantized: true,
-        backend: ModelBackend::Nemotron(&NEMOTRON_3_5_INT8),
+        quantized: false,
+        backend: ModelBackend::Nemotron(&NEMOTRON_3_5),
     },
 ];
 
@@ -739,7 +751,7 @@ mod tests {
             ("large-v3-turbo-q8_0", 874),
             // ONNX snapshot models
             ("parakeet-tdt-0.6b-v3-int8", 673),
-            ("nemotron-3.5-asr-0.6b-int8", 684),
+            ("nemotron-3.5-asr-0.6b", 2600),
         ];
 
         for (name, expected_size) in sizes {
@@ -932,8 +944,8 @@ mod tests {
 
     #[test]
     fn test_nemotron_entry_lists_files_parakeet_rs_loads() {
-        let model = get_model("nemotron-3.5-asr-0.6b-int8").unwrap();
-        assert_eq!(model.backend, ModelBackend::Nemotron(&NEMOTRON_3_5_INT8));
+        let model = get_model("nemotron-3.5-asr-0.6b").unwrap();
+        assert_eq!(model.backend, ModelBackend::Nemotron(&NEMOTRON_3_5));
         assert_eq!(
             file_names(model.name),
             [
@@ -959,13 +971,27 @@ mod tests {
     }
 
     #[test]
+    fn test_snapshot_file_url_includes_repo_directory() {
+        let snapshot = get_model("nemotron-3.5-asr-0.6b")
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        assert_eq!(
+            snapshot.file_url("tokenizer.model"),
+            "https://huggingface.co/altunenes/parakeet-rs/resolve/\
+             26684938ff242cb4f7a65fad712476c6015a4477/\
+             nemotron-3.5-asr-streaming-0.6b-onnx/tokenizer.model"
+        );
+    }
+
+    #[test]
     fn test_whisper_models_have_no_snapshot() {
         assert_eq!(get_model("base").unwrap().snapshot(), None);
     }
 
     #[test]
     fn test_snapshot_models_have_no_language_variants() {
-        for name in ["parakeet-tdt-0.6b-v3-int8", "nemotron-3.5-asr-0.6b-int8"] {
+        for name in ["parakeet-tdt-0.6b-v3-int8", "nemotron-3.5-asr-0.6b"] {
             assert_eq!(english_variant(name), None);
             assert_eq!(multilingual_variant(name), Some(name));
             assert_eq!(resolve_model_for_language(name, "de", true), name);

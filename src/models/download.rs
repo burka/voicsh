@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn test_model_path_for_snapshot_model_is_named_directory() {
-        for name in ["parakeet-tdt-0.6b-v3-int8", "nemotron-3.5-asr-0.6b-int8"] {
+        for name in ["parakeet-tdt-0.6b-v3-int8", "nemotron-3.5-asr-0.6b"] {
             assert_eq!(model_path(name), models_dir().join(name));
         }
     }
@@ -565,7 +565,7 @@ mod tests {
         std::fs::write(temp_dir.path().join("ggml-base.bin"), b"mock").unwrap();
         std::fs::create_dir(temp_dir.path().join("parakeet-tdt-0.6b-v3-int8")).unwrap();
         // An interrupted download leaves only the staging directory behind.
-        std::fs::create_dir(temp_dir.path().join(".nemotron-3.5-asr-0.6b-int8.partial")).unwrap();
+        std::fs::create_dir(temp_dir.path().join(".nemotron-3.5-asr-0.6b.partial")).unwrap();
         // Directories that are not catalog snapshot models are ignored.
         std::fs::create_dir(temp_dir.path().join("my-notes")).unwrap();
 
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn test_installed_models_in_ignores_file_named_like_snapshot_model() {
         let temp_dir = tempfile::tempdir().unwrap();
-        std::fs::write(temp_dir.path().join("nemotron-3.5-asr-0.6b-int8"), b"x").unwrap();
+        std::fs::write(temp_dir.path().join("nemotron-3.5-asr-0.6b"), b"x").unwrap();
 
         assert_eq!(installed_models_in(temp_dir.path()), Vec::<String>::new());
     }
