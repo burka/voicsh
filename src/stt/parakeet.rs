@@ -171,9 +171,9 @@ impl Engine {
                 let result = model
                     .transcribe_samples(samples, defaults::SAMPLE_RATE, 1, None)
                     .map_err(inference_error)?;
-                Ok(TranscriptionResult::from_text(
-                    result.text.trim().to_string(),
-                ))
+                Ok(TranscriptionResult::from_text(strip_unknown_token(
+                    &result.text,
+                )))
             }
             Engine::Nemotron(model) => {
                 let tokens = model
@@ -292,11 +292,24 @@ fn nemotron_result<'a>(
         None => configured_language.to_string(),
     };
     TranscriptionResult {
-        text: text.trim().to_string(),
+        text: strip_unknown_token(&text),
         language,
         confidence,
         token_probabilities,
     }
+}
+
+/// SentencePiece out-of-vocabulary marker; Parakeet Ultra emits it where its
+/// training text had parentheses.
+const UNKNOWN_TOKEN: &str = "<unk>";
+
+/// Remove every `<unk>` marker (also when glued to words), collapse the
+/// whitespace runs this leaves behind, and trim.
+fn strip_unknown_token(text: &str) -> String {
+    text.replace(UNKNOWN_TOKEN, " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Primary language subtag of a Nemotron language-tag piece: `<de-DE>` / `<de>` → "de".
@@ -326,6 +339,29 @@ fn config(architecture: ParakeetArchitecture, model_dir: PathBuf) -> ParakeetCon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_strip_unknown_token_removes_glued_markers() {
+        assert_eq!(
+            strip_unknown_token("hello <unk>world<unk> x"),
+            "hello world x"
+        );
+    }
+
+    #[test]
+    fn test_strip_unknown_token_leaves_clean_text_unchanged() {
+        assert_eq!(strip_unknown_token("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_strip_unknown_token_only_marker_yields_empty() {
+        assert_eq!(strip_unknown_token(" <unk> "), "");
+    }
+
+    #[test]
+    fn test_strip_unknown_token_collapses_double_spaces() {
+        assert_eq!(strip_unknown_token("a <unk> b"), "a b");
+    }
 
     #[test]
     fn test_new_fails_with_model_not_found_for_missing_directory() {

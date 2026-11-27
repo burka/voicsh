@@ -143,6 +143,33 @@ const PARAKEET_TDT_V3: HfSnapshot = HfSnapshot {
     ],
 };
 
+/// Parakeet Ultra 0.6B (German WER 4.49% on FLEURS de, 862 clips), int8 ONNX
+/// export with per-channel MatMul quantization. Weights: CC-BY-4.0 (NVIDIA).
+/// Export: wothers/parakeet-tdt-0.6b-ultra-onnx-int8; parakeet-rs discovers
+/// the `*.int8.onnx` files by name.
+const PARAKEET_ULTRA_INT8: HfSnapshot = HfSnapshot {
+    repo: "wothers/parakeet-tdt-0.6b-ultra-onnx-int8",
+    revision: "94623be6449a7beb0ea62b85104d3be45b93ed9e",
+    dir: "",
+    files: &[
+        ModelFile {
+            name: "encoder-model.int8.onnx",
+            size_mb: 841,
+            sha256: "c5f5dc8d8ef05288aaebe22e726f6f844dc2a3cb7abb49952567d8467d8a693c",
+        },
+        ModelFile {
+            name: "decoder_joint-model.int8.onnx",
+            size_mb: 51,
+            sha256: "17608863527824bf3a2f0be639c19d532233eedeb77ca5347a4b147c2abc35e7",
+        },
+        ModelFile {
+            name: "vocab.txt",
+            size_mb: 1,
+            sha256: "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+        },
+    ],
+};
+
 /// Nemotron 3.5 ASR streaming 0.6B (multilingual), fp32 ONNX export by the
 /// parakeet-rs author. Weights: OpenMDW-1.1 (NVIDIA).
 ///
@@ -484,6 +511,15 @@ pub const MODELS: &[ModelInfo] = &[
         backend: ModelBackend::ParakeetTdt(&PARAKEET_TDT_V3),
     },
     ModelInfo {
+        name: "parakeet-ultra-0.6b-int8",
+        size_mb: 893,
+        sha1: "",
+        sha256: "",
+        english_only: false,
+        quantized: true,
+        backend: ModelBackend::ParakeetTdt(&PARAKEET_ULTRA_INT8),
+    },
+    ModelInfo {
         name: "nemotron-3.5-asr-0.6b",
         size_mb: 2600,
         sha1: "",
@@ -658,7 +694,7 @@ mod tests {
     fn test_list_models_not_empty() {
         let models = list_models();
         assert!(!models.is_empty());
-        assert_eq!(models.len(), 34);
+        assert_eq!(models.len(), 35);
     }
 
     #[test]
@@ -757,6 +793,7 @@ mod tests {
             ("large-v3-turbo-q8_0", 874),
             // ONNX snapshot models
             ("parakeet-tdt-0.6b-v3", 2552),
+            ("parakeet-ultra-0.6b-int8", 893),
             ("nemotron-3.5-asr-0.6b", 2600),
         ];
 
@@ -891,7 +928,11 @@ mod tests {
             .iter()
             .filter_map(|m| m.snapshot().map(|s| (m, s)))
             .collect();
-        assert_eq!(snapshot_models.len(), 2, "Parakeet TDT and Nemotron");
+        assert_eq!(
+            snapshot_models.len(),
+            3,
+            "Parakeet TDT, Parakeet Ultra and Nemotron"
+        );
 
         for (model, snapshot) in snapshot_models {
             assert_eq!(
@@ -947,6 +988,28 @@ mod tests {
     }
 
     #[test]
+    fn test_parakeet_ultra_entry_lists_int8_files_parakeet_rs_discovers() {
+        let model = get_model("parakeet-ultra-0.6b-int8").unwrap();
+        assert_eq!(
+            model.backend,
+            ModelBackend::ParakeetTdt(&PARAKEET_ULTRA_INT8)
+        );
+        assert_eq!(
+            file_names(model.name),
+            [
+                "encoder-model.int8.onnx",
+                "decoder_joint-model.int8.onnx",
+                "vocab.txt"
+            ]
+        );
+        assert_eq!(
+            model.snapshot().unwrap().file_url("vocab.txt"),
+            "https://huggingface.co/wothers/parakeet-tdt-0.6b-ultra-onnx-int8/resolve/\
+             94623be6449a7beb0ea62b85104d3be45b93ed9e/vocab.txt"
+        );
+    }
+
+    #[test]
     fn test_nemotron_entry_lists_files_parakeet_rs_loads() {
         let model = get_model("nemotron-3.5-asr-0.6b").unwrap();
         assert_eq!(model.backend, ModelBackend::Nemotron(&NEMOTRON_3_5));
@@ -995,7 +1058,11 @@ mod tests {
 
     #[test]
     fn test_snapshot_models_have_no_language_variants() {
-        for name in ["parakeet-tdt-0.6b-v3", "nemotron-3.5-asr-0.6b"] {
+        for name in [
+            "parakeet-tdt-0.6b-v3",
+            "parakeet-ultra-0.6b-int8",
+            "nemotron-3.5-asr-0.6b",
+        ] {
             assert_eq!(english_variant(name), None);
             assert_eq!(multilingual_variant(name), Some(name));
             assert_eq!(resolve_model_for_language(name, "de", true), name);
